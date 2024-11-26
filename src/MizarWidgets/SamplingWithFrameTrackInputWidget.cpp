@@ -4,12 +4,16 @@
 
 #include "MizarWidgets/SamplingWithFrameTrackInputWidget.h"
 
-#include <absl/strings/str_format.h>
+#include <absl/hash/hash.h>
+#include <stdint.h>
 
 #include <QComboBox>
 #include <QLineEdit>
+#include <QList>
 #include <QListWidget>
+#include <QNonConstOverload>
 #include <QObject>
+#include <QStringLiteral>
 #include <QWidget>
 #include <algorithm>
 #include <iterator>
@@ -17,6 +21,7 @@
 #include <memory>
 
 #include "MizarData/SamplingWithFrameTrackComparisonReport.h"
+#include "OrbitBase/Typedef.h"
 #include "ui_SamplingWithFrameTrackInputWidget.h"
 
 namespace orbit_mizar_widgets {
@@ -76,7 +81,7 @@ static uint64_t ParseStartNs(const QString& time_ms) {
     return 0;
   }
 
-  bool ok;
+  bool ok{};
   int result = time_ms.toInt(&ok);
   if (!ok) {
     return std::numeric_limits<uint64_t>::max();

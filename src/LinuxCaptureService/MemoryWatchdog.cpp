@@ -4,13 +4,15 @@
 
 #include "MemoryWatchdog.h"
 
-#include <absl/strings/match.h>
 #include <absl/strings/numbers.h>
-#include <absl/strings/str_split.h>
+#include <absl/strings/str_format.h>
 #include <unistd.h>
+
+#include <string>
 
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
+#include "OrbitBase/Result.h"
 
 namespace orbit_linux_capture_service {
 
@@ -38,7 +40,7 @@ std::optional<uint64_t> ExtractRssInPagesFromProcPidStat(std::string_view proc_p
     }
   }
 
-  uint64_t rss_pages;
+  uint64_t rss_pages{};
   if (!absl::SimpleAtoi(rss_string, &rss_pages)) {
     ORBIT_ERROR_ONCE("Parsing rss \"%s\"", rss_string);
     return std::nullopt;
@@ -47,18 +49,18 @@ std::optional<uint64_t> ExtractRssInPagesFromProcPidStat(std::string_view proc_p
 }
 
 std::optional<uint64_t> ReadRssInBytesFromProcPidStat() {
-  static const pid_t pid = getpid();
-  static const std::string proc_pid_stat_filename = absl::StrFormat("/proc/%d/stat", pid);
+  static const pid_t kPid = getpid();
+  static const std::string kProcPidStatFilename = absl::StrFormat("/proc/%d/stat", kPid);
 
-  ErrorMessageOr<std::string> error_or_stat = orbit_base::ReadFileToString(proc_pid_stat_filename);
+  ErrorMessageOr<std::string> error_or_stat = orbit_base::ReadFileToString(kProcPidStatFilename);
   if (error_or_stat.has_error()) {
-    ORBIT_ERROR_ONCE("Reading \"%s\": %s", proc_pid_stat_filename, error_or_stat.error().message());
+    ORBIT_ERROR_ONCE("Reading \"%s\": %s", kProcPidStatFilename, error_or_stat.error().message());
     return std::nullopt;
   }
 
   std::optional<uint64_t> rss_pages = ExtractRssInPagesFromProcPidStat(error_or_stat.value());
   if (!rss_pages.has_value()) {
-    ORBIT_ERROR_ONCE("Extracting rss from \"%s\"", proc_pid_stat_filename);
+    ORBIT_ERROR_ONCE("Extracting rss from \"%s\"", kProcPidStatFilename);
     return std::nullopt;
   }
 

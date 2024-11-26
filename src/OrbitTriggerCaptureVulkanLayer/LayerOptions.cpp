@@ -70,22 +70,22 @@ uint32_t LayerOptions::GetCaptureLengthSeconds() {
   return kCaptureLengthSecondsDefault;
 }
 
-std::vector<std::string> LayerOptions::BuildOrbitCaptureServiceArgv(const std::string& game_pid) {
+std::vector<std::string> LayerOptions::BuildOrbitCaptureServiceArgv(std::string_view game_pid) {
   std::vector<std::string> argv;
 
   // Set mandatory arguments: service, pid
-  argv.push_back(kOrbitCaptureService);
-  argv.push_back("-pid");
-  argv.push_back(game_pid);
+  argv.emplace_back(kOrbitCaptureService);
+  argv.emplace_back("-pid");
+  argv.emplace_back(game_pid);
 
   // Set arguments that are always provided but can be set by the user
   // Create a log file for OrbitCaptureService; by default kLogDirectory
-  argv.push_back("-log_directory");
+  argv.emplace_back("-log_directory");
   if (layer_config_.has_capture_service_arguments() &&
       !layer_config_.capture_service_arguments().log_directory().empty()) {
     argv.push_back(layer_config_.capture_service_arguments().log_directory());
   } else {
-    argv.push_back(kLogDirectory);
+    argv.emplace_back(kLogDirectory);
   }
 
   // Set optional arguments if set by the user; otherwise not included in the call
@@ -93,9 +93,9 @@ std::vector<std::string> LayerOptions::BuildOrbitCaptureServiceArgv(const std::s
   // file_directory and sample_rate are given default values in OrbitCaptureGgpService
   if (layer_config_.has_capture_service_arguments() &&
       layer_config_.capture_service_arguments().functions_size() > 0) {
-    argv.push_back("-functions");
+    argv.emplace_back("-functions");
     std::string functions_str;
-    for (auto& function : layer_config_.capture_service_arguments().functions()) {
+    for (const auto& function : layer_config_.capture_service_arguments().functions()) {
       if (functions_str.empty()) {
         absl::StrAppendFormat(&functions_str, "%s", function);
       } else {
@@ -107,13 +107,13 @@ std::vector<std::string> LayerOptions::BuildOrbitCaptureServiceArgv(const std::s
 
   if (layer_config_.has_capture_service_arguments() &&
       !layer_config_.capture_service_arguments().file_directory().empty()) {
-    argv.push_back("-file_directory");
+    argv.emplace_back("-file_directory");
     argv.push_back(layer_config_.capture_service_arguments().file_directory());
   }
 
   if (layer_config_.has_capture_service_arguments() &&
       layer_config_.capture_service_arguments().sampling_rate() > 0) {
-    argv.push_back("-sampling_rate");
+    argv.emplace_back("-sampling_rate");
     std::string sampling_rate_str =
         absl::StrFormat("%d", layer_config_.capture_service_arguments().sampling_rate());
     argv.push_back(sampling_rate_str);

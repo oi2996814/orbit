@@ -3,18 +3,34 @@
 // found in the LICENSE file.
 
 #include <absl/container/flat_hash_set.h>
-#include <stdint.h>
+#include <absl/hash/hash.h>
+#include <libfuzzer/libfuzzer_macro.h>
 
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "CaptureClient/CaptureEventProcessor.h"
 #include "CaptureClient/CaptureListener.h"
+#include "ClientData/ApiStringEvent.h"
+#include "ClientData/ApiTrackValue.h"
+#include "ClientData/CallstackEvent.h"
+#include "ClientData/CallstackInfo.h"
+#include "ClientData/CgroupAndProcessMemoryInfo.h"
 #include "ClientData/LinuxAddressInfo.h"
+#include "ClientData/PageFaultsInfo.h"
+#include "ClientData/SystemMemoryInfo.h"
+#include "ClientData/ThreadStateSliceInfo.h"
+#include "ClientData/TracepointEventInfo.h"
+#include "ClientData/TracepointInfo.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "FuzzingUtils/ProtoFuzzer.h"
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
 #include "GrpcProtos/services.pb.h"
-#include "GrpcProtos/tracepoint.pb.h"
 
 namespace orbit_capture_client {
 
@@ -33,6 +49,11 @@ class MyCaptureListener : public CaptureListener {
                         absl::flat_hash_set<uint64_t> /*frame_track_function_ids*/) override {}
   void OnCaptureFinished(const orbit_grpc_protos::CaptureFinished& /*capture_finished*/) override {}
   void OnTimer(const TimerInfo& /*timer_info*/) override {}
+  void OnCgroupAndProcessMemoryInfo(const orbit_client_data::CgroupAndProcessMemoryInfo&
+                                    /*cgroup_and_process_memory_info*/) override {}
+  void OnPageFaultsInfo(const orbit_client_data::PageFaultsInfo& /*page_faults_info*/) override {}
+  void OnSystemMemoryInfo(
+      const orbit_client_data::SystemMemoryInfo& /*system_memory_info*/) override {}
   void OnKeyAndString(uint64_t /*key*/, std::string /*str*/) override {}
   void OnUniqueCallstack(uint64_t /*callstack_id*/, CallstackInfo /*callstack*/) override {}
   void OnCallstackEvent(CallstackEvent /*callstack_event*/) override {}

@@ -2,12 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ManualInstrumentationManager.h"
-
-#include <absl/synchronization/mutex.h>
-#include <stdint.h>
-
-#include "ClientProtos/capture_data.pb.h"
+#include "OrbitGl/ManualInstrumentationManager.h"
 
 void ManualInstrumentationManager::ProcessStringEvent(
     const orbit_client_data::ApiStringEvent& string_event) {

@@ -87,7 +87,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
   // to a specific submission tracepoint.
   struct SubmittedMarker {
     SubmissionMetaInformation meta_information;
-    uint32_t slot_index;
+    uint32_t slot_index = 0;
 
     // This is set when the timestamp was queried successfully. When this has a value, the
     // corresponding slot index for the timestamp query has been reset. Do not query again in
@@ -112,7 +112,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
     SubmittedMarker end_info;
     std::string label_name;
     Color color;
-    size_t depth;
+    size_t depth = 0;
   };
 
   // A single submission (VkQueueSubmit) can contain multiple `SubmitInfo`s. We keep this structure.
@@ -124,7 +124,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
   // `completed_markers` are all the debug markers that got completed (via "End") within this
   // submission. Their "Begin" might still be in a different submission.
   struct QueueSubmission {
-    VkQueue queue;
+    VkQueue queue{};
     SubmissionMetaInformation meta_information;
     std::vector<SubmitInfo> submit_infos;
     std::vector<SubmittedMarkerSlice> completed_markers;
@@ -236,7 +236,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
       return;
     }
 
-    uint32_t slot_index;
+    uint32_t slot_index{};
     if (RecordTimestamp(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, &slot_index)) {
       ORBIT_CHECK(command_buffer_to_state_.contains(command_buffer));
       command_buffer_to_state_.at(command_buffer).command_buffer_begin_slot_index =
@@ -256,7 +256,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
       return;
     }
 
-    uint32_t slot_index;
+    uint32_t slot_index{};
     if (RecordTimestamp(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, &slot_index)) {
       // MarkCommandBufferBegin/End are called from within the same submit, and as the
       // `MarkCommandBufferBegin` will always insert the state, we can assume that it is there.
@@ -270,7 +270,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
     absl::WriterMutexLock lock(&mutex_);
     // It is ensured by the Vulkan spec. that `text` must not be nullptr.
     ORBIT_CHECK(text != nullptr);
-    bool marker_depth_exceeds_maximum;
+    bool marker_depth_exceeds_maximum = false;
     {
       if (!command_buffer_to_state_.contains(command_buffer)) {
         ORBIT_ERROR_ONCE(
@@ -295,7 +295,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
       return;
     }
 
-    uint32_t slot_index;
+    uint32_t slot_index{};
     if (RecordTimestamp(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, &slot_index)) {
       ORBIT_CHECK(command_buffer_to_state_.contains(command_buffer));
       CommandBufferState& state = command_buffer_to_state_.at(command_buffer);
@@ -305,7 +305,6 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
 
   void MarkDebugMarkerEnd(VkCommandBuffer command_buffer) {
     absl::WriterMutexLock lock(&mutex_);
-    bool marker_depth_exceeds_maximum;
 
     if (!command_buffer_to_state_.contains(command_buffer)) {
       ORBIT_ERROR_ONCE(
@@ -316,7 +315,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
     }
     ORBIT_CHECK(command_buffer_to_state_.contains(command_buffer));
     CommandBufferState& state = command_buffer_to_state_.at(command_buffer);
-    marker_depth_exceeds_maximum =
+    bool marker_depth_exceeds_maximum =
         state.local_marker_stack_size > max_local_marker_depth_per_command_buffer_;
     Marker marker{.type = MarkerType::kDebugMarkerEnd, .cut_off = marker_depth_exceeds_maximum};
     state.markers.emplace_back(std::move(marker));
@@ -330,7 +329,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
       return;
     }
 
-    uint32_t slot_index;
+    uint32_t slot_index = 0;
     if (RecordTimestamp(command_buffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, &slot_index)) {
       ORBIT_CHECK(command_buffer_to_state_.contains(command_buffer));
       CommandBufferState& state = command_buffer_to_state_.at(command_buffer);
@@ -607,7 +606,7 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
     std::optional<uint32_t> slot_index;
     std::optional<std::string> label_name;
     std::optional<Color> color;
-    bool cut_off;
+    bool cut_off = false;
   };
 
   // We have a stack of all markers of a queue that gets updated upon a submission (VkQueueSubmit).
@@ -624,8 +623,8 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
     std::optional<SubmittedMarker> begin_info;
     std::string label_name;
     Color color;
-    size_t depth;
-    bool depth_exceeds_maximum;
+    size_t depth = 0;
+    bool depth_exceeds_maximum = false;
   };
 
   struct QueueMarkerState {
@@ -637,17 +636,15 @@ class SubmissionTracker : public VulkanLayerProducer::CaptureStatusListener {
     std::optional<uint32_t> command_buffer_end_slot_index;
     std::optional<uint64_t> pre_submission_cpu_timestamp;
     std::vector<Marker> markers;
-    uint32_t local_marker_stack_size;
+    uint32_t local_marker_stack_size = 0;
   };
 
   bool RecordTimestamp(VkCommandBuffer command_buffer, VkPipelineStageFlagBits pipeline_stage_flags,
                        uint32_t* slot_index) {
     mutex_.AssertReaderHeld();
-    VkDevice device;
-    {
-      ORBIT_CHECK(command_buffer_to_device_.contains(command_buffer));
-      device = command_buffer_to_device_.at(command_buffer);
-    }
+
+    ORBIT_CHECK(command_buffer_to_device_.contains(command_buffer));
+    VkDevice device = command_buffer_to_device_.at(command_buffer);
 
     VkQueryPool query_pool = timer_query_pool_->GetQueryPool(device);
 

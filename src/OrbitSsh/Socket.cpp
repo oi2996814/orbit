@@ -4,16 +4,15 @@
 
 #include "OrbitSsh/Socket.h"
 
+#include <stddef.h>
+
 #ifdef _WIN32
 #include <winsock.h>
 #include <winsock2.h>
 #else
 #include <arpa/inet.h>
 #include <sys/select.h>
-#include <sys/time.h>
 #endif
-
-#include <type_traits>
 
 #include "OrbitBase/Logging.h"
 #include "OrbitSsh/Error.h"
@@ -22,8 +21,7 @@ namespace orbit_ssh {
 
 Socket::Socket(Descriptor file_descriptor) : descriptor_(file_descriptor) {}
 
-Socket::Socket(Socket&& other) {
-  descriptor_ = other.descriptor_;
+Socket::Socket(Socket&& other) : descriptor_(other.descriptor_) {
   other.descriptor_ = LIBSSH2_INVALID_SOCKET;
 }
 
@@ -138,7 +136,7 @@ outcome::result<void> Socket::SendBlocking(std::string_view data) {
   return outcome::success();
 }
 
-outcome::result<void> Socket::WaitDisconnect() {
+outcome::result<void> Socket::WaitDisconnect() const {
   OUTCOME_TRY(CanBeRead());
   OUTCOME_TRY(auto&& data, Receive());
 

@@ -4,7 +4,9 @@
 
 #include "LibunwindstackMultipleOfflineAndProcessMemory.h"
 
-#include <absl/base/casts.h>
+#include <absl/types/span.h>
+
+#include "unwindstack/Memory.h"
 
 namespace orbit_linux_tracing {
 size_t LibunwindstackMultipleOfflineAndProcessMemory::Read(uint64_t addr, void* dst, size_t size) {
@@ -46,7 +48,7 @@ size_t LibunwindstackMultipleOfflineAndProcessMemory::Read(uint64_t addr, void* 
 
 std::vector<LibunwindstackMultipleOfflineAndProcessMemory::LibunwindstackOfflineMemory>
 LibunwindstackMultipleOfflineAndProcessMemory::CreateOfflineStackMemories(
-    const std::vector<StackSliceView>& stack_slices) {
+    absl::Span<const StackSliceView> stack_slices) {
   std::vector<LibunwindstackOfflineMemory> stack_memories{};
   stack_memories.reserve(stack_slices.size());
   for (const StackSliceView& stack_slice_view : stack_slices) {
@@ -57,7 +59,7 @@ LibunwindstackMultipleOfflineAndProcessMemory::CreateOfflineStackMemories(
 
 std::shared_ptr<unwindstack::Memory>
 LibunwindstackMultipleOfflineAndProcessMemory::CreateWithProcessMemory(
-    pid_t pid, const std::vector<StackSliceView>& stack_slices) {
+    pid_t pid, absl::Span<const StackSliceView> stack_slices) {
   std::vector<LibunwindstackOfflineMemory> stack_memories =
       CreateOfflineStackMemories(stack_slices);
   return std::shared_ptr<LibunwindstackMultipleOfflineAndProcessMemory>(
@@ -67,7 +69,7 @@ LibunwindstackMultipleOfflineAndProcessMemory::CreateWithProcessMemory(
 
 std::shared_ptr<unwindstack::Memory>
 LibunwindstackMultipleOfflineAndProcessMemory::CreateWithoutProcessMemory(
-    const std::vector<StackSliceView>& stack_slices) {
+    absl::Span<const StackSliceView> stack_slices) {
   std::vector<LibunwindstackOfflineMemory> stack_memories =
       CreateOfflineStackMemories(stack_slices);
   return std::shared_ptr<LibunwindstackMultipleOfflineAndProcessMemory>(

@@ -2,11 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <gmock/gmock.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+
+#include <cstdint>
+#include <initializer_list>
+#include <optional>
+#include <string_view>
+#include <vector>
 
 #include "AssemblyTestLiterals.h"
+#include "ClientData/CallstackEvent.h"
+#include "ClientData/ModuleIdentifierProvider.h"
+#include "ClientData/ModuleManager.h"
 #include "ClientData/PostProcessedSamplingData.h"
+#include "ClientData/ProcessData.h"
+#include "CodeReport/Disassembler.h"
 #include "CodeReport/DisassemblyReport.h"
 
 using orbit_code_report::kFibonacciAbsoluteAddress;
@@ -19,8 +32,9 @@ TEST(DisassemblyReport, Empty) {
   // We expect all counters to be 0 and not to crash when poking.
 
   orbit_code_report::Disassembler disassembler{};
-  orbit_client_data::ProcessData process;
-  orbit_client_data::ModuleManager module_manager;
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider;
+  orbit_client_data::ProcessData process{{}, &module_identifier_provider};
+  orbit_client_data::ModuleManager module_manager{&module_identifier_provider};
   disassembler.Disassemble(process, module_manager,
                            static_cast<const void*>(kFibonacciAssembly.data()),
                            kFibonacciAssembly.size(), kFibonacciAbsoluteAddress, true);
@@ -56,8 +70,9 @@ TEST(DisassemblyReport, Simple) {
   // This creates a simple DisassemblyReport with samples in three different locations.
 
   orbit_code_report::Disassembler disassembler{};
-  orbit_client_data::ProcessData process;
-  orbit_client_data::ModuleManager module_manager;
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider;
+  orbit_client_data::ProcessData process{{}, &module_identifier_provider};
+  orbit_client_data::ModuleManager module_manager{&module_identifier_provider};
   disassembler.Disassemble(process, module_manager,
                            static_cast<const void*>(kFibonacciAssembly.data()),
                            kFibonacciAssembly.size(), kFibonacciAbsoluteAddress, true);

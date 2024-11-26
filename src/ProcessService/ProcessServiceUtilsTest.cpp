@@ -7,20 +7,14 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
-#include <algorithm>
-#include <array>
-#include <deque>
 #include <filesystem>
-#include <iterator>
 #include <optional>
 #include <string>
-#include <variant>
-#include <vector>
 
 #include "GrpcProtos/services.pb.h"
-#include "GrpcProtos/tracepoint.pb.h"
 #include "OrbitBase/NotFoundOr.h"
 #include "OrbitBase/Result.h"
+#include "ProcessService/CpuTime.h"
 #include "ProcessServiceUtils.h"
 #include "Test/Path.h"
 #include "TestUtils/TestUtils.h"
@@ -29,7 +23,7 @@ namespace orbit_process_service {
 
 using orbit_base::NotFoundOr;
 using orbit_grpc_protos::GetDebugInfoFileRequest;
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasValue;
 
 TEST(ProcessServiceUtils, GetCumulativeTotalCpuTime) {
@@ -126,7 +120,7 @@ TEST(ProcessServiceUtils, FindSymbolsFilePath) {
     request.set_module_path(module_path.string());
     request.add_additional_search_directories(test_directory);
     const ErrorMessageOr<NotFoundOr<std::filesystem::path>> result = FindSymbolsFilePath(request);
-    EXPECT_THAT(result, HasError("Unable to load object file"));
+    EXPECT_THAT(result, HasErrorWithMessage("Unable to load object file"));
   }
 
   {  // elf - no build id, but does include symbols

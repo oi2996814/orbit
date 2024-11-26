@@ -6,15 +6,19 @@
 #define SESSION_SETUP_CONNECT_TO_TARGET_DIALOG_H_
 
 #include <QDialog>
+#include <QObject>
 #include <QString>
+#include <QWidget>
+#include <memory>
 #include <optional>
+#include <tuple>
+#include <vector>
 
 #include "ClientServices/ProcessManager.h"
 #include "Connections.h"
+#include "GrpcProtos/process.pb.h"
 #include "OrbitBase/Result.h"
-#include "OrbitGgp/Client.h"
-#include "OrbitGgp/SshInfo.h"
-#include "QtUtils/MainThreadExecutorImpl.h"
+#include "QtUtils/MainThreadExecutor.h"
 #include "SessionSetupUtils.h"
 #include "TargetConfiguration.h"
 
@@ -42,24 +46,18 @@ class ConnectToTargetDialog : public QDialog {
   SshConnectionArtifacts* ssh_connection_artifacts_;
   ConnectionTarget target_;
 
-  using MaybeSshAndInstanceData =
-      std::tuple<ErrorMessageOr<orbit_ggp::SshInfo>, ErrorMessageOr<orbit_ggp::Instance>>;
-
-  std::unique_ptr<orbit_ggp::Client> ggp_client_;
-  std::shared_ptr<orbit_qt_utils::MainThreadExecutorImpl> main_thread_executor_;
-
-  std::optional<orbit_session_setup::StadiaConnection> stadia_connection_;
-  std::unique_ptr<orbit_client_services::ProcessManager> process_manager_;
+  std::optional<orbit_session_setup::SshConnection> ssh_connection_;
   std::optional<TargetConfiguration> target_configuration_;
 
-  ErrorMessageOr<void> OnAsyncDataAvailable(MaybeSshAndInstanceData ssh_instance_data);
+  // Keep the executor at the bottom of the members, so that it's destructed first!
+  orbit_qt_utils::MainThreadExecutor main_thread_executor_;
+
   void OnProcessListUpdate(std::vector<orbit_grpc_protos::ProcessInfo> process_list);
 
-  [[nodiscard]] ErrorMessageOr<orbit_session_setup::ServiceDeployManager::GrpcPort>
-  DeployOrbitService(orbit_session_setup::ServiceDeployManager* service_deploy_manager);
+  [[nodiscard]] ErrorMessageOr<void> DeployOrbitServiceAndSetupProcessManager();
 
   void SetStatusMessage(const QString& message);
-  void LogAndDisplayError(const ErrorMessage& message);
+  static void LogAndDisplayError(const ErrorMessage& message);
 };
 
 }  // namespace orbit_session_setup

@@ -10,7 +10,7 @@
 
 #include "ClientProtos/capture_data.pb.h"
 #include "OrbitBase/Logging.h"
-#include "OrbitBase/ThreadUtils.h"
+#include "OrbitBase/Typedef.h"
 
 using orbit_client_data::TracepointInfoSet;
 using orbit_grpc_protos::TracepointInfo;
@@ -335,6 +335,21 @@ void DataManager::set_thread_state_change_callstack_collection(
 orbit_grpc_protos::CaptureOptions::ThreadStateChangeCallStackCollection
 DataManager::thread_state_change_callstack_collection() const {
   return thread_state_change_callstack_collection_;
+}
+
+void DataManager::SetSelectionTimeRange(const TimeRange& time_range) {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
+  selection_time_range_ = time_range;
+}
+
+void DataManager::ClearSelectionTimeRange() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
+  selection_time_range_.reset();
+}
+
+const std::optional<TimeRange>& DataManager::GetSelectionTimeRange() const {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
+  return selection_time_range_;
 }
 
 }  // namespace orbit_client_data

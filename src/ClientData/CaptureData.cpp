@@ -5,32 +5,57 @@
 #include "ClientData/CaptureData.h"
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
+#include "ClientData/FastRenderingUtils.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifier.h"
 #include "ClientData/ScopeId.h"
 #include "ClientData/ScopeInfo.h"
-#include "OrbitBase/Result.h"
+#include "ClientData/ScopeStatsCollection.h"
+#include "GrpcProtos/process.pb.h"
+#include "OrbitBase/ThreadConstants.h"
+#include "OrbitBase/Typedef.h"
 
+using orbit_client_data::ModuleIdentifier;
 using orbit_grpc_protos::CaptureStarted;
 using orbit_grpc_protos::InstrumentedFunction;
 using orbit_grpc_protos::ProcessInfo;
-using orbit_symbol_provider::ModuleIdentifier;
 
 namespace orbit_client_data {
+
+namespace {
+ProcessData CreateProcessData(uint32_t process_id, std::string_view executable_path_string,
+                              const ModuleIdentifierProvider* module_identifier_provider) {
+  ProcessInfo process_info;
+  process_info.set_pid(process_id);
+  std::filesystem::path executable_path{std::string(executable_path_string)};
+  process_info.set_full_path(executable_path.string());
+  process_info.set_name(executable_path.filename().string());
+  process_info.set_is_64_bit(true);
+  ORBIT_CHECK(module_identifier_provider != nullptr);
+
+  return ProcessData{process_info, module_identifier_provider};
+}
+}  // namespace
 
 CaptureData::CaptureData(CaptureStarted capture_started,
                          std::optional<std::filesystem::path> file_path,
                          absl::flat_hash_set<uint64_t> frame_track_function_ids,
-                         DataSource data_source)
+                         DataSource data_source,
+                         const ModuleIdentifierProvider* module_identifier_provider)
     : capture_started_(std::move(capture_started)),
+      process_(CreateProcessData(capture_started_.process_id(), capture_started_.executable_path(),
+                                 module_identifier_provider)),
       selection_callstack_data_(std::make_unique<CallstackData>()),
       frame_track_function_ids_{std::move(frame_track_function_ids)},
       file_path_{std::move(file_path)},
@@ -38,14 +63,6 @@ CaptureData::CaptureData(CaptureStarted capture_started,
       thread_track_data_provider_(
           std::make_unique<ThreadTrackDataProvider>(data_source == DataSource::kLoadedCapture)),
       all_scopes_(std::make_shared<ScopeStatsCollection>()) {
-  ProcessInfo process_info;
-  process_info.set_pid(capture_started_.process_id());
-  std::filesystem::path executable_path{capture_started_.executable_path()};
-  process_info.set_full_path(executable_path.string());
-  process_info.set_name(executable_path.filename().string());
-  process_info.set_is_64_bit(true);
-  process_.SetProcessInfo(process_info);
-
   for (const auto& instrumented_function :
        capture_started_.capture_options().instrumented_functions()) {
     instrumented_functions_.insert_or_assign(instrumented_function.function_id(),
@@ -73,6 +90,36 @@ void CaptureData::ForEachThreadStateSliceIntersectingTimeRange(
          slice_it->begin_timestamp_ns() < max_timestamp) {
     action(*slice_it);
     ++slice_it;
+  }
+}
+
+void CaptureData::ForEachThreadStateSliceIntersectingTimeRangeDiscretized(
+    uint32_t thread_id, uint64_t min_timestamp, uint64_t max_timestamp, uint32_t resolution,
+    const std::function<void(const ThreadStateSliceInfo&)>& action) const {
+  absl::MutexLock lock{&thread_state_slices_mutex_};
+  auto tid_thread_state_slices_it = thread_state_slices_.find(thread_id);
+  if (tid_thread_state_slices_it == thread_state_slices_.end()) {
+    return;
+  }
+
+  const std::vector<ThreadStateSliceInfo>& tid_thread_state_slices =
+      tid_thread_state_slices_it->second;
+
+  auto thread_state_slices_lower_bound = [&](uint64_t timestamp) {
+    return std::lower_bound(tid_thread_state_slices.begin(), tid_thread_state_slices.end(),
+                            timestamp, [](const ThreadStateSliceInfo& slice, uint64_t timestamp) {
+                              return timestamp >= slice.end_timestamp_ns();
+                            });
+  };
+
+  uint64_t current_timestamp = min_timestamp;
+  auto slice_it = thread_state_slices_lower_bound(current_timestamp);
+  while (slice_it != tid_thread_state_slices.end() &&
+         slice_it->begin_timestamp_ns() < max_timestamp) {
+    action(*slice_it);
+    current_timestamp = GetNextPixelBoundaryTimeNs(slice_it->end_timestamp_ns(), resolution,
+                                                   min_timestamp, max_timestamp);
+    slice_it = thread_state_slices_lower_bound(current_timestamp);
   }
 }
 
@@ -140,8 +187,9 @@ void CaptureData::ComputeVirtualAddressOfInstrumentedFunctionsIfNecessary(
       continue;
     }
 
-    const ModuleData* const module_data = module_manager.GetModuleByModuleIdentifier(
-        ModuleIdentifier{instrumented_function.file_path(), instrumented_function.file_build_id()});
+    const ModuleData* const module_data = module_manager.GetModuleByModulePathAndBuildId(
+        {.module_path = instrumented_function.file_path(),
+         .build_id = instrumented_function.file_build_id()});
     if (module_data == nullptr) {
       continue;
     }
@@ -236,8 +284,31 @@ const std::vector<uint64_t>* CaptureData::GetSortedTimerDurationsForScopeId(
   return all_scopes_->GetSortedTimerDurationsForScopeId(scope_id);
 }
 
+std::shared_ptr<const ScopeStatsCollection> CaptureData::GetAllScopeStatsCollection() const {
+  return all_scopes_;
+}
+
+std::unique_ptr<const ScopeStatsCollection> CaptureData::CreateScopeStatsCollection(
+    uint32_t thread_id, uint64_t min_tick, uint64_t max_tick) const {
+  ORBIT_CHECK(scope_id_provider_);
+  std::vector<uint32_t> thread_ids = thread_id == orbit_base::kAllProcessThreadsTid
+                                         ? GetThreadTrackDataProvider()->GetAllThreadIds()
+                                         : std::vector<uint32_t>{thread_id};
+  auto timers = GetAllScopeTimersByTids(thread_ids, kAllValidScopeTypes, min_tick, max_tick,
+                                        /*exclusive=*/true);
+  return std::make_unique<ScopeStatsCollection>(*scope_id_provider_, timers);
+}
+
 [[nodiscard]] std::vector<const TimerInfo*> CaptureData::GetAllScopeTimers(
-    const absl::flat_hash_set<ScopeType> types, uint64_t min_tick, uint64_t max_tick) const {
+    const absl::flat_hash_set<ScopeType> types, uint64_t min_tick, uint64_t max_tick,
+    bool exclusive) const {
+  std::vector<uint32_t> thread_ids = GetThreadTrackDataProvider()->GetAllThreadIds();
+  return GetAllScopeTimersByTids(thread_ids, types, min_tick, max_tick, exclusive);
+}
+
+[[nodiscard]] std::vector<const TimerInfo*> CaptureData::GetAllScopeTimersByTids(
+    const std::vector<uint32_t>& thread_ids, const absl::flat_hash_set<ScopeType> types,
+    uint64_t min_tick, uint64_t max_tick, bool exclusive) const {
   std::vector<const TimerInfo*> result;
 
   // The timers corresponding to dynamically instrumented functions and manual instrumentation
@@ -245,9 +316,9 @@ const std::vector<uint64_t>* CaptureData::GetSortedTimerDurationsForScopeId(
   // async (kApiScope).
   if (types.contains(ScopeType::kApiScope) ||
       types.contains(ScopeType::kDynamicallyInstrumentedFunction)) {
-    for (const uint32_t thread_id : GetThreadTrackDataProvider()->GetAllThreadIds()) {
+    for (const uint32_t thread_id : thread_ids) {
       const std::vector<const TimerInfo*> thread_track_timers =
-          GetThreadTrackDataProvider()->GetTimers(thread_id, min_tick, max_tick);
+          GetThreadTrackDataProvider()->GetTimers(thread_id, min_tick, max_tick, exclusive);
       std::copy_if(std::begin(thread_track_timers), std::end(thread_track_timers),
                    std::back_inserter(result), [this, &types](const TimerInfo* timer) {
                      return types.contains(GetScopeInfo(ProvideScopeId(*timer).value()).GetType());
@@ -257,7 +328,7 @@ const std::vector<uint64_t>* CaptureData::GetSortedTimerDurationsForScopeId(
 
   if (types.contains(ScopeType::kApiScopeAsync)) {
     std::vector<const TimerInfo*> async_timer_infos = timer_data_manager_.GetTimers(
-        orbit_client_protos::TimerInfo::kApiScopeAsync, min_tick, max_tick);
+        orbit_client_protos::TimerInfo::kApiScopeAsync, min_tick, max_tick, exclusive);
 
     result.insert(std::end(result), std::begin(async_timer_infos), std::end(async_timer_infos));
   }

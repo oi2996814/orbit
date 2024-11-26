@@ -16,19 +16,20 @@ target_link_libraries(QtUtils PUBLIC
   absl::synchronization
   absl::time
   Qt5::Core
-  GTest::GTest)
+  GTest::gtest)
 
 target_sources(QtUtils PUBLIC include/QtUtils/AssertNoQtLogWarnings.h
                               include/QtUtils/CreateTimeout.h
                               include/QtUtils/EventLoop.h
                               include/QtUtils/ExecuteProcess.h
-                              include/QtUtils/FutureWatcher.h
-                              include/QtUtils/MainThreadExecutorImpl.h
-                              include/QtUtils/Throttle.h)
+                              include/QtUtils/MainThreadExecutor.h
+                              include/QtUtils/SingleThreadExecutor.h
+                              include/QtUtils/Throttle.h
+                              include/QtUtils/WaitFor.h)
 
 target_sources(QtUtils PRIVATE ExecuteProcess.cpp
-                               FutureWatcher.cpp
-                               MainThreadExecutorImpl.cpp
+                               MainThreadExecutor.cpp
+                               SingleThreadExecutor.cpp
                                Throttle.cpp)
 
 set_target_properties(QtUtils PROPERTIES AUTOMOC ON)
@@ -41,8 +42,9 @@ add_executable(QtUtilsTests)
 target_sources(QtUtilsTests PRIVATE CreateTimeoutTest.cpp
                                     EventLoopTest.cpp
                                     ExecuteProcessTest.cpp
-                                    FutureWatcherTest.cpp
-                                    MainThreadExecutorImplTest.cpp
-                                    ThrottleTest.cpp)
-target_link_libraries(QtUtilsTests PRIVATE TestUtils QtUtils GTest::QtCoreMain)
+                                    MainThreadExecutorTest.cpp
+                                    SingleThreadExecutorTest.cpp
+                                    ThrottleTest.cpp
+                                    WaitForTest.cpp)
+target_link_libraries(QtUtilsTests PRIVATE TestUtils QtTestUtils QtUtils GTest::QtCoreMain)
 register_test(QtUtilsTests)

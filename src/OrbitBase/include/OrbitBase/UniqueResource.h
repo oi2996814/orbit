@@ -28,7 +28,7 @@ class unique_resource {
   using Deleter = Deleter_;
 
   constexpr unique_resource() = default;
-  constexpr unique_resource(Resource resource, Deleter deleter = Deleter{})
+  constexpr explicit unique_resource(Resource resource, Deleter deleter = Deleter{})
       : resource_(std::move(resource)), deleter_(std::move(deleter)) {}
 
   unique_resource(const unique_resource&) = delete;
@@ -52,7 +52,7 @@ class unique_resource {
 
   ~unique_resource() { RunDeleter(); }
 
-  Resource get() const { return resource_.value(); }
+  const Resource& get() const { return resource_.value(); }
   Deleter& get_deleter() { return deleter_; }
   const Deleter& get_deleter() const { return deleter_; }
 
@@ -78,7 +78,7 @@ class unique_resource {
 
 template <typename Resource, typename Deleter>
 unique_resource(Resource, Deleter)
-    ->unique_resource<std::decay_t<Resource>, std::remove_cv_t<Deleter>>;
+    -> unique_resource<std::decay_t<Resource>, std::remove_cv_t<Deleter>>;
 
 }  // namespace orbit_base
 

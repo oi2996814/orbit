@@ -101,16 +101,18 @@
  * cleans up interfaces accordingly.
  */
 
-#include "AccessibilityAdapter.h"
+#include "OrbitQt/AccessibilityAdapter.h"
+
+#include <absl/meta/type_traits.h>
 
 #include <QAccessibleWidget>
 #include <QLatin1String>
 #include <mutex>
 #include <utility>
 
-#include "GlCanvas.h"
 #include "OrbitAccessibility/AccessibleInterfaceRegistry.h"
-#include "orbitglwidget.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitQt/orbitglwidget.h"
 
 using orbit_accessibility::AccessibleInterface;
 using orbit_accessibility::AccessibleInterfaceRegistry;
@@ -132,7 +134,7 @@ AdapterRegistry& AdapterRegistry::Get() {
 QAccessibleInterface* AdapterRegistry::InterfaceWrapperFactory(const QString& classname,
                                                                QObject* object) {
   if (classname == QLatin1String("orbit_qt::OrbitGlInterfaceWrapper")) {
-    auto iface_obj = static_cast<OrbitGlInterfaceWrapper*>(object);
+    auto* iface_obj = static_cast<OrbitGlInterfaceWrapper*>(object);
     ORBIT_CHECK(!all_interfaces_map_.contains(iface_obj->GetInterface()));
     auto wrapper = std::make_unique<OrbitGlInterfaceWrapper>(iface_obj->GetInterface());
     QAccessibleInterface* result = new AccessibilityAdapter(iface_obj->GetInterface(), object);
@@ -219,11 +221,10 @@ QRect AccessibilityAdapter::rect() const {
 
   if (bridge != nullptr) {
     QRect bridge_rect = bridge->rect();
-    return QRect(rect.left + bridge_rect.left(), rect.top + bridge_rect.top(), rect.width,
-                 rect.height);
+    return {rect.left + bridge_rect.left(), rect.top + bridge_rect.top(), rect.width, rect.height};
   }
 
-  return QRect(rect.left, rect.top, rect.width, rect.height);
+  return {rect.left, rect.top, rect.width, rect.height};
 }
 
 QAccessible::Role AccessibilityAdapter::role() const {
@@ -235,8 +236,8 @@ class OrbitGlWidgetAccessible : public QAccessibleWidget {
  public:
   explicit OrbitGlWidgetAccessible(OrbitGLWidget* widget);
 
-  QAccessibleInterface* child(int index) const override;
-  int childCount() const override;
+  [[nodiscard]] QAccessibleInterface* child(int index) const override;
+  [[nodiscard]] int childCount() const override;
   int indexOfChild(const QAccessibleInterface* child) const override;
 };
 

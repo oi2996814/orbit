@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "SchedulingStats.h"
+#include "OrbitGl/SchedulingStats.h"
 
 #include <absl/strings/str_format.h>
+#include <absl/types/span.h>
+
+#include <algorithm>
 
 #include "ClientProtos/capture_data.pb.h"
 #include "OrbitBase/Sort.h"
@@ -13,11 +16,10 @@ using orbit_client_protos::TimerInfo;
 
 static constexpr double kNsToMs = 1 / 1000000.0;
 
-SchedulingStats::SchedulingStats(const std::vector<const TimerInfo*>& scheduling_scopes,
+SchedulingStats::SchedulingStats(absl::Span<const TimerInfo* const> scheduling_scopes,
                                  const ThreadNameProvider& thread_name_provider, uint64_t start_ns,
-                                 uint64_t end_ns) {
-  time_range_ms_ = static_cast<double>(end_ns - start_ns) * kNsToMs;
-
+                                 uint64_t end_ns)
+    : time_range_ms_(static_cast<double>(end_ns - start_ns) * kNsToMs) {
   // Iterate on every scope in the selected range to compute stats.
   for (const orbit_client_protos::TimerInfo* timer_info : scheduling_scopes) {
     uint64_t clipped_start_ns = std::max(start_ns, timer_info->start());

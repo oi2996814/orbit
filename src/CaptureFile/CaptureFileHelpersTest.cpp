@@ -2,15 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <absl/base/casts.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 
 #include "CaptureFile/CaptureFile.h"
 #include "CaptureFile/CaptureFileHelpers.h"
 #include "CaptureFile/CaptureFileOutputStream.h"
-#include "OrbitBase/TemporaryFile.h"
+#include "CaptureFile/CaptureFileSection.h"
+#include "CaptureFile/ProtoSectionInputStream.h"
+#include "ClientProtos/user_defined_capture_info.pb.h"
+#include "GrpcProtos/capture.pb.h"
+#include "OrbitBase/Result.h"
+#include "TestUtils/TemporaryDirectory.h"
 #include "TestUtils/TestUtils.h"
 
 namespace orbit_capture_file {
@@ -25,21 +35,20 @@ static constexpr uint64_t kNotAnAnswerKey = 43;
 
 using orbit_grpc_protos::ClientCaptureEvent;
 
-static ClientCaptureEvent CreateInternedStringCaptureEvent(uint64_t key, const std::string& str) {
+static ClientCaptureEvent CreateInternedStringCaptureEvent(uint64_t key, std::string str) {
   ClientCaptureEvent event;
   orbit_grpc_protos::InternedString* interned_string = event.mutable_interned_string();
   interned_string->set_key(key);
-  interned_string->set_intern(str);
+  interned_string->set_intern(std::move(str));
   return event;
 }
 
 TEST(CaptureFileHelpers, CreateCaptureFileAndWriteUserData) {
-  auto temporary_file_or_error = orbit_base::TemporaryFile::Create();
-  ASSERT_THAT(temporary_file_or_error, HasNoError());
-  orbit_base::TemporaryFile temporary_file = std::move(temporary_file_or_error.value());
+  auto temporary_dir_or_error = orbit_test_utils::TemporaryDirectory::Create();
+  ASSERT_THAT(temporary_dir_or_error, HasNoError());
+  orbit_test_utils::TemporaryDirectory temporary_dir = std::move(temporary_dir_or_error.value());
 
-  const std::filesystem::path& file_path = temporary_file.file_path();
-  temporary_file.CloseAndRemove();
+  const std::filesystem::path file_path = temporary_dir.GetDirectoryPath() / "capture.orbit";
 
   auto output_stream_or_error = CaptureFileOutputStream::Create(file_path);
   ASSERT_THAT(output_stream_or_error, HasNoError());

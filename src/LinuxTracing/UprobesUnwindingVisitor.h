@@ -7,10 +7,13 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <sys/types.h>
 
 #include <atomic>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -28,6 +31,7 @@
 #include "PerfEventVisitor.h"
 #include "UprobesFunctionCallManager.h"
 #include "UprobesReturnAddressManager.h"
+#include "unwindstack/Unwinder.h"
 
 namespace orbit_linux_tracing {
 
@@ -114,7 +118,7 @@ class UprobesUnwindingVisitor : public PerfEventVisitor {
 
   void OnUprobes(uint64_t timestamp_ns, pid_t tid, uint32_t cpu, uint64_t sp, uint64_t ip,
                  uint64_t return_address,
-                 std::optional<perf_event_sample_regs_user_sp_ip_arguments> registers,
+                 std::optional<RingBufferSampleRegsUserSpIpArguments> registers,
                  uint64_t function_id);
   void OnUretprobes(uint64_t timestamp_ns, pid_t pid, pid_t tid, std::optional<uint64_t> ax);
 

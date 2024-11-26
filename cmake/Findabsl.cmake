@@ -2,13 +2,21 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-find_package(absl CONFIG)
+# We are skipping system-provided versions of Abseil here because
+# they are usually compiled in C++11 mode while we need Abseil compiled
+# in C++17 mode. Ideally we would check whether the provided Abseil version
+# was compiled in C++17 mode instead of discarding it right away.
+find_package(absl CONFIG NO_SYSTEM_ENVIRONMENT_PATH NO_CMAKE_SYSTEM_PATH)
 
 if(absl_FOUND)
   return()
 endif()
 
-message("Abseil not found via CMake. Probably not a Conan build. Using the copy from third_party/")
+message(WARNING "To ensure Abseil is built with C++17 support,
+                 it will be built from third_party folder. 
+                 If your system already has Abseil installed with C++17 support, 
+                 you can specify the Abseil configuration directory 
+                 by setting the absl_DIR variable as a cmake argument.")
 
 set(ABSL_PROPAGATE_CXX_STD ON)
 add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/abseil-cpp)

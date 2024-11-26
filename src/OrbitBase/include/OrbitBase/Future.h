@@ -109,13 +109,13 @@ template <typename T, typename Derived>
 class InternalFuture : public orbit_base_internal::InternalFutureBase<T, Derived> {
  public:
   // Constructs a completed future
-  /* explicit(false) */ InternalFuture(const T& val)
+  InternalFuture(const T& val)  // NOLINT(google-explicit-constructor)
       : InternalFutureBase<T, Derived>{std::make_shared<SharedState<T>>()} {
     this->shared_state_->result.emplace(val);
   }
 
   // Constructs a completed future
-  /* explicit(false) */ InternalFuture(T&& val)
+  InternalFuture(T&& val)  // NOLINT(google-explicit-constructor)
       : InternalFutureBase<T, Derived>{std::make_shared<SharedState<T>>()} {
     this->shared_state_->result.emplace(std::move(val));
   }
@@ -236,15 +236,15 @@ class Future<void> : public orbit_base_internal::InternalFuture<void, Future<voi
 // Check out the docs and implementation of your executor's `ScheduleAfterIfSuccess` method which is
 // actually doing the work. `ThenIfSuccess` is only syntactic sugar around
 // `AnyExecutor::ScheduleAfterIfSuccess`.
-template <typename T>
-class [[nodiscard]] Future<ErrorMessageOr<T>>
-    : public orbit_base_internal::InternalFuture<ErrorMessageOr<T>, Future<ErrorMessageOr<T>>> {
-  friend orbit_base_internal::PromiseBase<ErrorMessageOr<T>>;
+template <typename T, typename E>
+class [[nodiscard]] Future<Result<T, E>>
+    : public orbit_base_internal::InternalFuture<Result<T, E>, Future<Result<T, E>>> {
+  friend orbit_base_internal::PromiseBase<Result<T, E>>;
 
  public:
-  using orbit_base_internal::InternalFuture<ErrorMessageOr<T>, Future>::InternalFuture;
+  using orbit_base_internal::InternalFuture<Result<T, E>, Future>::InternalFuture;
 
-  /* explicit(false) */ Future(ErrorMessage error_message)
+  Future(ErrorMessage error_message)  // NOLINT(google-explicit-constructor)
       : orbit_base_internal::InternalFuture<ErrorMessageOr<T>, Future>{
             ErrorMessageOr<T>{std::move(error_message)}} {}
 
@@ -256,10 +256,20 @@ class [[nodiscard]] Future<ErrorMessageOr<T>>
   // Note: Usually `invocable` won't be executed if `executor` gets destroyed before `*this`
   // completes. Check the docs or implementation of `Executor::ScheduleAfter` to be sure.
   template <typename Executor, typename Invocable>
-  auto ThenIfSuccess(Executor * executor, Invocable && invocable) const {
+  auto ThenIfSuccess(Executor* executor, Invocable&& invocable) const {
     return executor->ScheduleAfterIfSuccess(*this, std::forward<Invocable>(invocable));
   }
 };
+
+template <typename T>
+struct IsFuture : std::false_type {};
+
+template <typename T>
+struct IsFuture<Future<T>> : std::true_type {};
+
+template <typename T>
+constexpr bool kIsFutureV = IsFuture<T>::value;
+
 }  // namespace orbit_base
 
 #endif  // ORBIT_BASE_FUTURE_H_

@@ -4,23 +4,34 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
+#include <QList>
+#include <QMetaType>
+#include <QModelIndex>
 #include <QSignalSpy>
+#include <QString>
 #include <QVariant>
 #include <Qt>
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "MizarBase/BaselineOrComparison.h"
 #include "MizarBase/FunctionSymbols.h"
+#include "MizarBase/SampledFunctionId.h"
 #include "MizarData/SamplingWithFrameTrackComparisonReport.h"
 #include "MizarModels/SamplingWithFrameTrackReportModel.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/Typedef.h"
 #include "TestUtils/ContainerHelpers.h"
 
 using ::orbit_mizar_base::Baseline;
@@ -120,7 +131,7 @@ constexpr uint64_t kBaselineFrameTime = 15'000'000;
 constexpr uint64_t kComparisonFrameTime = 25'000'000;
 
 static double ExpectDoubleAndParse(const QString& str) {
-  bool ok;
+  bool ok{};
   double result = str.toDouble(&ok);
   EXPECT_TRUE(ok);
   return result;

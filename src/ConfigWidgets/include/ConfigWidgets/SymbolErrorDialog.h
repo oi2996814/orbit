@@ -6,7 +6,12 @@
 #define CONFIG_WIDGETS_SYMBOL_ERROR_DIALOG_H_
 
 #include <QDialog>
+#include <QObject>
+#include <QString>
+#include <QWidget>
 #include <memory>
+#include <string>
+#include <string_view>
 
 #include "ClientData/ModuleData.h"
 
@@ -23,11 +28,13 @@ class SymbolErrorDialog : public QDialog {
   enum class Result { kCancel, kTryAgain, kAddSymbolLocation };
 
   explicit SymbolErrorDialog(const orbit_client_data::ModuleData* module,
-                             const std::string& detailed_error, QWidget* parent = nullptr);
+                             std::string_view detailed_error, QWidget* parent = nullptr);
   ~SymbolErrorDialog() override;
   [[nodiscard]] Result Exec();
 
- public slots:
+  // TODO(https://github.com/google/orbit/issues/4589): Connect slots via code and not via UI files,
+  // and remove the "public slots" specifier
+ public slots:  // NOLINT(readability-redundant-access-specifiers)
   void OnShowErrorButtonClicked();
   void OnAddSymbolLocationButtonClicked();
   void OnTryAgainButtonClicked();

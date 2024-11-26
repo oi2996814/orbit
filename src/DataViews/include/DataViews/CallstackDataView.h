@@ -5,9 +5,15 @@
 #ifndef DATA_VIEWS_CALLSTACK_DATA_VIEW_H_
 #define DATA_VIEWS_CALLSTACK_DATA_VIEW_H_
 
+#include <absl/container/flat_hash_set.h>
+#include <absl/types/span.h>
+#include <stddef.h>
 #include <stdint.h>
 
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -68,8 +74,8 @@ class CallstackDataView : public DataView {
     const orbit_client_data::ModuleData* module;
   };
 
-  CallstackDataViewFrame GetFrameFromRow(int row) const;
-  CallstackDataViewFrame GetFrameFromIndex(size_t index_in_callstack) const;
+  [[nodiscard]] CallstackDataViewFrame GetFrameFromRow(int row) const;
+  [[nodiscard]] CallstackDataViewFrame GetFrameFromIndex(size_t index_in_callstack) const;
 
   enum ColumnIndex {
     kColumnSelected,
@@ -81,7 +87,7 @@ class CallstackDataView : public DataView {
   };
 
   [[nodiscard]] ActionStatus GetActionStatus(std::string_view action, int clicked_index,
-                                             const std::vector<int>& selected_indices) override;
+                                             absl::Span<const int> selected_indices) override;
 
  private:
   [[nodiscard]] const orbit_client_data::ModuleData* GetModuleDataFromRow(int row) const override {

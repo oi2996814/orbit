@@ -2,39 +2,42 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "TimeGraph.h"
+#include "OrbitGl/TimeGraph.h"
 
 #include <GteVector.h>
 #include <absl/flags/flag.h>
-#include <absl/strings/str_format.h>
-#include <absl/time/time.h>
 #include <stddef.h>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 
-#include "AccessibleTimeGraph.h"
-#include "App.h"
-#include "AsyncTrack.h"
-#include "CGroupAndProcessMemoryTrack.h"
+#include "ApiInterface/Orbit.h"
 #include "CaptureClient/CaptureEventProcessor.h"
+#include "ClientData/CallstackData.h"
+#include "ClientData/ModuleManager.h"
 #include "ClientData/ScopeInfo.h"
 #include "ClientFlags/ClientFlags.h"
-#include "FrameTrack.h"
-#include "GlCanvas.h"
-#include "GlUtils.h"
-#include "GpuTrack.h"
 #include "GrpcProtos/Constants.h"
 #include "Introspection/Introspection.h"
-#include "OrbitBase/Append.h"
 #include "OrbitBase/Logging.h"
-#include "PageFaultsTrack.h"
-#include "PickingManager.h"
-#include "SchedulerTrack.h"
-#include "SystemMemoryTrack.h"
-#include "TrackManager.h"
-#include "VariableTrack.h"
+#include "OrbitBase/Typedef.h"
+#include "OrbitGl/AccessibleTimeGraph.h"
+#include "OrbitGl/AsyncTrack.h"
+#include "OrbitGl/CGroupAndProcessMemoryTrack.h"
+#include "OrbitGl/FrameTrack.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/GpuTrack.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PageFaultsTrack.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/SchedulerTrack.h"
+#include "OrbitGl/SystemMemoryTrack.h"
+#include "OrbitGl/TrackManager.h"
+#include "OrbitGl/VariableTrack.h"
+#include "StringManager/StringManager.h"
 
 using orbit_capture_client::CaptureEventProcessor;
 
@@ -53,14 +56,17 @@ using orbit_gl::VariableTrack;
 
 TimeGraph::TimeGraph(AccessibleInterfaceProvider* parent, OrbitApp* app,
                      orbit_gl::Viewport* viewport, CaptureData* capture_data,
-                     PickingManager* picking_manager)
+                     PickingManager* picking_manager,
+                     orbit_gl::BatchRenderGroupStateManager* render_group_manager,
+                     TimeGraphLayout* time_graph_layout)
     // Note that `GlCanvas` and `TimeGraph` span the bridge to OpenGl content, and `TimeGraph`'s
     // parent needs special handling for accessibility. Thus, we use `nullptr` here and we save the
     // parent in accessible_parent_ which doesn't need to be a CaptureViewElement.
-    : orbit_gl::CaptureViewElement(nullptr, viewport, &layout_),
+    : orbit_gl::CaptureViewElement(nullptr, viewport, time_graph_layout),
       accessible_parent_{parent},
+      layout_{time_graph_layout},
       batcher_(BatcherId::kTimeGraph),
-      primitive_assembler_(&batcher_, picking_manager),
+      primitive_assembler_(&batcher_, render_group_manager, picking_manager),
       thread_track_data_provider_(capture_data->GetThreadTrackDataProvider()),
       capture_data_{capture_data},
       app_{app} {
@@ -72,15 +78,24 @@ TimeGraph::TimeGraph(AccessibleInterfaceProvider* parent, OrbitApp* app,
   const orbit_client_data::ModuleManager* module_manager =
       app != nullptr ? app->GetModuleManager() : nullptr;
 
-  track_container_ = std::make_unique<orbit_gl::TrackContainer>(this, this, viewport, &layout_,
-                                                                app_, module_manager, capture_data);
+  track_container_ = std::make_unique<orbit_gl::TrackContainer>(this, this, viewport, layout_, app_,
+                                                                module_manager, capture_data);
   timeline_ui_ = std::make_unique<orbit_gl::TimelineUi>(
-      /*parent=*/this, /*timeline_info_interface=*/this, viewport, &layout_);
+      /*parent=*/this, /*timeline_info_interface=*/this, viewport, layout_);
 
   horizontal_slider_ = std::make_shared<orbit_gl::GlHorizontalSlider>(
-      /*parent=*/this, viewport, &layout_, /*timeline_info_interface=*/this);
+      /*parent=*/this, viewport, layout_, /*timeline_info_interface=*/this);
   vertical_slider_ = std::make_shared<orbit_gl::GlVerticalSlider>(
-      /*parent=*/this, viewport, &layout_, /*timeline_info_interface=*/this);
+      /*parent=*/this, viewport, layout_, /*timeline_info_interface=*/this);
+  track_header_sizer_ = std::make_shared<orbit_gl::VerticalSizer>(
+      /*parent=*/this, viewport, layout_, [this](int x, int /*y*/) {
+        // Resize track header with minimum width being time bar width for symmetry and to leave
+        // space for triangle toggle.
+        float min_size = layout_->GetTimeBarHeight() + track_header_sizer_->GetWidth();
+        float header_width = std::max(static_cast<float>(x) - GetPos()[0], min_size);
+        layout_->SetTrackHeaderWidth(header_width);
+        RequestUpdate(RequestUpdateScope::kDraw);
+      });
 
   horizontal_slider_->SetDragCallback([&](float ratio) { this->UpdateHorizontalScroll(ratio); });
   horizontal_slider_->SetResizeCallback([&](float normalized_start, float normalized_end) {
@@ -90,12 +105,12 @@ TimeGraph::TimeGraph(AccessibleInterfaceProvider* parent, OrbitApp* app,
   vertical_slider_->SetDragCallback(
       [&](float ratio) { track_container_->UpdateVerticalScrollUsingRatio(ratio); });
 
-  plus_button_ = std::make_shared<Button>(/*parent=*/this, viewport, &layout_, "Plus Button",
+  plus_button_ = std::make_shared<Button>(/*parent=*/this, viewport, layout_, "Plus Button",
                                           Button::SymbolType::kPlusSymbol);
   plus_button_->SetMouseReleaseCallback(
       [&](Button* /*button*/) { ZoomTime(/*zoom_value=*/1, /*mouse_ratio=*/0.5); });
 
-  minus_button_ = std::make_shared<Button>(/*parent=*/this, viewport, &layout_, "Minus Button",
+  minus_button_ = std::make_shared<Button>(/*parent=*/this, viewport, layout_, "Minus Button",
                                            Button::SymbolType::kMinusSymbol);
   minus_button_->SetMouseReleaseCallback(
       [&](Button* /*button*/) { ZoomTime(/*zoom_value=*/-1, /*mouse_ratio=*/0.5); });
@@ -186,11 +201,11 @@ void TimeGraph::VerticalZoom(float zoom_value, float mouse_world_y_pos) {
       (zoom_value > 0) ? (1 + kIncrementRatio) : (1 / (1 + kIncrementRatio));
 
   // We have to scale every item in the layout.
-  const float old_scale = layout_.GetScale();
-  layout_.SetScale(old_scale * proposed_ratio);
+  const float old_scale = layout_->GetScale();
+  layout_->SetScale(old_scale * proposed_ratio);
 
   // As we have maximum/minimum scale, the real ratio might be different than the proposed one.
-  const float real_ratio = layout_.GetScale() / old_scale;
+  const float real_ratio = layout_->GetScale() / old_scale;
 
   // TODO(b/214270440): Behave differently when the mouse is on top of the timeline.
   track_container_->VerticalZoom(real_ratio, mouse_world_y_pos);
@@ -309,18 +324,6 @@ void TimeGraph::ProcessTimer(const TimerInfo& timer_info) {
       scheduler_track->OnTimer(timer_info);
       break;
     }
-    case TimerInfo::kSystemMemoryUsage: {
-      ProcessSystemMemoryTrackingTimer(timer_info);
-      break;
-    }
-    case TimerInfo::kCGroupAndProcessMemoryUsage: {
-      ProcessCGroupAndProcessMemoryTrackingTimer(timer_info);
-      break;
-    }
-    case TimerInfo::kPageFaults: {
-      ProcessPageFaultsTrackingTimer(timer_info);
-      break;
-    }
     case TimerInfo::kNone: {
       // TODO (http://b/198135618): Create tracks only before drawing.
       track_manager->GetOrCreateThreadTrack(timer_info.thread_id());
@@ -348,19 +351,21 @@ void TimeGraph::ProcessApiStringEvent(const orbit_client_data::ApiStringEvent& s
   manual_instrumentation_manager_->ProcessStringEvent(string_event);
 }
 
-void TimeGraph::ProcessApiTrackValueEvent(const orbit_client_data::ApiTrackValue& track_event) {
+void TimeGraph::ProcessApiTrackValueEvent(
+    const orbit_client_data::ApiTrackValue& track_event) const {
   VariableTrack* track = GetTrackManager()->GetOrCreateVariableTrack(track_event.track_name());
 
   uint64_t time = track_event.timestamp_ns();
   track->AddValue(time, track_event.value());
 }
 
-void TimeGraph::ProcessSystemMemoryTrackingTimer(const TimerInfo& timer_info) {
+void TimeGraph::ProcessSystemMemoryInfo(
+    const orbit_client_data::SystemMemoryInfo& system_memory_info) {
   SystemMemoryTrack* track = GetTrackManager()->GetSystemMemoryTrack();
   if (track == nullptr) {
     track = GetTrackManager()->CreateAndGetSystemMemoryTrack();
   }
-  track->OnTimer(timer_info);
+  track->OnSystemMemoryInfo(system_memory_info);
 
   if (absl::GetFlag(FLAGS_enable_warning_threshold) && !track->GetWarningThreshold().has_value()) {
     constexpr double kMegabytesToKilobytes = 1024.0;
@@ -370,23 +375,22 @@ void TimeGraph::ProcessSystemMemoryTrackingTimer(const TimerInfo& timer_info) {
   }
 }
 
-void TimeGraph::ProcessCGroupAndProcessMemoryTrackingTimer(const TimerInfo& timer_info) {
-  uint64_t cgroup_name_hash = timer_info.registers(static_cast<size_t>(
-      CaptureEventProcessor::CGroupAndProcessMemoryUsageEncodingIndex::kCGroupNameHash));
-  std::string cgroup_name = app_->GetStringManager()->Get(cgroup_name_hash).value_or("");
+void TimeGraph::ProcessCgroupAndProcessMemoryInfo(
+    const orbit_client_data::CgroupAndProcessMemoryInfo& cgroup_and_process_memory_info) {
+  std::string cgroup_name =
+      app_->GetStringManager()->Get(cgroup_and_process_memory_info.cgroup_name_hash).value_or("");
   if (cgroup_name.empty()) return;
 
   CGroupAndProcessMemoryTrack* track = GetTrackManager()->GetCGroupAndProcessMemoryTrack();
   if (track == nullptr) {
     track = GetTrackManager()->CreateAndGetCGroupAndProcessMemoryTrack(cgroup_name);
   }
-  track->OnTimer(timer_info);
+  track->OnCgroupAndProcessMemoryInfo(cgroup_and_process_memory_info);
 }
 
-void TimeGraph::ProcessPageFaultsTrackingTimer(const TimerInfo& timer_info) {
-  uint64_t cgroup_name_hash = timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::PageFaultsEncodingIndex::kCGroupNameHash));
-  std::string cgroup_name = app_->GetStringManager()->Get(cgroup_name_hash).value_or("");
+void TimeGraph::ProcessPageFaultsInfo(const orbit_client_data::PageFaultsInfo& page_faults_info) {
+  std::string cgroup_name =
+      app_->GetStringManager()->Get(page_faults_info.cgroup_name_hash).value_or("");
   if (cgroup_name.empty()) return;
 
   PageFaultsTrack* track = GetTrackManager()->GetPageFaultsTrack();
@@ -395,16 +399,16 @@ void TimeGraph::ProcessPageFaultsTrackingTimer(const TimerInfo& timer_info) {
     track = GetTrackManager()->CreateAndGetPageFaultsTrack(cgroup_name, memory_sampling_period_ms);
   }
   ORBIT_CHECK(track != nullptr);
-  track->OnTimer(timer_info);
+  track->OnPageFaultsInfo(page_faults_info);
 }
 
 orbit_gl::CaptureViewElement::EventResult TimeGraph::OnMouseWheel(
     const Vec2& mouse_pos, int delta, const orbit_gl::ModifierKeys& modifiers) {
   if (delta == 0) return EventResult::kIgnored;
-  const float kScrollingRatioPerDelta = 0.05f;
+  constexpr float kScrollingRatioPerDelta = 0.05f;
 
   if (modifiers.ctrl) {
-    double mouse_ratio = (mouse_pos[0] - GetPos()[0]) / GetTimelineWidth();
+    double mouse_ratio = (mouse_pos[0] - GetTimelinePos()[0]) / GetTimelineWidth();
     ZoomTime(delta, mouse_ratio);
   } else {
     track_container_->IncrementVerticalScroll(delta * kScrollingRatioPerDelta);
@@ -420,7 +424,7 @@ orbit_gl::CaptureViewElement::EventResult TimeGraph::OnMouseLeave() {
   return event_result;
 }
 
-void TimeGraph::ProcessAsyncTimer(const TimerInfo& timer_info) {
+void TimeGraph::ProcessAsyncTimer(const TimerInfo& timer_info) const {
   const std::string& track_name = timer_info.api_scope_name();
   AsyncTrack* track = GetTrackManager()->GetOrCreateAsyncTrack(track_name);
   track->OnTimer(timer_info);
@@ -431,7 +435,8 @@ float TimeGraph::GetWorldFromTick(uint64_t time) const {
   if (time_window_us > 0) {
     double start = TicksToMicroseconds(capture_min_timestamp_, time) - min_time_us_;
     double normalized_start = start / time_window_us;
-    float pos = static_cast<float>(normalized_start * GetTimelineWidth());
+    float pos =
+        layout_->GetTrackHeaderWidth() + static_cast<float>(normalized_start * GetTimelineWidth());
     return pos;
   }
 
@@ -449,7 +454,8 @@ double TimeGraph::GetUsFromTick(uint64_t time) const {
 uint64_t TimeGraph::GetNsSinceStart(uint64_t time) const { return time - capture_min_timestamp_; }
 
 uint64_t TimeGraph::GetTickFromWorld(float world_x) const {
-  double ratio = GetTimelineWidth() > 0 ? static_cast<double>(world_x / GetTimelineWidth()) : 0;
+  float relative_x = world_x - GetTimelinePos()[0];
+  double ratio = GetTimelineWidth() > 0 ? static_cast<double>(relative_x / GetTimelineWidth()) : 0;
   auto time_span_ns = static_cast<uint64_t>(1000 * GetTime(ratio));
   return capture_min_timestamp_ + time_span_ns;
 }
@@ -469,13 +475,35 @@ uint64_t TimeGraph::GetCaptureTimeSpanNs() const {
   return capture_max_timestamp_ - capture_min_timestamp_;
 }
 
+std::pair<float, float> TimeGraph::GetBoxPosXAndWidthFromTicks(uint64_t start_tick,
+                                                               uint64_t end_tick) const {
+  // TODO(b/244736453): GetWorldFromTick uses floats and therefore is not precise enough. Since
+  //  the optimization looks for the first timer after the boundary of a pixel, we are getting
+  //  several values very close to that boundary. The lack of precision is making some of that
+  //  numbers to be just before the boundary and they ended be floored in the previous pixel. We
+  //  are temporarily hacking this issue by adding an epsilon.
+  // Epsilon for any float in the range of (0, 8092), maximum width for a 8k pixel screen.
+  constexpr float kEpsilon = std::numeric_limits<float>::epsilon() * 8092;
+  const float extended_start_x = std::floor(GetWorldFromTick(start_tick) + kEpsilon);
+  const float extended_end_x = std::ceil(GetWorldFromTick(end_tick) + kEpsilon);
+  return {extended_start_x, extended_end_x - extended_start_x};
+}
+
+float TimeGraph::ClampToTimelineUiElementWorldX(float x) const {
+  float min_x = timeline_ui_->GetPos()[0];
+  float max_x = min_x + timeline_ui_->GetWidth();
+  return std::clamp(x, min_x, max_x);
+}
+
 // Select a timer_info. Also move the view in order to assure that the timer_info and its track are
 // visible.
 void TimeGraph::SelectAndMakeVisible(const TimerInfo* timer_info) {
   ORBIT_CHECK(timer_info != nullptr);
-  app_->SelectTimer(timer_info);
-  HorizontallyMoveIntoView(VisibilityType::kPartlyVisible, *timer_info);
-  track_container_->VerticallyMoveIntoView(*timer_info);
+  if (app_->IsTimerActive(*timer_info)) {
+    app_->SelectTimer(timer_info);
+    HorizontallyMoveIntoView(VisibilityType::kPartlyVisible, *timer_info);
+    track_container_->VerticallyMoveIntoView(*timer_info);
+  }
 }
 
 static bool ThreadMatches(const std::optional<uint32_t>& target_thread_id, const TimerInfo* timer) {
@@ -654,8 +682,11 @@ void TimeGraph::PrepareBatcherAndUpdatePrimitives(PickingMode picking_mode) {
   uint64_t min_tick = GetTickFromUs(min_time_us_);
   uint64_t max_tick = GetTickFromUs(max_time_us_);
 
-  CaptureViewElement::UpdatePrimitives(primitive_assembler_, text_renderer_static_, min_tick,
-                                       max_tick, picking_mode);
+  // Only update the primitives to draw if the time interval is non-empty.
+  if (min_tick < max_tick) {
+    CaptureViewElement::UpdatePrimitives(primitive_assembler_, text_renderer_static_, min_tick,
+                                         max_tick, picking_mode);
+  }
 
   if (absl::GetFlag(FLAGS_enforce_full_redraw)) {
     RequestUpdate();
@@ -669,62 +700,70 @@ void TimeGraph::DoUpdateLayout() {
 
   UpdateCaptureMinMaxTimestamps();
   UpdateChildrenPosAndContainerSize();
+
+  // Track header sizer.
+  float sizer_width = layout_->GetSpaceBetweenTracks();
+  float header_width = layout_->GetTrackHeaderWidth();
+  track_header_sizer_->SetWidth(sizer_width);
+  track_header_sizer_->SetHeight(GetHeight());
+  track_header_sizer_->SetPos(GetPos()[0] + header_width - sizer_width, GetPos()[1]);
 }
 
 void TimeGraph::UpdateChildrenPosAndContainerSize() {
   // TimeGraph's children:
-  // ___________________________________________
-  // |            TIMELINE            |   |  +  |
-  // |                                |   |  -  |
-  // |--------------------------------|   |-----|
-  // |     SPACE TRACKS - TIMELINE              |
-  // |--------------------------------| M |-----|
-  // |                                | A |  S  |
-  // |                                | R |  L  |
-  // |         TRACK CONTAINER        | G |  I  |
-  // |                                | I |  D  |
-  // |                                | N |  E  |
-  // |                                |   |  R  |
-  // |________________________________|___|_____|
-  // |       HORIZONTAL SLIDER            |
-  // |------------------------------------|
+  // _______________________________________________
+  // | L |            TIMELINE            | R |  +  |
+  // | E |                                | I |  -  |
+  // | F |--------------------------------| G |-----|
+  // | T |     SPACE TRACKS - TIMELINE      H       |
+  // |   |--------------------------------| T |-----|
+  // | M |                                |   |  S  |
+  // | A |                                | M |  L  |
+  // | R |         TRACK CONTAINER        | A |  I  |
+  // | G |                                | R |  D  |
+  // | I |                                | G |  E  |
+  // | N |                                | I |  R  |
+  // |   |________________________________|_N_|_____|
+  // |   |       HORIZONTAL SLIDER            |
+  // |----------------------------------------|
 
   // First we calculate TrackContainer's height. TimeGraph will set TrackContainer height based on
   // its free space.
   float total_height_without_track_container = GetHeight() - horizontal_slider_->GetHeight() -
                                                timeline_ui_->GetHeight() -
-                                               layout_.GetSpaceBetweenTracksAndTimeline();
+                                               layout_->GetSpaceBetweenTracksAndTimeline();
   track_container_->SetHeight(total_height_without_track_container);
 
   // After we set positions.
   float timegraph_current_x = GetPos()[0];
   float timegraph_current_y = GetPos()[1];
-  const float total_right_margin = layout_.GetRightMargin() + vertical_slider_->GetWidth();
+  const float total_right_margin = layout_->GetRightMargin() + vertical_slider_->GetWidth();
 
-  timeline_ui_->SetWidth(GetWidth() - total_right_margin);
-  timeline_ui_->SetPos(timegraph_current_x, timegraph_current_y);
+  timeline_ui_->SetWidth(GetWidth() - total_right_margin - layout_->GetTrackHeaderWidth());
+  timeline_ui_->SetPos(timegraph_current_x + layout_->GetTrackHeaderWidth(), timegraph_current_y);
 
-  plus_button_->SetWidth(layout_.GetButtonWidth());
-  plus_button_->SetHeight(layout_.GetButtonHeight());
+  plus_button_->SetWidth(layout_->GetButtonWidth());
+  plus_button_->SetHeight(layout_->GetButtonHeight());
   plus_button_->SetPos(GetWidth() - plus_button_->GetWidth(), timegraph_current_y);
 
-  minus_button_->SetWidth(layout_.GetButtonWidth());
-  minus_button_->SetHeight(layout_.GetButtonHeight());
+  minus_button_->SetWidth(layout_->GetButtonWidth());
+  minus_button_->SetHeight(layout_->GetButtonHeight());
   minus_button_->SetPos(GetWidth() - minus_button_->GetWidth(),
                         timegraph_current_y + plus_button_->GetHeight());
 
-  timegraph_current_y += timeline_ui_->GetHeight() + layout_.GetSpaceBetweenTracksAndTimeline();
+  timegraph_current_y += timeline_ui_->GetHeight() + layout_->GetSpaceBetweenTracksAndTimeline();
   track_container_->SetWidth(GetWidth() - total_right_margin);
   track_container_->SetPos(timegraph_current_x, timegraph_current_y);
 
-  vertical_slider_->SetWidth(layout_.GetSliderWidth());
+  vertical_slider_->SetWidth(layout_->GetSliderWidth());
   vertical_slider_->SetPos(GetWidth() - vertical_slider_->GetWidth(), timegraph_current_y);
 
   timegraph_current_y += track_container_->GetHeight();
-  horizontal_slider_->SetWidth(GetWidth() - vertical_slider_->GetWidth());
+  float slider_width = GetWidth() - vertical_slider_->GetWidth() - layout_->GetTrackHeaderWidth();
+  horizontal_slider_->SetWidth(slider_width);
   // The horizontal slider should be at the bottom of the TimeGraph. Because how OpenGl renders, the
   // way to assure that there is no pixels below the scrollbar is by making a ceiling.
-  horizontal_slider_->SetPos(timegraph_current_x,
+  horizontal_slider_->SetPos(timegraph_current_x + layout_->GetTrackHeaderWidth(),
                              std::ceil(GetHeight() - horizontal_slider_->GetHeight()));
 
   // TODO(b/230442062): Refactor this to be part of Slider::UpdateLayout().
@@ -733,7 +772,7 @@ void TimeGraph::UpdateChildrenPosAndContainerSize() {
 }
 
 float TimeGraph::GetRightMargin() const {
-  return layout_.GetRightMargin() +
+  return layout_->GetRightMargin() +
          (vertical_slider_->GetVisible() ? vertical_slider_->GetWidth() : 0.f);
 }
 
@@ -850,36 +889,15 @@ void TimeGraph::DoDraw(orbit_gl::PrimitiveAssembler& primitive_assembler,
   ORBIT_SCOPE("TimeGraph::DoDraw");
   CaptureViewElement::DoDraw(primitive_assembler, text_renderer, draw_context);
 
-  // Vertical green line at mouse x position.
+  // Vertical white line at mouse x position.
   if (draw_context.picking_mode == PickingMode::kNone &&
       draw_context.current_mouse_tick.has_value()) {
-    const Color kGreenLineColor{0, 255, 0, 127};
+    const Color white_line_color{255, 255, 255, 127};
     Vec2 green_line_pos = {GetWorldFromTick(draw_context.current_mouse_tick.value()), GetPos()[1]};
     primitive_assembler.AddVerticalLine(green_line_pos, GetHeight(), GlCanvas::kZValueUi,
-                                        kGreenLineColor);
+                                        white_line_color);
   }
-
-  // TODO(http://b/217719000): We are drawing boxes in margin positions because some elements are
-  // being drawn partially outside the TrackContainer space. This hack is needed until we assure
-  // that no element is drawn outside of its parent's area.
-  DrawMarginsBetweenChildren(primitive_assembler);
 }
-
-void TimeGraph::DrawMarginsBetweenChildren(
-    orbit_gl::PrimitiveAssembler& primitive_assembler) const {
-  // Margin between the Tracks and the Timeline.
-  Vec2 timeline_margin_pos = Vec2(GetPos()[0], GetPos()[1] + timeline_ui_->GetHeight());
-  Vec2 timeline_margin_size = Vec2(GetSize()[0], layout_.GetSpaceBetweenTracksAndTimeline());
-  primitive_assembler.AddBox(MakeBox(timeline_margin_pos, timeline_margin_size),
-                             GlCanvas::kZValueTimeBar, GlCanvas::kBackgroundColor);
-
-  // Margin between the Tracks and the vertical scrollbar.
-  Vec2 right_margin_pos{GetWidth() - GetRightMargin(), GetPos()[1]};
-  Quad box = MakeBox(right_margin_pos, GetSize() - (right_margin_pos - GetPos()));
-  primitive_assembler.AddBox(box, GlCanvas::kZValueMargin, GlCanvas::kBackgroundColor);
-}
-
-void TimeGraph::DrawText(float layer) { text_renderer_static_.RenderLayer(layer); }
 
 bool TimeGraph::IsFullyVisible(uint64_t min, uint64_t max) const {
   double start = TicksToMicroseconds(capture_min_timestamp_, min);
@@ -907,8 +925,8 @@ bool TimeGraph::IsVisible(VisibilityType vis_type, uint64_t min, uint64_t max) c
 }
 
 std::vector<orbit_gl::CaptureViewElement*> TimeGraph::GetAllChildren() const {
-  return {GetTimelineUi(), GetTrackContainer(), GetHorizontalSlider(),
-          GetPlusButton(), GetMinusButton(),    GetVerticalSlider()};
+  return {GetTimelineUi(),  GetTrackContainer(), GetHorizontalSlider(), GetPlusButton(),
+          GetMinusButton(), GetVerticalSlider(), GetTrackHeaderSizer()};
 }
 
 std::unique_ptr<orbit_accessibility::AccessibleInterface> TimeGraph::CreateAccessibleInterface() {

@@ -6,11 +6,17 @@
 #define FILE_FRAGMENT_INPUT_STREAM_H_
 
 #include <google/protobuf/io/zero_copy_stream.h>
+#include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "OrbitBase/File.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 
 namespace orbit_capture_file_internal {
 
@@ -20,7 +26,7 @@ namespace orbit_capture_file_internal {
 // https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.io.zero_copy_stream
 class FileFragmentInputStream : public google::protobuf::io::ZeroCopyInputStream {
  public:
-  explicit FileFragmentInputStream(const orbit_base::unique_fd& fd, uint64_t file_offset,
+  explicit FileFragmentInputStream(const orbit_base::UniqueFd& fd, uint64_t file_offset,
                                    uint64_t size, size_t block_size = 1 << 16)
       : fd_{fd},
         file_fragments_start_{file_offset},
@@ -40,12 +46,12 @@ class FileFragmentInputStream : public google::protobuf::io::ZeroCopyInputStream
   // Skips a number of bytes.
   // https://developers.google.com/protocol-buffers/docs/reference/cpp/google.protobuf.io.zero_copy_stream#ZeroCopyInputStream.Skip.details
   bool Skip(int count) override;
-  int64_t ByteCount() const override;
+  [[nodiscard]] int64_t ByteCount() const override;
 
   [[nodiscard]] std::optional<ErrorMessage> GetLastError() const { return last_error_; }
 
  private:
-  const orbit_base::unique_fd& fd_;
+  const orbit_base::UniqueFd& fd_;
   const uint64_t file_fragments_start_;
   const uint64_t file_fragments_end_;
   std::vector<uint8_t> buffer_;

@@ -26,11 +26,10 @@ class OrbitTestImpl {
   void Loop();
   void TestFunc(uint32_t depth = 0);
   void TestFunc2(uint32_t depth = 0);
-  void BusyWork(uint64_t microseconds);
+  static void BusyWork(uint64_t microseconds);
   void ManualInstrumentationApiTest();
-  void OutputOrbitApiState();
+  void OutputOrbitApiState() const;
 
- private:
   bool exit_requested_ = false;
   std::vector<std::shared_ptr<std::thread>> threads_;
   uint32_t num_threads_ = 10;

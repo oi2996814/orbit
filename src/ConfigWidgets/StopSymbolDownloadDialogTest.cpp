@@ -4,12 +4,15 @@
 
 #include <absl/strings/match.h>
 #include <gtest/gtest.h>
-#include <qnamespace.h>
 
 #include <QCheckBox>
 #include <QLabel>
+#include <QMetaObject>
 #include <QPushButton>
+#include <QString>
 #include <QTest>
+#include <Qt>
+#include <string>
 
 #include "ClientData/ModuleData.h"
 #include "ConfigWidgets/StopSymbolDownloadDialog.h"
@@ -17,6 +20,7 @@
 
 namespace orbit_config_widgets {
 
+namespace {
 constexpr const char* kFilePath = "test/file/path";
 
 orbit_grpc_protos::ModuleInfo CreateModuleInfo() {
@@ -38,6 +42,7 @@ class StopSymbolDownloadDialogTest : public testing::Test {
   StopSymbolDownloadDialog dialog_;
   QPushButton* stop_button_ = nullptr;
 };
+}  // namespace
 
 TEST_F(StopSymbolDownloadDialogTest, UiContent) {
   auto* module_label = dialog_.findChild<QLabel*>("moduleLabel");
@@ -66,10 +71,10 @@ TEST_F(StopSymbolDownloadDialogTest, StopDownload) {
 }
 
 TEST_F(StopSymbolDownloadDialogTest, StopDownloadAndDisable) {
-  auto* rememberCheckBox = dialog_.findChild<QCheckBox*>("rememberCheckBox");
-  ASSERT_NE(rememberCheckBox, nullptr);
+  auto* remember_check_box = dialog_.findChild<QCheckBox*>("rememberCheckBox");
+  ASSERT_NE(remember_check_box, nullptr);
 
-  rememberCheckBox->setCheckState(Qt::Checked);
+  remember_check_box->setCheckState(Qt::Checked);
 
   QMetaObject::invokeMethod(
       &dialog_, [this] { QTest::mouseClick(stop_button_, Qt::LeftButton); }, Qt::QueuedConnection);

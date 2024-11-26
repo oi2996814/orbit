@@ -9,23 +9,57 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <absl/memory/memory.h>
 #include <absl/strings/str_cat.h>
+#include <absl/strings/str_format.h>
+#include <llvm/ADT/StringRef.h>
+#include <llvm/ADT/iterator.h>
+#include <llvm/DebugInfo/CodeView/CVRecord.h>
+#include <llvm/DebugInfo/CodeView/CVSymbolVisitor.h>
+#include <llvm/DebugInfo/CodeView/CodeView.h>
+#include <llvm/DebugInfo/CodeView/GUID.h>
 #include <llvm/DebugInfo/CodeView/LazyRandomTypeCollection.h>
+#include <llvm/DebugInfo/CodeView/SymbolDeserializer.h>
 #include <llvm/DebugInfo/CodeView/SymbolRecord.h>
+#include <llvm/DebugInfo/CodeView/SymbolVisitorCallbackPipeline.h>
+#include <llvm/DebugInfo/CodeView/SymbolVisitorCallbacks.h>
 #include <llvm/DebugInfo/CodeView/TypeDeserializer.h>
+#include <llvm/DebugInfo/CodeView/TypeIndex.h>
 #include <llvm/DebugInfo/CodeView/TypeRecord.h>
+#include <llvm/DebugInfo/MSF/MappedBlockStream.h>
+#include <llvm/DebugInfo/PDB/Native/DbiModuleDescriptor.h>
+#include <llvm/DebugInfo/PDB/Native/DbiModuleList.h>
+#include <llvm/DebugInfo/PDB/Native/DbiStream.h>
 #include <llvm/DebugInfo/PDB/Native/GlobalsStream.h>
 #include <llvm/DebugInfo/PDB/Native/ISectionContribVisitor.h>
+#include <llvm/DebugInfo/PDB/Native/ModuleDebugStream.h>
+#include <llvm/DebugInfo/PDB/Native/NativeSession.h>
+#include <llvm/DebugInfo/PDB/Native/PDBFile.h>
 #include <llvm/DebugInfo/PDB/Native/PublicsStream.h>
+#include <llvm/DebugInfo/PDB/Native/RawConstants.h>
+#include <llvm/DebugInfo/PDB/Native/RawTypes.h>
 #include <llvm/DebugInfo/PDB/Native/SymbolStream.h>
 #include <llvm/DebugInfo/PDB/Native/TpiStream.h>
+#include <llvm/DebugInfo/PDB/PDB.h>
+#include <llvm/DebugInfo/PDB/PDBSymbolExe.h>
+#include <llvm/DebugInfo/PDB/PDBTypes.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/Object/COFF.h>
+#include <llvm/Support/BinaryStreamArray.h>
+#include <llvm/Support/BinaryStreamRef.h>
+#include <llvm/Support/Endian.h>
+#include <llvm/Support/Error.h>
 
+#include <algorithm>
+#include <iterator>
 #include <memory>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "GrpcProtos/symbol.pb.h"
-#include "ObjectUtils/CoffFile.h"
+#include "ObjectUtils/ObjectFile.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
 
@@ -94,6 +128,8 @@ class SymbolInfoVisitor : public llvm::codeview::SymbolVisitorCallbacks {
                                       *section_headers_);
     symbol_info.set_address(address);
     symbol_info.set_size(proc.CodeSize);
+    // We currently only support hotpatchable functions in elf files.
+    symbol_info.set_is_hotpatchable(false);
 
     ORBIT_CHECK(addresses_from_module_debug_stream_ != nullptr);
     addresses_from_module_debug_stream_->insert(symbol_info.address());
@@ -290,6 +326,9 @@ void LoadDebugSymbolsFromPublicSymbolStream(
     // placeholder to look-up the size in `SectionContributionsVisitor` or in
     // `DeduceDebugSymbolMissingSizesAsDistanceFromNextSymbol` (as a fallback).
     symbol_info.set_size(ObjectFile::kUnknownSymbolSize);
+    // We currently only support hotpatchable functions in elf files.
+    symbol_info.set_is_hotpatchable(false);
+
     symbol_infos->emplace_back(std::move(symbol_info));
   }
 }
@@ -305,7 +344,7 @@ PdbFileLlvm::PdbFileLlvm(std::filesystem::path file_path, const ObjectFileInfo& 
 std::array<uint8_t, 16> PdbFileLlvm::GetGuid() const {
   constexpr int kGuidSize = 16;
   static_assert(kGuidSize == sizeof(llvm::codeview::GUID));
-  std::array<uint8_t, kGuidSize> result;
+  std::array<uint8_t, kGuidSize> result{};
   auto global_scope = session_->getGlobalScope();
   const llvm::codeview::GUID& guid = global_scope->getGuid();
   std::copy(std::begin(guid.Guid), std::end(guid.Guid), std::begin(result));

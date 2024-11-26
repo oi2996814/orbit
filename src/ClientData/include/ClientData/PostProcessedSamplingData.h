@@ -5,6 +5,11 @@
 #ifndef CLIENT_DATA_POST_PROCESSED_SAMPLING_DATA_H_
 #define CLIENT_DATA_POST_PROCESSED_SAMPLING_DATA_H_
 
+#include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+#include <absl/types/span.h>
+
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -95,7 +100,7 @@ class PostProcessedSamplingData {
   [[nodiscard]] const CallstackInfo& GetResolvedCallstack(uint64_t sampled_callstack_id) const;
 
   [[nodiscard]] std::unique_ptr<SortedCallstackReport>
-  GetSortedCallstackReportFromFunctionAddresses(const std::vector<uint64_t>& function_addresses,
+  GetSortedCallstackReportFromFunctionAddresses(absl::Span<const uint64_t> function_addresses,
                                                 uint32_t thread_id) const;
 
   [[nodiscard]] std::vector<const ThreadSampleData*> GetSortedThreadSampleData() const;
@@ -106,7 +111,7 @@ class PostProcessedSamplingData {
 
  private:
   [[nodiscard]] std::multimap<int, uint64_t> GetCallstacksFromFunctionAddresses(
-      const std::vector<uint64_t>& function_addresses, uint32_t thread_id) const;
+      absl::Span<const uint64_t> function_addresses, uint32_t thread_id) const;
 
   absl::flat_hash_map<uint32_t, ThreadSampleData> thread_id_to_sample_data_;
   absl::flat_hash_map<uint64_t, CallstackInfo> id_to_resolved_callstack_;

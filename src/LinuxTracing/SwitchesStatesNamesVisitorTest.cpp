@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/hash/hash.h>
 #include <gmock/gmock.h>
+#include <google/protobuf/stubs/port.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
 
-#include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "GrpcProtos/capture.pb.h"
 #include "MockTracerListener.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/MakeUniqueForOverwrite.h"
 #include "PerfEvent.h"
 #include "SwitchesStatesNamesVisitor.h"
 
@@ -270,7 +272,7 @@ ThreadName MakeThreadName(uint32_t pid, uint32_t tid, std::string name, uint64_t
   ThreadName thread_name;
   thread_name.set_pid(pid);
   thread_name.set_tid(tid);
-  thread_name.set_name(name);
+  thread_name.set_name(std::move(name));
   thread_name.set_timestamp_ns(timestamp_ns);
   return thread_name;
 }

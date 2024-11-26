@@ -5,14 +5,27 @@
 #ifndef CLIENT_DATA_MODULE_MANAGER_H_
 #define CLIENT_DATA_MODULE_MANAGER_H_
 
+#include <absl/base/thread_annotations.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/container/node_hash_map.h>
+#include <absl/hash/hash.h>
+#include <absl/synchronization/mutex.h>
+#include <absl/types/span.h>
+#include <stdint.h>
+
+#include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ClientData/ModuleData.h"
-#include "ClientData/ProcessData.h"
+#include "ClientData/ModuleIdentifier.h"
+#include "ClientData/ModuleIdentifierProvider.h"
+#include "ClientData/ModuleInMemory.h"
+#include "ClientData/ModulePathAndBuildId.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "GrpcProtos/module.pb.h"
-#include "SymbolProvider/ModuleIdentifier.h"
+#include "OrbitBase/Logging.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/synchronization/mutex.h"
 
@@ -20,7 +33,10 @@ namespace orbit_client_data {
 
 class ModuleManager final {
  public:
-  explicit ModuleManager() = default;
+  explicit ModuleManager(ModuleIdentifierProvider* module_identifier_provider)
+      : module_identifier_provider_{module_identifier_provider} {
+    ORBIT_CHECK(module_identifier_provider != nullptr);
+  };
 
   [[nodiscard]] const ModuleData* GetModuleByModuleInMemoryAndAbsoluteAddress(
       const ModuleInMemory& module_in_memory, uint64_t absolute_address) const;
@@ -28,10 +44,16 @@ class ModuleManager final {
   [[nodiscard]] ModuleData* GetMutableModuleByModuleInMemoryAndAbsoluteAddress(
       const ModuleInMemory& module_in_memory, uint64_t absolute_address);
 
+  [[nodiscard]] const ModuleData* GetModuleByModulePathAndBuildId(
+      const ModulePathAndBuildId& module_path_and_build_id) const;
+
+  [[nodiscard]] ModuleData* GetMutableModuleByModulePathAndBuildId(
+      const ModulePathAndBuildId& module_path_and_build_id);
+
   [[nodiscard]] const ModuleData* GetModuleByModuleIdentifier(
-      const orbit_symbol_provider::ModuleIdentifier& module_id) const;
+      orbit_client_data::ModuleIdentifier module_id) const;
   [[nodiscard]] ModuleData* GetMutableModuleByModuleIdentifier(
-      const orbit_symbol_provider::ModuleIdentifier& module_id);
+      orbit_client_data::ModuleIdentifier module_id);
   // Add new modules for the module_infos that do not exist yet, and update the modules that do
   // exist. If the update changed the module in a way that symbols were not valid anymore, the
   // symbols are discarded, i.e., the module is no longer loaded. This method returns the list of
@@ -47,13 +69,22 @@ class ModuleManager final {
   [[nodiscard]] std::vector<const ModuleData*> GetAllModuleData() const;
 
   [[nodiscard]] std::vector<const ModuleData*> GetModulesByFilename(
-      const std::string& filename) const;
+      std::string_view filename) const;
 
  private:
+  [[nodiscard]] const ModuleData* GetModuleByModuleIdentifierInternal(
+      orbit_client_data::ModuleIdentifier module_id) const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  [[nodiscard]] ModuleData* GetMutableModuleByModuleIdentifierInternal(
+      orbit_client_data::ModuleIdentifier module_id) ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
   mutable absl::Mutex mutex_;
+  ModuleIdentifierProvider* module_identifier_provider_ ABSL_GUARDED_BY(mutex_);
   // We are sharing pointers to that entries and ensure reference stability by using node_hash_map
   // Map of ModuleIdentifier -> ModuleData (ModuleIdentifier is file_path and build_id)
-  absl::node_hash_map<orbit_symbol_provider::ModuleIdentifier, ModuleData> module_map_;
+  absl::flat_hash_map<orbit_client_data::ModuleIdentifier, std::unique_ptr<ModuleData>> module_map_
+      ABSL_GUARDED_BY(mutex_);
+  mutable absl::flat_hash_map<uint64_t, ModuleData*> absolute_address_to_module_data_cache_
+      ABSL_GUARDED_BY(mutex_);
 };
 
 }  // namespace orbit_client_data

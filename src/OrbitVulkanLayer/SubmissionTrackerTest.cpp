@@ -3,11 +3,26 @@
 // found in the LICENSE file.
 
 #include <absl/base/casts.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 #include <gmock/gmock.h>
+#include <grpcpp/channel.h>
 #include <gtest/gtest.h>
+#include <sys/types.h>
+#include <vulkan/vulkan_core.h>
 
 #include <array>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "GrpcProtos/capture.pb.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/Profiling.h"
 #include "OrbitBase/ThreadUtils.h"
 #include "SubmissionTracker.h"
 #include "VulkanLayerProducer.h"
@@ -357,7 +372,7 @@ TEST(SubmissionTracker, SetVulkanLayerProducerWillCallSetListener) {
   SubmissionTracker<MockDispatchTable, MockDeviceManager, MockTimerQueryPool> tracker(
       &dispatch_table, &timer_query_pool, &device_manager, std::numeric_limits<uint32_t>::max());
 
-  VulkanLayerProducer::CaptureStatusListener* actual_listener;
+  VulkanLayerProducer::CaptureStatusListener* actual_listener{};
   EXPECT_CALL(*producer, SetCaptureStatusListener).Times(1).WillOnce(SaveArg<0>(&actual_listener));
   tracker.SetVulkanLayerProducer(producer.get());
   EXPECT_EQ(actual_listener, &tracker);
@@ -612,7 +627,7 @@ TEST_F(SubmissionTrackerTest, WillRetryCompletingSubmissionsWhenTimestampQueryFa
                                                  absl::bit_cast<VkCommandBuffer>(2L)};
   ORBIT_CHECK(command_buffers[0] != command_buffers[1]);
 
-  tracker_.TrackCommandBuffers(device_, command_pool_, &command_buffers[0], 2);
+  tracker_.TrackCommandBuffers(device_, command_pool_, command_buffers.data(), 2);
   tracker_.MarkCommandBufferBegin(command_buffers[0]);
   tracker_.MarkCommandBufferEnd(command_buffers[0]);
   tracker_.MarkCommandBufferBegin(command_buffers[1]);
@@ -621,7 +636,7 @@ TEST_F(SubmissionTrackerTest, WillRetryCompletingSubmissionsWhenTimestampQueryFa
   std::array<VkSubmitInfo, 2> submit_infos{VkSubmitInfo{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                                                         .pNext = nullptr,
                                                         .commandBufferCount = 1,
-                                                        .pCommandBuffers = &command_buffers[0]},
+                                                        .pCommandBuffers = command_buffers.data()},
                                            VkSubmitInfo{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                                                         .pNext = nullptr,
                                                         .commandBufferCount = 1,
@@ -629,13 +644,13 @@ TEST_F(SubmissionTrackerTest, WillRetryCompletingSubmissionsWhenTimestampQueryFa
 
   uint32_t tid = orbit_base::GetCurrentThreadId();
   uint32_t pid = orbit_base::GetCurrentProcessId();
-  std::array<uint64_t, 2> pre_submit_times;
-  std::array<uint64_t, 2> post_submit_times;
+  std::array<uint64_t, 2> pre_submit_times{};
+  std::array<uint64_t, 2> post_submit_times{};
 
   pre_submit_times[0] = orbit_base::CaptureTimestampNs();
   std::optional<QueueSubmission> queue_submission_optional =
-      tracker_.PersistCommandBuffersOnSubmit(queue_, 1, &submit_infos[0]);
-  tracker_.PersistDebugMarkersOnSubmit(queue_, 1, &submit_infos[0], queue_submission_optional);
+      tracker_.PersistCommandBuffersOnSubmit(queue_, 1, submit_infos.data());
+  tracker_.PersistDebugMarkersOnSubmit(queue_, 1, submit_infos.data(), queue_submission_optional);
   post_submit_times[0] = orbit_base::CaptureTimestampNs();
 
   pre_submit_times[1] = orbit_base::CaptureTimestampNs();
@@ -801,7 +816,7 @@ TEST_F(SubmissionTrackerTest, MultipleSubmissionsWontBeOutOfOrder) {
   std::vector<uint32_t> actual_slots_done_reading;
   auto fake_mark_query_slots_done_reading = [&actual_slots_done_reading](
                                                 VkDevice /*device*/,
-                                                const std::vector<uint32_t> slots_to_reset) {
+                                                const std::vector<uint32_t>& slots_to_reset) {
     actual_slots_done_reading.insert(actual_slots_done_reading.end(), slots_to_reset.begin(),
                                      slots_to_reset.end());
   };
@@ -811,7 +826,7 @@ TEST_F(SubmissionTrackerTest, MultipleSubmissionsWontBeOutOfOrder) {
   std::vector<uint32_t> actual_slots_marked_reset;
   auto fake_mark_query_slots_for_reset = [&actual_slots_marked_reset](
                                              VkDevice /*device*/,
-                                             const std::vector<uint32_t> slots_to_reset) {
+                                             const std::vector<uint32_t>& slots_to_reset) {
     actual_slots_marked_reset.insert(actual_slots_marked_reset.end(), slots_to_reset.begin(),
                                      slots_to_reset.end());
   };
@@ -1029,10 +1044,10 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerTimestampsForACompleteSubmis
       };
 
   const char* text = "Text";
-  constexpr uint64_t expected_text_key = 111;
-  auto mock_intern_string_if_necessary_and_get_key = [&text](std::string str) {
+  constexpr uint64_t kExpectedTextKey = 111;
+  auto mock_intern_string_if_necessary_and_get_key = [&text](const std::string& str) {
     EXPECT_STREQ(text, str.c_str());
-    return expected_text_key;
+    return kExpectedTextKey;
   };
   EXPECT_CALL(*producer_, InternStringIfNecessaryAndGetKey)
       .Times(1)
@@ -1068,7 +1083,7 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerTimestampsForACompleteSubmis
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker =
       actual_queue_submission.completed_markers(0);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp3, expected_text_key, expected_color, 0);
+  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp3, kExpectedTextKey, expected_color, 0);
   ExpectDebugMarkerBeginEq(actual_debug_marker, kTimestamp2, pre_submit_time, post_submit_time, tid,
                            pid);
 }
@@ -1089,10 +1104,10 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerEndEvenWhenBeginNotCaptured)
       };
 
   const char* text = "Text";
-  constexpr uint64_t expected_text_key = 111;
-  auto mock_intern_string_if_necessary_and_get_key = [&text](std::string str) {
+  constexpr uint64_t kExpectedTextKey = 111;
+  auto mock_intern_string_if_necessary_and_get_key = [&text](const std::string& str) {
     EXPECT_STREQ(text, str.c_str());
-    return expected_text_key;
+    return kExpectedTextKey;
   };
   EXPECT_CALL(*producer_, InternStringIfNecessaryAndGetKey)
       .Times(1)
@@ -1123,7 +1138,7 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerEndEvenWhenBeginNotCaptured)
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker =
       actual_queue_submission.completed_markers(0);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp1, expected_text_key, expected_color, 0);
+  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp1, kExpectedTextKey, expected_color, 0);
   EXPECT_FALSE(actual_debug_marker.has_begin_marker());
 }
 
@@ -1144,14 +1159,15 @@ TEST_F(SubmissionTrackerTest, CanRetrieveNestedDebugMarkerTimestampsForAComplete
 
   const std::string text_outer = "Outer";
   const std::string text_inner = "Inner";
-  constexpr uint64_t expected_text_key_outer = 111;
-  constexpr uint64_t expected_text_key_inner = 112;
-  auto mock_intern_string_if_necessary_and_get_key = [&text_outer, &text_inner](std::string str) {
+  constexpr uint64_t kExpectedTextKeyOuter = 111;
+  constexpr uint64_t kExpectedTextKeyInner = 112;
+  auto mock_intern_string_if_necessary_and_get_key = [&text_outer,
+                                                      &text_inner](const std::string& str) {
     if (str == text_outer) {
-      return expected_text_key_outer;
+      return kExpectedTextKeyOuter;
     }
     if (str == text_inner) {
-      return expected_text_key_inner;
+      return kExpectedTextKeyInner;
     }
     ORBIT_UNREACHABLE();
   };
@@ -1194,12 +1210,12 @@ TEST_F(SubmissionTrackerTest, CanRetrieveNestedDebugMarkerTimestampsForAComplete
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker_outer =
       actual_queue_submission.completed_markers(1);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker_outer, kTimestamp5, expected_text_key_outer,
+  ExpectDebugMarkerEndEq(actual_debug_marker_outer, kTimestamp5, kExpectedTextKeyOuter,
                          expected_color, 0);
   ExpectDebugMarkerBeginEq(actual_debug_marker_outer, kTimestamp2, pre_submit_time,
                            post_submit_time, tid, pid);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker_inner, kTimestamp4, expected_text_key_inner,
+  ExpectDebugMarkerEndEq(actual_debug_marker_inner, kTimestamp4, kExpectedTextKeyInner,
                          expected_color, 1);
   ExpectDebugMarkerBeginEq(actual_debug_marker_inner, kTimestamp3, pre_submit_time,
                            post_submit_time, tid, pid);
@@ -1223,14 +1239,15 @@ TEST_F(SubmissionTrackerTest,
 
   const std::string text_outer = "Outer";
   const std::string text_inner = "Inner";
-  constexpr uint64_t expected_text_key_outer = 111;
-  constexpr uint64_t expected_text_key_inner = 112;
-  auto mock_intern_string_if_necessary_and_get_key = [&text_outer, &text_inner](std::string str) {
+  constexpr uint64_t kExpectedTextKeyOuter = 111;
+  constexpr uint64_t kExpectedTextKeyInner = 112;
+  auto mock_intern_string_if_necessary_and_get_key = [&text_outer,
+                                                      &text_inner](const std::string& str) {
     if (str == text_outer) {
-      return expected_text_key_outer;
+      return kExpectedTextKeyOuter;
     }
     if (str == text_inner) {
-      return expected_text_key_inner;
+      return kExpectedTextKeyInner;
     }
     ORBIT_UNREACHABLE();
   };
@@ -1272,11 +1289,11 @@ TEST_F(SubmissionTrackerTest,
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker_outer =
       actual_queue_submission.completed_markers(1);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker_outer, kTimestamp3, expected_text_key_outer,
+  ExpectDebugMarkerEndEq(actual_debug_marker_outer, kTimestamp3, kExpectedTextKeyOuter,
                          expected_color, 0);
   EXPECT_FALSE(actual_debug_marker_outer.has_begin_marker());
 
-  ExpectDebugMarkerEndEq(actual_debug_marker_inner, kTimestamp2, expected_text_key_inner,
+  ExpectDebugMarkerEndEq(actual_debug_marker_inner, kTimestamp2, kExpectedTextKeyInner,
                          expected_color, 1);
   ExpectDebugMarkerBeginEq(actual_debug_marker_inner, kTimestamp1, pre_submit_time,
                            post_submit_time, tid, pid);
@@ -1306,10 +1323,10 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerAcrossTwoSubmissions) {
       };
 
   const char* text = "Text";
-  constexpr uint64_t expected_text_key = 111;
-  auto mock_intern_string_if_necessary_and_get_key = [&text](std::string str) {
+  constexpr uint64_t kExpectedTextKey = 111;
+  auto mock_intern_string_if_necessary_and_get_key = [&text](const std::string& str) {
     EXPECT_STREQ(text, str.c_str());
-    return expected_text_key;
+    return kExpectedTextKey;
   };
   EXPECT_CALL(*producer_, InternStringIfNecessaryAndGetKey)
       .Times(1)
@@ -1371,7 +1388,7 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerAcrossTwoSubmissions) {
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker =
       actual_queue_submission_2.completed_markers(0);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp5, expected_text_key, expected_color, 0);
+  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp5, kExpectedTextKey, expected_color, 0);
   ExpectDebugMarkerBeginEq(actual_debug_marker, kTimestamp2, pre_submit_time_1, post_submit_time_1,
                            tid, pid);
 }
@@ -1401,10 +1418,10 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerAcrossTwoSubmissionsEvenWhen
       };
 
   const char* text = "Text";
-  constexpr uint64_t expected_text_key = 111;
-  auto mock_intern_string_if_necessary_and_get_key = [&text](std::string str) {
+  constexpr uint64_t kExpectedTextKey = 111;
+  auto mock_intern_string_if_necessary_and_get_key = [&text](const std::string& str) {
     EXPECT_STREQ(text, str.c_str());
-    return expected_text_key;
+    return kExpectedTextKey;
   };
   EXPECT_CALL(*producer_, InternStringIfNecessaryAndGetKey)
       .Times(1)
@@ -1460,7 +1477,7 @@ TEST_F(SubmissionTrackerTest, CanRetrieveDebugMarkerAcrossTwoSubmissionsEvenWhen
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker =
       actual_queue_submission_2.completed_markers(0);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp3, expected_text_key, expected_color, 0);
+  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp3, kExpectedTextKey, expected_color, 0);
   EXPECT_FALSE(actual_debug_marker.has_begin_marker());
 }
 
@@ -1574,10 +1591,10 @@ TEST_F(SubmissionTrackerTest, CanLimitNestedDebugMarkerDepthPerCommandBuffer) {
 
   const std::string text_outer = "Outer";
   const std::string text_inner = "Inner";
-  constexpr uint64_t expected_text_key_outer = 111;
-  auto mock_intern_string_if_necessary_and_get_key = [&text_outer](std::string str) {
+  constexpr uint64_t kExpectedTextKeyOuter = 111;
+  auto mock_intern_string_if_necessary_and_get_key = [&text_outer](const std::string& str) {
     if (str == text_outer) {
-      return expected_text_key_outer;
+      return kExpectedTextKeyOuter;
     }
     ORBIT_UNREACHABLE();
   };
@@ -1618,7 +1635,7 @@ TEST_F(SubmissionTrackerTest, CanLimitNestedDebugMarkerDepthPerCommandBuffer) {
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker_outer =
       actual_queue_submission.completed_markers(0);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker_outer, kTimestamp3, expected_text_key_outer,
+  ExpectDebugMarkerEndEq(actual_debug_marker_outer, kTimestamp3, kExpectedTextKeyOuter,
                          expected_color, 0);
   ExpectDebugMarkerBeginEq(actual_debug_marker_outer, kTimestamp2, pre_submit_time,
                            post_submit_time, tid, pid);
@@ -1632,7 +1649,7 @@ TEST_F(SubmissionTrackerTest, CanLimitNestedDebugMarkerDepthPerCommandBufferAcro
   std::vector<uint32_t> actual_slots_done_reading;
   auto mock_mark_slots_done_reading = [&actual_slots_done_reading](
                                           VkDevice /*device*/,
-                                          const std::vector<uint32_t> slots_to_reset) {
+                                          const std::vector<uint32_t>& slots_to_reset) {
     actual_slots_done_reading.insert(actual_slots_done_reading.end(), slots_to_reset.begin(),
                                      slots_to_reset.end());
   };
@@ -1642,7 +1659,7 @@ TEST_F(SubmissionTrackerTest, CanLimitNestedDebugMarkerDepthPerCommandBufferAcro
   std::vector<uint32_t> actual_slots_marked_for_reset;
   auto mock_mark_slots_for_reset = [&actual_slots_marked_for_reset](
                                        VkDevice /*device*/,
-                                       const std::vector<uint32_t> slots_to_reset) {
+                                       const std::vector<uint32_t>& slots_to_reset) {
     actual_slots_marked_for_reset.insert(actual_slots_marked_for_reset.end(),
                                          slots_to_reset.begin(), slots_to_reset.end());
   };
@@ -1658,10 +1675,10 @@ TEST_F(SubmissionTrackerTest, CanLimitNestedDebugMarkerDepthPerCommandBufferAcro
 
   const std::string text_outer = "Outer";
   const std::string text_inner = "Inner";
-  constexpr uint64_t expected_outer_text_key = 111;
-  auto mock_intern_string_if_necessary_and_get_key = [&text_outer](std::string str) {
+  constexpr uint64_t kExpectedOuterTextKey = 111;
+  auto mock_intern_string_if_necessary_and_get_key = [&text_outer](const std::string& str) {
     EXPECT_EQ(text_outer, str);
-    return expected_outer_text_key;
+    return kExpectedOuterTextKey;
   };
   EXPECT_CALL(*producer_, InternStringIfNecessaryAndGetKey)
       .Times(1)
@@ -1727,7 +1744,7 @@ TEST_F(SubmissionTrackerTest, CanLimitNestedDebugMarkerDepthPerCommandBufferAcro
   const orbit_grpc_protos::GpuDebugMarker& actual_debug_marker =
       actual_queue_submission_2.completed_markers(0);
 
-  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp6, expected_outer_text_key, expected_color,
+  ExpectDebugMarkerEndEq(actual_debug_marker, kTimestamp6, kExpectedOuterTextKey, expected_color,
                          0);
   ExpectDebugMarkerBeginEq(actual_debug_marker, kTimestamp2, pre_submit_time_1, post_submit_time_1,
                            tid, pid);

@@ -3,31 +3,43 @@
 // found in the LICENSE file.
 
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/match.h>
 #include <absl/strings/numbers.h>
 #include <absl/synchronization/mutex.h>
 #include <absl/time/clock.h>
+#include <absl/time/time.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
 #include <sys/types.h>
-#include <unistd.h>
 
-#include <array>
+#include <algorithm>
 #include <cmath>
-#include <thread>
+#include <cstdint>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
+#include "GrpcProtos/symbol.pb.h"
 #include "IntegrationTestChildProcess.h"
 #include "IntegrationTestCommons.h"
 #include "IntegrationTestPuppet.h"
 #include "IntegrationTestUtils.h"
 #include "LinuxTracing/Tracer.h"
 #include "LinuxTracing/TracerListener.h"
+#include "LinuxTracing/UserSpaceInstrumentationAddresses.h"
 #include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
+#include "OrbitBase/Result.h"
 #include "OrbitBase/ThreadUtils.h"
 
 namespace orbit_linux_tracing_integration_tests {
@@ -329,15 +341,12 @@ using PuppetConstants = IntegrationTestPuppetConstants;
   return fixture->StopTracingAndGetEvents();
 }
 
-void VerifyOrderOfAllEvents(const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+void VerifyOrderOfAllEvents(absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
   uint64_t previous_event_timestamp_ns = 0;
   for (const auto& event : events) {
     // Please keep the cases alphabetically ordered, as in the definition of the
     // ProducerCaptureEvent message.
     switch (event.event_case()) {
-      case orbit_grpc_protos::ProducerCaptureEvent::kApiEvent:
-        // TracingHandler does not send this event.
-        ORBIT_UNREACHABLE();
       case orbit_grpc_protos::ProducerCaptureEvent::kApiScopeStart:
         ORBIT_UNREACHABLE();
       case orbit_grpc_protos::ProducerCaptureEvent::kApiScopeStartAsync:
@@ -464,7 +473,7 @@ void VerifyOrderOfAllEvents(const std::vector<orbit_grpc_protos::ProducerCapture
 }
 
 void VerifyNoLostOrDiscardedEvents(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
   for (const orbit_grpc_protos::ProducerCaptureEvent& event : events) {
     EXPECT_FALSE(event.has_lost_perf_records_event());
     EXPECT_FALSE(event.has_out_of_order_events_discarded_event());
@@ -472,7 +481,7 @@ void VerifyNoLostOrDiscardedEvents(
 }
 
 void VerifyErrorsWithPerfEventOpenEvent(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
   bool errors_with_perf_event_open_event_found = false;
   for (const auto& event : events) {
     if (event.has_errors_with_perf_event_open_event()) {
@@ -484,7 +493,7 @@ void VerifyErrorsWithPerfEventOpenEvent(
 }
 
 void VerifyNoWarningInstrumentingWithUprobesEvents(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
   for (const orbit_grpc_protos::ProducerCaptureEvent& event : events) {
     EXPECT_FALSE(event.has_warning_instrumenting_with_uprobes_event());
   }
@@ -534,7 +543,7 @@ TEST(LinuxTracingIntegrationTest, SchedulingSlices) {
 }
 
 void VerifyFunctionCallsOfOuterAndInnerFunction(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events, uint32_t pid,
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events, uint32_t pid,
     uint64_t outer_function_id, uint64_t inner_function_id) {
   std::vector<orbit_grpc_protos::FunctionCall> function_calls;
   for (const orbit_grpc_protos::ProducerCaptureEvent& event : events) {
@@ -614,7 +623,7 @@ GetOuterAndInnerFunctionVirtualAddressRanges(pid_t pid) {
 }
 
 absl::flat_hash_set<uint64_t> VerifyAndGetAddressInfosWithOuterAndInnerFunction(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events,
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events,
     const std::filesystem::path& executable_path,
     std::pair<uint64_t, uint64_t> outer_function_virtual_address_range,
     std::pair<uint64_t, uint64_t> inner_function_virtual_address_range) {
@@ -651,7 +660,7 @@ absl::flat_hash_set<uint64_t> VerifyAndGetAddressInfosWithOuterAndInnerFunction(
 }
 
 void VerifyCallstackSamplesWithOuterAndInnerFunction(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events, uint32_t pid,
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events, uint32_t pid,
     std::pair<uint64_t, uint64_t> outer_function_virtual_address_range,
     std::pair<uint64_t, uint64_t> inner_function_virtual_address_range, double sampling_rate,
     const absl::flat_hash_set<uint64_t>* address_infos_received, bool unwound_with_frame_pointers) {
@@ -740,7 +749,7 @@ void VerifyCallstackSamplesWithOuterAndInnerFunction(
 }
 
 void VerifyCallstackSamplesWithOuterAndInnerFunctionForDwarfUnwinding(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events, uint32_t pid,
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events, uint32_t pid,
     std::pair<uint64_t, uint64_t> outer_function_virtual_address_range,
     std::pair<uint64_t, uint64_t> inner_function_virtual_address_range, double sampling_rate,
     const absl::flat_hash_set<uint64_t>* address_infos_received) {
@@ -750,7 +759,7 @@ void VerifyCallstackSamplesWithOuterAndInnerFunctionForDwarfUnwinding(
 }
 
 void VerifyCallstackSamplesWithOuterAndInnerFunctionForFramePointerUnwinding(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events, uint32_t pid,
+    absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events, uint32_t pid,
     std::pair<uint64_t, uint64_t> outer_function_virtual_address_range,
     std::pair<uint64_t, uint64_t> inner_function_virtual_address_range, double sampling_rate,
     const absl::flat_hash_set<uint64_t>* address_infos_received) {
@@ -834,7 +843,7 @@ TEST(LinuxTracingIntegrationTest, CallstackSamplesTogetherWithFunctionCalls) {
       inner_function_virtual_address_range, sampling_rate, &address_infos_received);
 }
 
-void VerifyNoAddressInfos(const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+void VerifyNoAddressInfos(absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
   for (const auto& event : events) {
     EXPECT_NE(event.event_case(), orbit_grpc_protos::ProducerCaptureEvent::kFullAddressInfo);
   }

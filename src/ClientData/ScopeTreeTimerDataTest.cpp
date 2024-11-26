@@ -3,8 +3,13 @@
 // found in the LICENSE file.
 
 #include <gtest/gtest.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <vector>
 
 #include "ClientData/ScopeTreeTimerData.h"
+#include "ClientProtos/capture_data.pb.h"
 
 using orbit_client_protos::TimerInfo;
 
@@ -13,22 +18,22 @@ namespace orbit_client_data {
 namespace {
 
 struct TimersInTest {
-  const TimerInfo* left;
-  const TimerInfo* right;
-  const TimerInfo* down;
+  const TimerInfo* left = nullptr;
+  const TimerInfo* right = nullptr;
+  const TimerInfo* down = nullptr;
 };
 
-static constexpr uint32_t kProcessId = 22;
-static constexpr uint64_t kLeftTimerStart = 2;
-static constexpr uint64_t kLeftTimerEnd = 5;
-static constexpr uint64_t kRightTimerStart = 8;
-static constexpr uint64_t kRightTimerEnd = 11;
-static constexpr uint64_t kDownTimerStart = 10;
-static constexpr uint64_t kDownTimerEnd = 11;
-static constexpr uint64_t kNumTimers = 3;
-static constexpr uint64_t kDepth = 2;
-static constexpr uint64_t kMinTimestamp = 2;
-static constexpr uint64_t kMaxTimestamp = 11;
+constexpr uint32_t kProcessId = 22;
+constexpr uint64_t kLeftTimerStart = 2;
+constexpr uint64_t kLeftTimerEnd = 5;
+constexpr uint64_t kRightTimerStart = 8;
+constexpr uint64_t kRightTimerEnd = 11;
+constexpr uint64_t kDownTimerStart = 10;
+constexpr uint64_t kDownTimerEnd = 11;
+constexpr uint64_t kNumTimers = 3;
+constexpr uint64_t kDepth = 2;
+constexpr uint64_t kMinTimestamp = 2;
+constexpr uint64_t kMaxTimestamp = 11;
 
 TimersInTest AddTimersInScopeTreeTimerDataTest(ScopeTreeTimerData& scope_tree_timer_data) {
   TimersInTest inserted_timers;
@@ -116,6 +121,24 @@ TEST(ScopeTreeTimerData, GetTimers) {
   EXPECT_EQ(scope_tree_timer_data.GetTimers().size(), 3);
 }
 
+TEST(ScopeTreeTimerData, GetTimersExclusive) {
+  ScopeTreeTimerData scope_tree_timer_data;
+  AddTimersInScopeTreeTimerDataTest(scope_tree_timer_data);
+  // All timers.
+  EXPECT_EQ(scope_tree_timer_data.GetTimers(kLeftTimerStart - 1, kRightTimerEnd + 1, true).size(),
+            3);
+  EXPECT_EQ(scope_tree_timer_data.GetTimers(kLeftTimerStart, kRightTimerEnd, true).size(), 3);
+  // Cuts off the beginning of the left timer (should not include left timer).
+  EXPECT_EQ(scope_tree_timer_data.GetTimers(kLeftTimerStart + 1, kRightTimerEnd, true).size(), 2);
+  // Cuts off the end of the right timer (should not include right timer).
+  EXPECT_EQ(scope_tree_timer_data.GetTimers(kLeftTimerStart, kRightTimerEnd - 1, true).size(), 1);
+  // Starts and ends within the left timer (includes no timers).
+  EXPECT_EQ(scope_tree_timer_data.GetTimers(kLeftTimerStart + 1, kLeftTimerStart + 2, true).size(),
+            0);
+  // Fully encompasses down timer but not right timer.
+  EXPECT_EQ(scope_tree_timer_data.GetTimers(kDownTimerStart, kDownTimerEnd, true).size(), 1);
+}
+
 TEST(ScopeTreeTimerData, GetTimersAtDepth) {
   ScopeTreeTimerData scope_tree_timer_data;
   AddTimersInScopeTreeTimerDataTest(scope_tree_timer_data);
@@ -150,8 +173,8 @@ TEST(ScopeTreeTimerData, GetTimersAtDepthOptimized) {
   // Left, right and down timers
   AddTimersInScopeTreeTimerDataTest(scope_tree_timer_data);
 
-  uint32_t kOnePixel = 1;
-  uint32_t kNormalResolution = 1000;
+  constexpr uint32_t kOnePixel = 1;
+  constexpr uint32_t kNormalResolution = 1000;
 
   auto verify_size = [&scope_tree_timer_data](uint32_t depth, uint32_t resolution,
                                               uint64_t start_ns, uint64_t end_ns,
@@ -201,6 +224,32 @@ TEST(ScopeTreeTimerData, GetTimersAtDepthOptimized) {
     // No timers with `depth = 2` in TimerData.
     verify_size(2, kNormalResolution, kMinTimestamp, kMaxTimestamp, 0);
   }
+}
+
+TEST(ScopeTreeTimerData, GetTimersAtDepthExclusive) {
+  ScopeTreeTimerData scope_tree_timer_data;
+  AddTimersInScopeTreeTimerDataTest(scope_tree_timer_data);
+  // All timers at depth 0.
+  EXPECT_EQ(scope_tree_timer_data.GetTimersAtDepthExclusive(0, kLeftTimerStart, kRightTimerEnd + 1)
+                .size(),
+            2);
+  // All timers at depth 1.
+  EXPECT_EQ(scope_tree_timer_data.GetTimersAtDepthExclusive(1, kLeftTimerStart, kRightTimerEnd + 1)
+                .size(),
+            1);
+  // Cut off beginning of left timer.
+  EXPECT_EQ(
+      scope_tree_timer_data.GetTimersAtDepthExclusive(0, kLeftTimerStart + 1, kRightTimerEnd + 1)
+          .size(),
+      1);
+  // Cut off right timer from the right.
+  EXPECT_EQ(
+      scope_tree_timer_data.GetTimersAtDepthExclusive(0, kLeftTimerStart, kRightTimerEnd).size(),
+      1);
+  // Cut through both timers.
+  EXPECT_EQ(scope_tree_timer_data.GetTimersAtDepthExclusive(0, kLeftTimerStart + 1, kRightTimerEnd)
+                .size(),
+            0);
 }
 
 TEST(ScopeTreeTimerData, GetLeftRightUpDown) {

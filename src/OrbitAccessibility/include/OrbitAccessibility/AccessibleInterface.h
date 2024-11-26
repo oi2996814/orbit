@@ -29,17 +29,17 @@ struct AccessibilityRect {
  * The constants used by QT are the same and, thus, can be translated directly (see QAccessible.h)
  */
 enum class AccessibilityRole {
-  NoRole = 0x00000000,
-  ScrollBar = 0x00000003,
-  Client = 0x0000000A,
-  Document = 0x0000000F,
-  Pane = 0x00000010,
-  Chart = 0x00000011,
-  Grouping = 0x00000014,
-  PageTab = 0x00000025,
-  Graphic = 0x00000028,
-  StaticText = 0x00000029,
-  Button = 0x0000002B
+  NoRole = 0x00000000,      // NOLINT(readability-identifier-naming)
+  ScrollBar = 0x00000003,   // NOLINT(readability-identifier-naming)
+  Client = 0x0000000A,      // NOLINT(readability-identifier-naming)
+  Document = 0x0000000F,    // NOLINT(readability-identifier-naming)
+  Pane = 0x00000010,        // NOLINT(readability-identifier-naming)
+  Chart = 0x00000011,       // NOLINT(readability-identifier-naming)
+  Grouping = 0x00000014,    // NOLINT(readability-identifier-naming)
+  PageTab = 0x00000025,     // NOLINT(readability-identifier-naming)
+  Graphic = 0x00000028,     // NOLINT(readability-identifier-naming)
+  StaticText = 0x00000029,  // NOLINT(readability-identifier-naming)
+  Button = 0x0000002B       // NOLINT(readability-identifier-naming)
 };
 
 /* Selected state constants as required by QAccessible::State, same reasoning as above.
@@ -50,15 +50,15 @@ enum class AccessibilityRole {
  * QT-definitions
  */
 enum class AccessibilityState : uint64_t {
-  Normal = 0,
-  Disabled = 1,
-  Focusable = 1 << 2,
-  Focused = 1 << 3,
-  Expanded = 1 << 11,
-  Collapsed = 1 << 12,
-  Expandable = 1 << 14,
-  Offscreen = 1 << 18,
-  Movable = 1 << 20
+  kNormal = 0,
+  kDisabled = 1,
+  kFocusable = 1 << 2,
+  kFocused = 1 << 3,
+  kExpanded = 1 << 11,
+  kCollapsed = 1 << 12,
+  kExpandable = 1 << 14,
+  kOffscreen = 1 << 18,
+  kMovable = 1 << 20
 };
 
 inline AccessibilityState operator|(AccessibilityState lhs, AccessibilityState rhs) {

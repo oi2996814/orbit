@@ -6,10 +6,12 @@
 #define LINUX_TRACING_GPU_TRACEPOINT_EVENT_PROCESSOR_H_
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <sys/types.h>
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -34,7 +36,7 @@ class GpuTracepointVisitor : public PerfEventVisitor {
   // Keys are context, seqno, and timeline.
   using Key = std::tuple<uint32_t, uint32_t, std::string>;
 
-  int ComputeDepthForGpuJob(const std::string& timeline, uint64_t start_timestamp,
+  int ComputeDepthForGpuJob(std::string_view timeline, uint64_t start_timestamp,
                             uint64_t end_timestamp);
 
   void CreateGpuJobAndSendToListenerIfComplete(const Key& key);

@@ -6,13 +6,11 @@
 
 #include <absl/strings/match.h>
 #include <absl/strings/str_format.h>
+#include <absl/strings/string_view.h>
 #include <absl/strings/strip.h>
-#include <fcntl.h>
 #include <stdint.h>
-#include <sys/stat.h>
 
 #include <chrono>
-#include <cinttypes>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -25,6 +23,11 @@
 #include "OrbitVersion/OrbitVersion.h"
 #include "ProducerSideService/BuildAndStartProducerSideServer.h"
 #include "ProducerSideService/ProducerSideServer.h"
+
+#ifdef __linux
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 using orbit_producer_side_service::ProducerSideServer;
 

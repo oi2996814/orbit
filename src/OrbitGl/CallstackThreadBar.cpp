@@ -2,29 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "CallstackThreadBar.h"
+#include "OrbitGl/CallstackThreadBar.h"
 
+#include <GteVector.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/flags/flag.h>
 #include <absl/strings/str_format.h>
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <utility>
+#include <vector>
 
-#include "App.h"
+#include "ApiInterface/Orbit.h"
 #include "ClientData/CallstackData.h"
+#include "ClientData/CallstackEvent.h"
 #include "ClientData/CallstackInfo.h"
 #include "ClientData/CallstackType.h"
 #include "ClientData/CaptureData.h"
-#include "FormatCallstackForTooltip.h"
-#include "Geometry.h"
-#include "GlCanvas.h"
+#include "ClientData/DataManager.h"
+#include "ClientFlags/ClientFlags.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadConstants.h"
-#include "PickingManager.h"
-#include "PrimitiveAssembler.h"
-#include "ThreadColor.h"
-#include "TimeGraphLayout.h"
-#include "Viewport.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/FormatCallstackForTooltip.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/ThreadColor.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/Viewport.h"
+#include "absl/flags/internal/flag.h"
 
 using orbit_client_data::CallstackData;
 using orbit_client_data::CallstackEvent;
@@ -32,6 +44,7 @@ using orbit_client_data::CallstackInfo;
 using orbit_client_data::CallstackType;
 using orbit_client_data::CaptureData;
 using orbit_client_data::ThreadID;
+using orbit_client_data::TimeRange;
 
 namespace orbit_gl {
 
@@ -63,35 +76,66 @@ void CallstackThreadBar::DoDraw(PrimitiveAssembler& primitive_assembler,
                           ? GlCanvas::kZValueEventBarPicking
                           : GlCanvas::kZValueEventBar;
   Color color = orbit_gl::GetThreadColor(GetThreadId());
-  const Vec2 pos = GetPos();
-  Quad box = MakeBox(pos, Vec2(GetWidth(), GetHeight()));
-  primitive_assembler.AddBox(box, event_bar_z, color, shared_from_this());
-
-  if (primitive_assembler.GetPickingManager()->IsThisElementPicked(this)) {
-    color = Color(255, 255, 255, 255);
-  }
-
+  Color inactive_color = Color(128, 128, 128, 255);
+  Vec2 pos = GetPos();
   float x0 = pos[0];
   float y0 = pos[1];
   float x1 = x0 + GetWidth();
   float y1 = y0 + GetHeight();
 
+  std::optional<TimeRange> time_range = app_->GetActiveTimeRangeForTid(GetThreadId());
+  if (!time_range.has_value()) {
+    Quad box = MakeBox(GetPos(), Vec2(GetWidth(), GetHeight()));
+    primitive_assembler.AddBox(box, event_bar_z, inactive_color, shared_from_this());
+  } else {
+    const auto& [active_x0, active_width] = timeline_info_->GetBoxPosXAndWidthFromTicks(
+        time_range.value().start, time_range.value().end);
+    float active_x1 = active_x0 + active_width;
+
+    // If at least the beginning is grayed out.
+    if (active_x0 > x0) {
+      Vec2 size = Vec2(std::max(GetWidth(), active_x0 - x0), GetHeight());
+      Quad box = MakeBox(GetPos(), size);
+      primitive_assembler.AddBox(box, event_bar_z, inactive_color, shared_from_this());
+    }
+
+    // If there is some active portion on the screen.
+    if (active_x0 < x1 || active_x1 > x0) {
+      Vec2 box_pos = Vec2(std::max(active_x0, x0), y0);
+      Vec2 size = Vec2(std::min(active_width, x1 - box_pos[0]), GetHeight());
+      Quad box = MakeBox(box_pos, size);
+      primitive_assembler.AddBox(box, event_bar_z, color, shared_from_this());
+    }
+
+    // If at least some of the end is grayed out.
+    if (active_x1 < x1) {
+      Vec2 box_pos = Vec2(std::max(active_x1, x0), y0);
+      Vec2 size = Vec2(x1 - box_pos[0], GetHeight());
+      Quad box = MakeBox(box_pos, size);
+      primitive_assembler.AddBox(box, event_bar_z, inactive_color, shared_from_this());
+    }
+  }
+
+  if (primitive_assembler.GetPickingManager()->IsThisElementPicked(this)) {
+    color = Color(255, 255, 255, 255);
+  }
   primitive_assembler.AddLine(pos, Vec2(x1, y0), event_bar_z, color, shared_from_this());
   primitive_assembler.AddLine(Vec2(x1, y1), Vec2(x0, y1), event_bar_z, color, shared_from_this());
 
-  if (picked_) {
-    Vec2& from = mouse_pos_last_click_;
-    Vec2& to = mouse_pos_cur_;
+  // This is being replaced by time range selection and the two should not be active together.
+  if (!picked_ || absl::GetFlag(FLAGS_time_range_selection)) return;
 
-    x0 = from[0];
-    y0 = pos[1];
-    x1 = to[0];
-    y1 = y0 + GetHeight();
+  Vec2& from = mouse_pos_last_click_;
+  Vec2& to = mouse_pos_cur_;
 
-    Color picked_color(0, 128, 255, 128);
-    Quad picked_box = MakeBox(Vec2(x0, y0), Vec2(x1 - x0, GetHeight()));
-    primitive_assembler.AddBox(picked_box, GlCanvas::kZValueUi, picked_color, shared_from_this());
-  }
+  x0 = from[0];
+  y0 = pos[1];
+  x1 = to[0];
+  y1 = y0 + GetHeight();
+
+  Color picked_color(0, 128, 255, 128);
+  Quad picked_box = MakeBox(Vec2(x0, y0), Vec2(x1 - x0, GetHeight()));
+  primitive_assembler.AddBox(picked_box, GlCanvas::kZValueUi, picked_color, shared_from_this());
 }
 
 void CallstackThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
@@ -106,9 +150,9 @@ void CallstackThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assemb
   const bool picking = picking_mode != PickingMode::kNone;
   uint32_t resolution_in_pixels = viewport_->WorldToScreen({GetWidth(), 0})[0];
 
-  const Color kWhite(255, 255, 255, 255);
-  const Color kGreenSelection(0, 255, 0, 255);
-  const Color kGreyError(160, 160, 160, 255);
+  const Color white(255, 255, 255, 255);
+  const Color green_selection(0, 255, 0, 255);
+  const Color grey_error(160, 160, 160, 255);
   ORBIT_CHECK(capture_data_ != nullptr);
 
   if (!picking) {
@@ -116,13 +160,13 @@ void CallstackThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assemb
     auto action_on_callstack_events = [&](const CallstackEvent& event) {
       const uint64_t time = event.timestamp_ns();
       ORBIT_CHECK(time >= min_tick && time <= max_tick);
-      Vec2 pos(timeline_info_->GetWorldFromTick(time), GetPos()[1]);
-      Color color = kWhite;
+      const auto& [pos_x, unused_size_x] = timeline_info_->GetBoxPosXAndWidthFromTicks(time, time);
+      Color color = white;
       if (capture_data_->GetCallstackData().GetCallstack(event.callstack_id())->type() !=
           CallstackType::kComplete) {
-        color = kGreyError;
+        color = grey_error;
       }
-      primitive_assembler.AddVerticalLine(pos, track_height, z, color);
+      primitive_assembler.AddVerticalLine({pos_x, GetPos()[1]}, track_height, z, color);
     };
 
     if (GetThreadId() == orbit_base::kAllProcessThreadsTid) {
@@ -137,11 +181,11 @@ void CallstackThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assemb
     auto action_on_selected_callstack_events = [&](const CallstackEvent& event) {
       const uint64_t time = event.timestamp_ns();
       ORBIT_CHECK(time >= min_tick && time <= max_tick);
-      Vec2 pos(timeline_info_->GetWorldFromTick(event.timestamp_ns()), GetPos()[1]);
-      primitive_assembler.AddVerticalLine(pos, track_height, z, kGreenSelection);
+      const auto& [pos_x, unused_size_x] = timeline_info_->GetBoxPosXAndWidthFromTicks(time, time);
+      primitive_assembler.AddVerticalLine({pos_x, GetPos()[1]}, track_height, z, green_selection);
     };
     const orbit_client_data::CallstackData& selection_callstack_data =
-        capture_data_->selection_callstack_data();
+        app_->GetSelectedCallstackData();
     if (GetThreadId() == orbit_base::kAllProcessThreadsTid) {
       selection_callstack_data.ForEachCallstackEventInTimeRangeDiscretized(
           min_tick, max_tick, resolution_in_pixels, action_on_selected_callstack_events);
@@ -159,14 +203,16 @@ void CallstackThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assemb
     auto action_on_callstack_events = [&, this](const CallstackEvent& event) {
       const uint64_t time = event.timestamp_ns();
       ORBIT_CHECK(time >= min_tick && time <= max_tick);
-      Vec2 pos(timeline_info_->GetWorldFromTick(time) - kPickingBoxOffset, GetPos()[1]);
-      Vec2 size(kPickingBoxWidth, track_height);
+      const auto& [event_pos_x, unused_size_x] =
+          timeline_info_->GetBoxPosXAndWidthFromTicks(time, time);
+      const Vec2 pos(event_pos_x - kPickingBoxOffset, GetPos()[1]);
+      const Vec2 size(kPickingBoxWidth, track_height);
       auto user_data = std::make_unique<PickingUserData>(
           nullptr, [this, &primitive_assembler](PickingId id) -> std::string {
             return GetSampleTooltip(primitive_assembler, id);
           });
       user_data->custom_data_ = &event;
-      primitive_assembler.AddShadedBox(pos, size, z, kGreenSelection, std::move(user_data));
+      primitive_assembler.AddShadedBox(pos, size, z, green_selection, std::move(user_data));
     };
     if (GetThreadId() == orbit_base::kAllProcessThreadsTid) {
       capture_data_->GetCallstackData().ForEachCallstackEventInTimeRangeDiscretized(
@@ -180,7 +226,10 @@ void CallstackThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assemb
 
 void CallstackThreadBar::OnRelease() {
   CaptureViewElement::OnRelease();
-  SelectCallstacks();
+  // This is being replaced by time range selection and the two should not be active together.
+  if (!absl::GetFlag(FLAGS_time_range_selection)) {
+    SelectCallstacks();
+  }
 }
 
 void CallstackThreadBar::OnPick(int x, int y) {
@@ -208,7 +257,7 @@ void CallstackThreadBar::SelectCallstacks() {
           ? capture_data_->GetCallstackData().GetCallstackEventsInTimeRange(t0, t1)
           : capture_data_->GetCallstackData().GetCallstackEventsOfTidInTimeRange(thread_id, t0, t1);
 
-  app_->SelectCallstackEvents(selected_callstack_events, thread_id_is_all_threads);
+  app_->SelectCallstackEvents(selected_callstack_events);
 }
 
 bool CallstackThreadBar::IsEmpty() const {
@@ -225,11 +274,11 @@ bool CallstackThreadBar::IsEmpty() const {
 
 std::string CallstackThreadBar::GetSampleTooltip(const PrimitiveAssembler& primitive_assembler,
                                                  PickingId id) const {
-  static const std::string unknown_return_text = "Function call information missing";
+  static const std::string kUnknownReturnText = "Function call information missing";
 
   const PickingUserData* user_data = primitive_assembler.GetUserData(id);
   if (user_data == nullptr || user_data->custom_data_ == nullptr) {
-    return unknown_return_text;
+    return kUnknownReturnText;
   }
 
   ORBIT_CHECK(capture_data_ != nullptr);
@@ -239,7 +288,7 @@ std::string CallstackThreadBar::GetSampleTooltip(const PrimitiveAssembler& primi
   uint64_t callstack_id = callstack_event->callstack_id();
   const CallstackInfo* callstack = callstack_data.GetCallstack(callstack_id);
   if (callstack == nullptr) {
-    return unknown_return_text;
+    return kUnknownReturnText;
   }
 
   FormattedModuleAndFunctionName innermost_module_and_function_name =

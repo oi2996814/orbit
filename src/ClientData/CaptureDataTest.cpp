@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/hash/hash.h>
 #include <absl/strings/numbers.h>
 #include <absl/strings/str_split.h>
 #include <absl/strings/string_view.h>
@@ -9,24 +10,38 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <iterator>
+#include <limits>
+#include <numeric>
 #include <optional>
+#include <string>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ClientData/CaptureData.h"
+#include "ClientData/ModuleIdentifierProvider.h"
 #include "ClientData/ScopeId.h"
 #include "ClientData/ScopeStats.h"
 #include "ClientData/ThreadStateSliceInfo.h"
+#include "ClientData/TimerTrackDataIdManager.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "GrpcProtos/capture.pb.h"
-#include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
-#include "OrbitBase/ThreadConstants.h"
+#include "OrbitBase/Result.h"
+#include "OrbitBase/Typedef.h"
 #include "Test/Path.h"
 
+using testing::ElementsAreArray;
 using testing::Optional;
+using ::testing::ValuesIn;
+using ::testing::WithParamInterface;
 
 namespace orbit_client_data {
 
@@ -53,12 +68,17 @@ constexpr uint64_t kLargeInteger = 10'000'000'000'000'000;
 constexpr uint64_t kFirstTid = 1000;
 constexpr uint64_t kSecondTid = 2000;
 constexpr uint64_t kNonExistingTid = 404;
-constexpr uint64_t kStTimestamp1 = 50;
-constexpr uint64_t kEnTimestamp1 = 100;
-constexpr uint64_t kStTimestamp2 = 100;
-constexpr uint64_t kEnTimestamp2 = 150;
-constexpr uint64_t kStTimestamp3 = 150;
-constexpr uint64_t kEnTimestamp3 = 200;
+constexpr uint64_t kStartTimestamp1 = 50;
+constexpr uint64_t kEndTimestamp1 = 100;
+constexpr uint64_t kMidSlice1Timestamp = 75;
+constexpr uint64_t kStartTimestamp2 = 100;
+constexpr uint64_t kEndTimestamp2 = 150;
+constexpr uint64_t kMidSlice2Timestamp = 101;
+constexpr uint64_t kStartTimestamp3 = 150;
+constexpr uint64_t kEndTimestamp3 = 200;
+constexpr uint64_t kMidSlice3Timestamp = 199;
+constexpr uint64_t kInvalidTimestamp1 = 49;
+constexpr uint64_t kInvalidTimestamp2 = 201;
 constexpr uint32_t kWakeupTid = 4200;
 constexpr uint32_t kWakeupPid = 420;
 constexpr uint32_t kInvalidPidAndTid = 0;
@@ -68,45 +88,45 @@ constexpr uint64_t kCallstackId3 = 25;
 
 const ThreadStateSliceInfo kSlice1{kFirstTid,
                                    orbit_grpc_protos::ThreadStateSlice::kInterruptibleSleep,
-                                   kStTimestamp1,
-                                   kEnTimestamp1,
+                                   kStartTimestamp1,
+                                   kEndTimestamp1,
                                    ThreadStateSliceInfo::WakeupReason::kNotApplicable,
                                    kInvalidPidAndTid,
                                    kInvalidPidAndTid,
                                    kNoCallstackId};
 const ThreadStateSliceInfo kSlice2{kFirstTid,
                                    orbit_grpc_protos::ThreadStateSlice::kRunnable,
-                                   kStTimestamp2,
-                                   kEnTimestamp2,
+                                   kStartTimestamp2,
+                                   kEndTimestamp2,
                                    ThreadStateSliceInfo::WakeupReason::kUnblocked,
                                    kWakeupTid,
                                    kWakeupPid,
                                    kCallstackId1};
 const ThreadStateSliceInfo kSlice3{kFirstTid,
                                    orbit_grpc_protos::ThreadStateSlice::kRunning,
-                                   kStTimestamp3,
-                                   kEnTimestamp3,
+                                   kStartTimestamp3,
+                                   kEndTimestamp3,
                                    ThreadStateSliceInfo::WakeupReason::kNotApplicable,
                                    kInvalidPidAndTid,
                                    kInvalidPidAndTid,
                                    kNoCallstackId};
 const ThreadStateSliceInfo kSlice4{kSecondTid,
                                    orbit_grpc_protos::ThreadStateSlice::kInterruptibleSleep,
-                                   kStTimestamp1,
-                                   kEnTimestamp1,
+                                   kStartTimestamp1,
+                                   kEndTimestamp1,
                                    ThreadStateSliceInfo::WakeupReason::kNotApplicable,
                                    kInvalidPidAndTid,
                                    kInvalidPidAndTid,
                                    kCallstackId3};
 
-static const std::array<uint64_t, kTimerCount> kDurations = [] {
+const std::array<uint64_t, kTimerCount> kDurations = [] {
   std::array<uint64_t, kTimerCount> result;
   std::copy(std::begin(kDurationsForFirstId), std::end(kDurationsForFirstId), std::begin(result));
   std::copy(std::begin(kDurationsForSecondId), std::end(kDurationsForSecondId),
             std::begin(result) + kTimersForFirstId);
   return result;
 }();
-static const std::array<TimerInfo, kTimerCount> kTimerInfos = [] {
+const std::array<TimerInfo, kTimerCount> kTimerInfos = [] {
   std::array<TimerInfo, kTimerCount> result;
   for (size_t i = 0; i < kTimerCount; ++i) {
     result[i].set_function_id(*kTimerIds[i]);
@@ -143,7 +163,7 @@ const TimerInfo kTimerInfoWithInvalidScopeId = []() {
   return timer;
 }();
 
-static void ExpectStatsEqual(const ScopeStats& actual, const ScopeStats& other) {
+void ExpectStatsEqual(const ScopeStats& actual, const ScopeStats& other) {
   EXPECT_EQ(actual.total_time_ns(), other.total_time_ns());
   EXPECT_EQ(actual.min_ns(), other.min_ns());
   EXPECT_EQ(actual.max_ns(), other.max_ns());
@@ -153,10 +173,10 @@ static void ExpectStatsEqual(const ScopeStats& actual, const ScopeStats& other) 
 }
 
 void AddInstrumentedFunction(orbit_grpc_protos::CaptureOptions& capture_options,
-                             uint64_t function_id, const std::string& name) {
+                             uint64_t function_id, std::string name) {
   orbit_grpc_protos::InstrumentedFunction* function = capture_options.add_instrumented_functions();
   function->set_function_id(function_id);
-  function->set_function_name(name);
+  function->set_function_name(std::move(name));
 }
 
 [[nodiscard]] orbit_grpc_protos::CaptureStarted CreateCaptureStarted() {
@@ -169,11 +189,15 @@ void AddInstrumentedFunction(orbit_grpc_protos::CaptureOptions& capture_options,
 class CaptureDataTest : public testing::Test {
  public:
   explicit CaptureDataTest()
-      : capture_data_{
-            CreateCaptureStarted(), std::nullopt, {}, CaptureData::DataSource::kLiveCapture} {}
+      : capture_data_{CreateCaptureStarted(),
+                      std::nullopt,
+                      {},
+                      CaptureData::DataSource::kLiveCapture,
+                      &module_identifier_provider_} {}
 
  protected:
   CaptureData capture_data_;
+  ModuleIdentifierProvider module_identifier_provider_;
 };
 
 }  // namespace
@@ -212,7 +236,7 @@ const auto [kScimitarVariance, kScimitarTimers] = [] {
   const std::string& file_content = file_content_or_error.value();
   const std::vector<std::string_view> tokens = absl::StrSplit(file_content, '\n');
 
-  double expected_variance;
+  double expected_variance{};
   EXPECT_TRUE(absl::SimpleAtod(*tokens.begin(), &expected_variance));
 
   std::vector<TimerInfo> timers;
@@ -271,6 +295,67 @@ TEST_F(CaptureDataTest, UpdateTimerDurationsIsCorrect) {
   EXPECT_THAT(capture_data_.GetSortedTimerDurationsForScopeId(kNotIssuedId), testing::IsNull());
 }
 
+struct ForEachThreadStateSliceIntersectingTimeRangeDiscretizedTestCase {
+  std::string test_name;
+  uint32_t tid;
+  uint64_t start_ns;
+  uint64_t end_ns;
+  uint32_t resolution;
+  std::vector<ThreadStateSliceInfo> expected_slices;
+};
+
+class ForEachThreadStateSliceIntersectingTimeRangeDiscretizedTest
+    : public CaptureDataTest,
+      public WithParamInterface<ForEachThreadStateSliceIntersectingTimeRangeDiscretizedTestCase> {};
+
+TEST_P(ForEachThreadStateSliceIntersectingTimeRangeDiscretizedTest, IterationIsCorrect) {
+  const auto& test_case = GetParam();
+
+  capture_data_.AddThreadStateSlice(kSlice1);
+  capture_data_.AddThreadStateSlice(kSlice2);
+  capture_data_.AddThreadStateSlice(kSlice4);
+
+  std::vector<ThreadStateSliceInfo> visited_callstack_list;
+  auto visit_callstack = [&](const ThreadStateSliceInfo& event) {
+    visited_callstack_list.push_back(event);
+  };
+  capture_data_.ForEachThreadStateSliceIntersectingTimeRangeDiscretized(
+      test_case.tid, test_case.start_ns, test_case.end_ns, test_case.resolution, visit_callstack);
+  EXPECT_THAT(visited_callstack_list, ElementsAreArray(test_case.expected_slices));
+}
+
+constexpr uint32_t kResolution = 2000;
+constexpr auto kGetTestName = [](const auto& info) { return info.param.test_name; };
+
+INSTANTIATE_TEST_SUITE_P(
+    ForEachThreadStateSliceIntersectingTimeRangeDiscretizedTests,
+    ForEachThreadStateSliceIntersectingTimeRangeDiscretizedTest,
+    ValuesIn<ForEachThreadStateSliceIntersectingTimeRangeDiscretizedTestCase>({
+        {"NormalRange",
+         kFirstTid,
+         kStartTimestamp1,
+         kEndTimestamp2,
+         kResolution,
+         {kSlice1, kSlice2}},
+        {"DifferentTid", kSecondTid, kStartTimestamp1, kEndTimestamp2, kResolution, {kSlice4}},
+        {"PartiallyVisibleSlices",
+         kFirstTid,
+         kMidSlice1Timestamp,
+         kMidSlice2Timestamp,
+         kResolution,
+         {kSlice1, kSlice2}},
+        {"FirstSlice", kFirstTid, kStartTimestamp1, kEndTimestamp1, kResolution, {kSlice1}},
+        {"SecondSlice", kFirstTid, kStartTimestamp2, kEndTimestamp2, kResolution, {kSlice2}},
+        {"BeforeFirst", kFirstTid, kInvalidTimestamp1 - 1, kInvalidTimestamp1, kResolution, {}},
+        {"AfterLast", kFirstTid, kInvalidTimestamp2, kInvalidTimestamp2 + 1, kResolution, {}},
+        // When max_timestamp is very big, each callstack will be drawn in the first pixel, and
+        // therefore only one will be visible.
+        {"InfiniteTimeRange", kFirstTid, kStartTimestamp1, kLargeInteger, kResolution, {kSlice1}},
+        // With one pixel on the screen we should only see one event.
+        {"OnePixel", kFirstTid, kStartTimestamp1, kEndTimestamp2, /*resolution=*/1, {kSlice1}},
+    }),
+    kGetTestName);
+
 TEST_F(CaptureDataTest, FindThreadStateSliceInfoFromTimestamp) {
   EXPECT_EQ(
       capture_data_.FindThreadStateSliceInfoFromTimestamp(kFirstTid, kSlice3.begin_timestamp_ns()),
@@ -280,14 +365,6 @@ TEST_F(CaptureDataTest, FindThreadStateSliceInfoFromTimestamp) {
   capture_data_.AddThreadStateSlice(kSlice2);
   capture_data_.AddThreadStateSlice(kSlice3);
   capture_data_.AddThreadStateSlice(kSlice4);
-
-  constexpr uint64_t kMidSlice1Timestamp = 75;
-  constexpr uint64_t kMidSlice2Timestamp = 101;
-  constexpr uint64_t kMidSlice3Timestamp = 199;
-  constexpr uint64_t kMidSlice4Timestamp = 75;
-
-  constexpr uint64_t kInvalidTimestamp1 = 200;
-  constexpr uint64_t kInvalidTimestamp2 = 49;
 
   EXPECT_THAT(
       capture_data_.FindThreadStateSliceInfoFromTimestamp(kFirstTid, kSlice1.begin_timestamp_ns()),
@@ -314,7 +391,7 @@ TEST_F(CaptureDataTest, FindThreadStateSliceInfoFromTimestamp) {
               Optional(kSlice2));
   EXPECT_THAT(capture_data_.FindThreadStateSliceInfoFromTimestamp(kFirstTid, kMidSlice3Timestamp),
               Optional(kSlice3));
-  EXPECT_THAT(capture_data_.FindThreadStateSliceInfoFromTimestamp(kSecondTid, kMidSlice4Timestamp),
+  EXPECT_THAT(capture_data_.FindThreadStateSliceInfoFromTimestamp(kSecondTid, kMidSlice1Timestamp),
               Optional(kSlice4));
 
   EXPECT_EQ(

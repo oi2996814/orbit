@@ -5,7 +5,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "TimelineTicks.h"
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <vector>
+
+#include "OrbitGl/TimelineTicks.h"
 
 namespace orbit_gl {
 

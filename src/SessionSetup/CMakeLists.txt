@@ -10,18 +10,18 @@ add_library(SessionSetup STATIC)
 target_sources(
   SessionSetup
   PUBLIC  include/SessionSetup/Connections.h
-          include/SessionSetup/ConnectToStadiaWidget.h
+          include/SessionSetup/ConnectToLocalWidget.h
           include/SessionSetup/ConnectToTargetDialog.h
           include/SessionSetup/DeploymentConfigurations.h
           include/SessionSetup/DoubleClickableLabel.h
           include/SessionSetup/Error.h
+          include/SessionSetup/LoadCaptureWidget.h
+          include/SessionSetup/OrbitServiceInstance.h
           include/SessionSetup/OverlayWidget.h
           include/SessionSetup/OtherUserDialog.h
-          include/SessionSetup/PersistentStorage.h
           include/SessionSetup/ProcessItemModel.h
           include/SessionSetup/ProcessLauncherWidget.h
-          include/SessionSetup/RetrieveInstances.h
-          include/SessionSetup/RetrieveInstancesWidget.h
+          include/SessionSetup/ProcessListWidget.h
           include/SessionSetup/ServiceDeployManager.h
           include/SessionSetup/SessionSetupDialog.h
           include/SessionSetup/SessionSetupUtils.h
@@ -32,23 +32,24 @@ target_include_directories(SessionSetup PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include
 
 target_sources(
   SessionSetup
-  PRIVATE ConnectToStadiaWidget.cpp
-          ConnectToStadiaWidget.ui
+  PRIVATE ConnectToLocalWidget.cpp
+          ConnectToLocalWidget.ui
           ConnectToTargetDialog.cpp
           ConnectToTargetDialog.ui
           DeploymentConfigurations.cpp
           Error.cpp
+          LoadCaptureWidget.cpp
+          LoadCaptureWidget.ui
+          OrbitServiceInstance.cpp
           OtherUserDialog.cpp
           OtherUserDialog.ui
           OverlayWidget.cpp
           OverlayWidget.ui
-          PersistentStorage.cpp
           ProcessItemModel.cpp
           ProcessLauncherWidget.cpp
           ProcessLauncherWidget.ui
-          RetrieveInstances.cpp
-          RetrieveInstancesWidget.cpp
-          RetrieveInstancesWidget.ui
+          ProcessListWidget.cpp
+          ProcessListWidget.ui
           ServiceDeployManager.cpp
           SessionSetupDialog.cpp
           SessionSetupDialog.ui
@@ -64,7 +65,6 @@ target_link_libraries(
           ClientFlags
           ClientServices
           OrbitBase
-          OrbitGgp
           OrbitSsh
           OrbitSshQt
           QtUtils
@@ -72,7 +72,7 @@ target_link_libraries(
           absl::flat_hash_map
           absl::str_format
           absl::strings
-          CONAN_PKG::grpc
+          grpc::grpc
           Qt5::Widgets)
 
 set_target_properties(SessionSetup PROPERTIES AUTOMOC ON)
@@ -82,13 +82,14 @@ add_executable(SessionSetupTests)
 
 target_sources(
   SessionSetupTests
-  PRIVATE ConnectToStadiaWidgetTest.cpp
+  PRIVATE ConnectToLocalWidgetTest.cpp
           DoubleClickableLabelTest.cpp
-          PersistentStorageTest.cpp
-          ProcessItemModelTest.cpp
+          LoadCaptureWidgetTest.cpp
+          OrbitServiceInstanceTest.cpp
           OtherUserDialogTest.cpp
-          RetrieveInstancesTest.cpp
-          RetrieveInstancesWidgetTest.cpp
+          ProcessItemModelTest.cpp
+          ProcessListWidgetTest.cpp
+          ServiceDeployManagerTest.cpp
           SessionSetupDialogTest.cpp
           SessionSetupUtilsTest.cpp
           TargetLabelTest.cpp)
@@ -96,7 +97,9 @@ target_sources(
 
 target_link_libraries(
   SessionSetupTests
-  PRIVATE SessionSetup
+  PRIVATE QtTestUtils
+          SessionSetup
+          SshQtTestUtils
           TestUtils
           GTest::QtGuiMain
           Qt5::Test)
@@ -108,5 +111,3 @@ endif()
 if (NOT WIN32)
   register_test(SessionSetupTests PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 endif()
-
-add_subdirectory(RetrieveInstancesWidgetDemo)

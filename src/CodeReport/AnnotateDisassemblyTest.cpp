@@ -4,15 +4,27 @@
 
 #include <absl/strings/str_replace.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 
 #include <filesystem>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
-#include "ClientProtos/capture_data.pb.h"
+#include "ClientData/FunctionInfo.h"
+#include "ClientData/ModuleIdentifierProvider.h"
+#include "ClientData/ModuleManager.h"
+#include "ClientData/ProcessData.h"
 #include "CodeReport/AnnotateDisassembly.h"
 #include "CodeReport/AnnotatingLine.h"
+#include "CodeReport/Disassembler.h"
 #include "CodeReport/DisassemblyReport.h"
-#include "OrbitBase/Logging.h"
+#include "GrpcProtos/symbol.pb.h"
+#include "ObjectUtils/ElfFile.h"
 #include "OrbitBase/ReadFileToString.h"
+#include "OrbitBase/Result.h"
 #include "Test/Path.h"
 
 using namespace std::string_view_literals;
@@ -50,12 +62,14 @@ static void TestSimple(bool windows_line_endings) {
     absl::StrReplaceAll({{"\n", "\r\n"}}, &source_file_contents);
   }
 
-  orbit_client_data::FunctionInfo function_info{"line_info_test_binary", "buildid", 0x401140,
-                                                kMainFunctionInstructions.size(), "main"};
+  orbit_client_data::FunctionInfo function_info{
+      "line_info_test_binary",          "buildid", /*address=*/0x401140,
+      kMainFunctionInstructions.size(), "main",    /*is_hotpatchable=*/false};
 
   orbit_code_report::Disassembler disassembler{};
-  orbit_client_data::ProcessData process;
-  orbit_client_data::ModuleManager module_manager;
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider;
+  orbit_client_data::ProcessData process{{}, &module_identifier_provider};
+  orbit_client_data::ModuleManager module_manager{&module_identifier_provider};
   disassembler.Disassemble(process, module_manager,
                            static_cast<const void*>(kMainFunctionInstructions.data()),
                            kMainFunctionInstructions.size(), 0x401140, true);

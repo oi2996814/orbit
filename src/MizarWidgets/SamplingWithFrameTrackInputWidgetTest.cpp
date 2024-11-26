@@ -3,26 +3,46 @@
 // found in the LICENSE file.
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 #include <absl/strings/str_format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
-#include <QApplication>
+#include <QAbstractItemModel>
+#include <QAbstractListModel>
 #include <QComboBox>
+#include <QItemSelectionModel>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QListWidgetItem>
+#include <QModelIndex>
 #include <QObject>
+#include <QString>
 #include <QStringLiteral>
-#include <QTest>
+#include <QVariant>
+#include <algorithm>
 #include <array>
+#include <cstdint>
+#include <initializer_list>
 #include <limits>
+#include <memory>
 #include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
 
 #include "ClientData/ScopeId.h"
+#include "ClientData/ScopeStats.h"
+#include "GrpcProtos/capture.pb.h"
 #include "MizarBase/ThreadId.h"
 #include "MizarBase/Time.h"
 #include "MizarData/FrameTrack.h"
+#include "MizarData/SamplingWithFrameTrackComparisonReport.h"
+#include "MizarModels/FrameTrackListModel.h"
 #include "MizarWidgets/SamplingWithFrameTrackInputWidget.h"
+#include "OrbitBase/Typedef.h"
 
 using ::orbit_client_data::ScopeId;
 using ::orbit_grpc_protos::PresentEvent;
@@ -34,6 +54,8 @@ using ::testing::ElementsAreArray;
 using ::testing::NotNull;
 using ::testing::ReturnRef;
 using ::testing::UnorderedElementsAreArray;
+
+namespace orbit_mizar_widgets {
 
 namespace {
 
@@ -47,15 +69,16 @@ class MockPairedData {
               (const));
 };
 
-static constexpr size_t kFrameTracksCount = 4;
-static constexpr std::array<FrameTrackId, kFrameTracksCount> kScopeIds = {
+constexpr size_t kFrameTracksCount = 4;
+constexpr std::array<FrameTrackId, kFrameTracksCount> kScopeIds = {
     FrameTrackId(ScopeId(2)), FrameTrackId(ScopeId(1)), FrameTrackId(ScopeId(10)),
     FrameTrackId(PresentEvent::kD3d9)};
 
 class MockFrameTrackListModel : public QAbstractListModel {
  public:
-  MockFrameTrackListModel(const MockPairedData*, const absl::flat_hash_set<TID>*,
-                          const RelativeTimeNs*, QObject* parent)
+  MockFrameTrackListModel(const MockPairedData* /*unused*/,
+                          const absl::flat_hash_set<TID>* /*unused*/,
+                          const RelativeTimeNs* /*unused*/, QObject* parent)
       : QAbstractListModel(parent) {}
 
   [[nodiscard]] int rowCount(const QModelIndex& /*parent*/) const override {
@@ -69,8 +92,6 @@ class MockFrameTrackListModel : public QAbstractListModel {
 };
 
 }  // namespace
-
-namespace orbit_mizar_widgets {
 
 constexpr TID kTid(0x3EAD1);
 constexpr TID kOtherTid(0x3EAD2);
@@ -139,8 +160,8 @@ class SamplingWithFrameTrackInputWidgetTest : public ::testing::Test {
     EXPECT_EQ(widget_->MakeConfig().frame_track_id, frame_track_id);
   }
 
-  void ExpectRelativeStartNsIs(uint64_t start_relative_ns_) const {
-    EXPECT_EQ(*widget_->MakeConfig().start_relative, start_relative_ns_);
+  void ExpectRelativeStartNsIs(uint64_t start_relative_ns) const {
+    EXPECT_EQ(*widget_->MakeConfig().start_relative, start_relative_ns);
   }
 
   MockPairedData data_;

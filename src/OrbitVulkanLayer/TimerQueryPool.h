@@ -8,6 +8,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/synchronization/mutex.h>
+#include <absl/types/span.h>
 #include <vulkan/vulkan.h>
 
 #include <fstream>
@@ -61,8 +62,6 @@ class TimerQueryPool {
 
   // Creates and resets a vulkan `VkQueryPool`, ready to use for timestamp queries.
   void InitializeTimerQueryPool(VkDevice device) {
-    VkQueryPool query_pool;
-
     VkQueryPoolCreateInfo create_info = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                                          .pNext = nullptr,
                                          .flags = 0,
@@ -70,6 +69,7 @@ class TimerQueryPool {
                                          .queryCount = num_timer_query_slots_,
                                          .pipelineStatistics = 0};
 
+    VkQueryPool query_pool{};
     VkResult result =
         dispatch_table_->CreateQueryPool(device)(device, &create_info, nullptr, &query_pool);
     ORBIT_CHECK(result == VK_SUCCESS);
@@ -145,7 +145,7 @@ class TimerQueryPool {
   // Note that the pool must be initialized using `InitializeTimerQueryPool` before.
   // Further, the given slots must be in the `kReadyForQueryIssue` state, i.e. must be a result
   // of `NextReadyQuerySlot` and must not have been reset yet.
-  void MarkQuerySlotsDoneReading(VkDevice device, const std::vector<uint32_t>& slot_indices) {
+  void MarkQuerySlotsDoneReading(VkDevice device, absl::Span<const uint32_t> slot_indices) {
     if (slot_indices.empty()) {
       return;
     }
@@ -180,7 +180,7 @@ class TimerQueryPool {
   // Note that the pool must be initialized using `InitializeTimerQueryPool` before.
   // Further, the given slots must be in the `kReadyForQueryIssue` state, i.e. must be a result
   // of `NextReadyQuerySlot` and must not have been reset yet.
-  void MarkQuerySlotsForReset(VkDevice device, const std::vector<uint32_t>& slot_indices) {
+  void MarkQuerySlotsForReset(VkDevice device, absl::Span<const uint32_t> slot_indices) {
     if (slot_indices.empty()) {
       return;
     }
@@ -212,7 +212,7 @@ class TimerQueryPool {
   // Note that the pool must be initialized using `InitializeTimerQueryPool` before.
   // Further, the given slots must be in the `kReadyForQueryIssue` state, i.e. must be a result
   // of `NextReadyQuerySlot` and must not have been reset yet.
-  void RollbackPendingQuerySlots(VkDevice device, const std::vector<uint32_t>& slot_indices) {
+  void RollbackPendingQuerySlots(VkDevice device, absl::Span<const uint32_t> slot_indices) {
     if (slot_indices.empty()) {
       return;
     }

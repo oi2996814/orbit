@@ -11,13 +11,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <iostream>
 #include <string>
 #include <thread>
 
 #include "ApiInterface/Orbit.h"
 #include "OrbitBase/Attributes.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadUtils.h"
 
 ORBIT_API_INSTANTIATE;
@@ -32,8 +32,8 @@ OrbitTestImpl::OrbitTestImpl(uint32_t num_threads, uint32_t recurse_depth, uint3
 }
 
 void OrbitTestImpl::Init() {
-  const size_t kMinNumWorkers = 10;
-  const size_t kMaxNumWorkers = 100;
+  constexpr size_t kMinNumWorkers = 10;
+  constexpr size_t kMaxNumWorkers = 100;
   thread_pool_ =
       orbit_base::ThreadPool::Create(kMinNumWorkers, kMaxNumWorkers, absl::Milliseconds(500));
 }
@@ -110,9 +110,9 @@ static void ORBIT_NOINLINE SleepFor2Ms() {
 }
 
 static void ExecuteTask(uint32_t id) {
-  static const std::vector<uint32_t> sleep_times_ms = {10, 200, 20,  300, 60,  100, 150,
-                                                       20, 30,  320, 380, 400, 450, 500};
-  uint32_t sleep_time = sleep_times_ms[id % sleep_times_ms.size()];
+  static const std::vector<uint32_t> kSleepTimesMs = {10, 200, 20,  300, 60,  100, 150,
+                                                      20, 30,  320, 380, 400, 450, 500};
+  uint32_t sleep_time = kSleepTimesMs[id % kSleepTimesMs.size()];
   std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time));
   std::string str = absl::StrFormat(
       "This is a very long dynamic string: The quick brown fox jumps over the lazy dog. This "
@@ -122,7 +122,7 @@ static void ExecuteTask(uint32_t id) {
   ORBIT_STOP_ASYNC(id);
 }
 
-void OrbitTestImpl::OutputOrbitApiState() {
+void OrbitTestImpl::OutputOrbitApiState() const {
   while (!exit_requested_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     ORBIT_LOG("g_orbit_api.enabled = %u", g_orbit_api.enabled);

@@ -4,17 +4,17 @@
 
 #include "DataViews/TracepointsDataView.h"
 
+#include <absl/strings/ascii.h>
 #include <absl/strings/str_split.h>
+#include <absl/types/span.h>
 #include <stddef.h>
 
 #include <algorithm>
-#include <cstdint>
 #include <functional>
-#include <memory>
+#include <utility>
 
 #include "DataViews/CompareAscendingOrDescending.h"
 #include "DataViews/DataViewType.h"
-#include "OrbitBase/Append.h"
 
 using orbit_grpc_protos::TracepointInfo;
 
@@ -102,7 +102,7 @@ void TracepointsDataView::DoFilter() {
 }
 
 DataView::ActionStatus TracepointsDataView::GetActionStatus(
-    std::string_view action, int clicked_index, const std::vector<int>& selected_indices) {
+    std::string_view action, int clicked_index, absl::Span<const int> selected_indices) {
   std::function<bool(const TracepointInfo&)> is_visible_action_enabled;
   if (action == kMenuActionSelect) {
     is_visible_action_enabled = [this](const TracepointInfo& tracepoint) {
@@ -125,19 +125,19 @@ DataView::ActionStatus TracepointsDataView::GetActionStatus(
   return ActionStatus::kVisibleButDisabled;
 }
 
-void TracepointsDataView::OnSelectRequested(const std::vector<int>& selection) {
+void TracepointsDataView::OnSelectRequested(absl::Span<const int> selection) {
   for (int i : selection) {
     app_->SelectTracepoint(GetTracepoint(i));
   }
 }
 
-void TracepointsDataView::OnUnselectRequested(const std::vector<int>& selection) {
+void TracepointsDataView::OnUnselectRequested(absl::Span<const int> selection) {
   for (int i : selection) {
     app_->DeselectTracepoint(GetTracepoint(i));
   }
 }
 
-void TracepointsDataView::SetTracepoints(const std::vector<TracepointInfo>& tracepoints) {
+void TracepointsDataView::SetTracepoints(absl::Span<const TracepointInfo> tracepoints) {
   tracepoints_.assign(tracepoints.cbegin(), tracepoints.cend());
 
   indices_.resize(tracepoints_.size());

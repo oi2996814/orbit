@@ -2,17 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "SymbolLoader.h"
+#include "OrbitGl/SymbolLoader.h"
 
 #include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
+#include <absl/meta/type_traits.h>
+#include <absl/strings/str_format.h>
+
+#include <algorithm>
+#include <chrono>
+#include <memory>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "ClientFlags/ClientFlags.h"
 #include "ClientSymbols/QSettingsBasedStorageManager.h"
 #include "Introspection/Introspection.h"
 #include "ObjectUtils/ElfFile.h"
+#include "ObjectUtils/SymbolsFile.h"
+#include "OrbitBase/Executor.h"
 #include "OrbitBase/File.h"
 #include "OrbitBase/ImmediateExecutor.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/NotFoundOr.h"
 #include "OrbitBase/StopToken.h"
 #include "SymbolProvider/SymbolLoadingOutcome.h"
 #include "Symbols/SymbolUtils.h"
@@ -26,23 +39,26 @@ using orbit_client_data::ModuleData;
 
 using orbit_data_views::SymbolLoadingState;
 
-using orbit_symbol_provider::ModuleIdentifier;
+using orbit_client_data::ModuleIdentifier;
 using orbit_symbol_provider::SymbolLoadingOutcome;
 
 namespace orbit_gl {
 
-SymbolLoader::SymbolLoader(AppInterface* app_interface, std::thread::id main_thread_id,
-                           orbit_base::ThreadPool* thread_pool,
-                           orbit_base::MainThreadExecutor* main_thread_executor,
-                           orbit_client_services::ProcessManager* process_manager)
+SymbolLoader::SymbolLoader(
+    AppInterface* app_interface, std::thread::id main_thread_id,
+    orbit_base::ThreadPool* thread_pool, orbit_base::Executor* main_thread_executor,
+    orbit_client_services::ProcessManager* process_manager,
+    const orbit_client_data::ModuleIdentifierProvider* module_identifier_provider)
     : app_interface_{app_interface},
       main_thread_id_{main_thread_id},
       thread_pool_{thread_pool},
       main_thread_executor_{main_thread_executor},
-      process_manager_{process_manager} {
+      process_manager_{process_manager},
+      module_identifier_provider{module_identifier_provider} {
   ORBIT_CHECK(app_interface_ != nullptr);
   ORBIT_CHECK(thread_pool_ != nullptr);
   ORBIT_CHECK(main_thread_executor_ != nullptr);
+  ORBIT_CHECK(module_identifier_provider != nullptr);
 
   orbit_client_symbols::QSettingsBasedStorageManager storage_manager;
   download_disabled_modules_ = storage_manager.LoadDisabledModulePaths();
@@ -52,7 +68,7 @@ SymbolLoader::SymbolLoader(AppInterface* app_interface, std::thread::id main_thr
   }
 }
 
-void SymbolLoader::DisableDownloadForModule(const std::string& module_path) {
+void SymbolLoader::DisableDownloadForModule(std::string_view module_path) {
   download_disabled_modules_.emplace(module_path);
   orbit_client_symbols::QSettingsBasedStorageManager storage_manager;
   storage_manager.SaveDisabledModulePaths(download_disabled_modules_);
@@ -69,15 +85,6 @@ void SymbolLoader::EnableDownloadForModules(const absl::flat_hash_set<std::strin
 void SymbolLoader::InitRemoteSymbolProviders() {
   download_manager_.emplace();
 
-  auto client_result = orbit_ggp::CreateClient();
-  if (client_result.has_error()) {
-    ORBIT_ERROR("Error creating ggp client: %s\nStadia symbol provider won't be created.",
-                client_result.error().message());
-  } else {
-    ggp_client_ = std::move(client_result.value());
-    stadia_symbol_provider_.emplace(&symbol_helper_, &*download_manager_, ggp_client_.get());
-  }
-
   microsoft_symbol_provider_.emplace(&symbol_helper_, &*download_manager_);
 }
 
@@ -86,35 +93,43 @@ Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleAndLoadSymb
   ORBIT_SCOPE_FUNCTION;
   ORBIT_CHECK(main_thread_id_ == std::this_thread::get_id());
   ORBIT_CHECK(module_data != nullptr);
+  ORBIT_CHECK(module_identifier_provider != nullptr);
 
-  const ModuleIdentifier module_id = module_data->module_id();
+  orbit_client_data::ModulePathAndBuildId module_path_and_build_id{
+      .module_path = module_data->file_path(), .build_id = module_data->build_id()};
 
-  modules_with_symbol_loading_error_.erase(module_id);
+  std::optional<orbit_client_data::ModuleIdentifier> module_identifier =
+      module_identifier_provider->GetModuleIdentifier(module_path_and_build_id);
+  ORBIT_CHECK(module_identifier.has_value());
+
+  modules_with_symbol_loading_error_.erase(module_identifier.value());
 
   if (module_data->AreDebugSymbolsLoaded()) return {outcome::success()};
 
-  const auto it = symbols_currently_loading_.find(module_id);
+  const auto it = symbols_currently_loading_.find(module_identifier.value());
   if (it != symbols_currently_loading_.end()) {
     return it->second;
   }
 
   Future<ErrorMessageOr<CanceledOr<void>>> retrieve_module_symbols_and_load_symbols_future =
-      RetrieveModuleSymbolsAndLoadSymbols(module_id);
+      RetrieveModuleSymbolsAndLoadSymbols(module_path_and_build_id);
 
   Future<ErrorMessageOr<CanceledOr<void>>> retrieve_module_itself_and_load_fallback_symbols_future =
-      orbit_base::UnwrapFuture(retrieve_module_symbols_and_load_symbols_future.Then(
+      retrieve_module_symbols_and_load_symbols_future.Then(
           main_thread_executor_,
-          [this, module_id](const ErrorMessageOr<CanceledOr<void>>&
-                                retrieve_module_symbols_and_load_symbols_result)
+          [this, module_path_and_build_id = std::move(module_path_and_build_id)](
+              const ErrorMessageOr<CanceledOr<void>>&
+                  retrieve_module_symbols_and_load_symbols_result)
               -> Future<ErrorMessageOr<CanceledOr<void>>> {
             if (retrieve_module_symbols_and_load_symbols_result.has_value()) {
               return {retrieve_module_symbols_and_load_symbols_result};
             }
 
-            const ModuleData* module_data = app_interface_->GetModuleByModuleIdentifier(module_id);
+            const ModuleData* module_data =
+                app_interface_->GetModuleByModulePathAndBuildId(module_path_and_build_id);
             if (module_data == nullptr) {
-              return {ErrorMessage{
-                  absl::StrFormat("Module \"%s\" was not found.", module_id.file_path)}};
+              return {ErrorMessage{absl::StrFormat("Module \"%s\" was not found.",
+                                                   module_path_and_build_id.module_path)}};
             }
             // Report the error if loading debug symbols fails when the fallback symbols are already
             // loaded. This happens when choosing "Load Symbols" on a module that has already
@@ -123,10 +138,10 @@ Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleAndLoadSymb
               return {retrieve_module_symbols_and_load_symbols_result};
             }
 
-            return RetrieveModuleItselfAndLoadFallbackSymbols(module_id, module_data->file_size())
+            return RetrieveModuleItselfAndLoadFallbackSymbols(module_path_and_build_id,
+                                                              module_data->file_size())
                 .Then(main_thread_executor_,
-                      [module_id,
-                       previous_message =
+                      [previous_message =
                            retrieve_module_symbols_and_load_symbols_result.error().message()](
                           const ErrorMessageOr<CanceledOr<void>>&
                               retrieve_module_itself_and_load_fallback_symbols_result) mutable
@@ -141,11 +156,11 @@ Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleAndLoadSymb
                             retrieve_module_itself_and_load_fallback_symbols_result.error()
                                 .message())};
                       });
-          }));
+          });
 
   retrieve_module_itself_and_load_fallback_symbols_future.Then(
-      main_thread_executor_,
-      [this, module_id](const ErrorMessageOr<CanceledOr<void>>& result) mutable {
+      main_thread_executor_, [this, module_id = module_identifier.value()](
+                                 const ErrorMessageOr<CanceledOr<void>>& result) mutable {
         if (result.has_error()) {
           modules_with_symbol_loading_error_.emplace(module_id);
         }
@@ -153,7 +168,7 @@ Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleAndLoadSymb
         app_interface_->OnModuleListUpdated();
       });
 
-  symbols_currently_loading_.emplace(module_id,
+  symbols_currently_loading_.emplace(module_identifier.value(),
                                      retrieve_module_itself_and_load_fallback_symbols_future);
   app_interface_->OnModuleListUpdated();
 
@@ -161,17 +176,18 @@ Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleAndLoadSymb
 }
 
 Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleSymbolsAndLoadSymbols(
-    const ModuleIdentifier& module_id) {
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) {
   Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> retrieve_module_symbols_future =
-      RetrieveModuleSymbols(module_id);
+      RetrieveModuleSymbols(module_path_and_build_id);
 
-  return orbit_base::UnwrapFuture(retrieve_module_symbols_future.Then(
+  return retrieve_module_symbols_future.Then(
       main_thread_executor_,
-      [this, module_id](const ErrorMessageOr<CanceledOr<std::filesystem::path>>& retrieve_result)
+      [this, module_path_and_build_id](
+          const ErrorMessageOr<CanceledOr<std::filesystem::path>>& retrieve_result)
           -> Future<ErrorMessageOr<CanceledOr<void>>> {
         if (retrieve_result.has_error()) {
           return ErrorMessage{absl::StrFormat("Could not load debug symbols for \"%s\": %s",
-                                              module_id.file_path,
+                                              module_path_and_build_id.module_path,
                                               retrieve_result.error().message())};
         }
         if (orbit_base::IsCanceled(retrieve_result.value())) {
@@ -181,56 +197,63 @@ Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleSymbolsAndL
             orbit_base::GetNotCanceled(retrieve_result.value());
 
         orbit_base::ImmediateExecutor executor;
-        return LoadSymbols(local_file_path, module_id)
-            .ThenIfSuccess(&executor, []() -> CanceledOr<void> { return CanceledOr<void>{}; });
-      }));
+        return LoadSymbols(local_file_path, module_path_and_build_id)
+            .ThenIfSuccess(&executor, []() -> CanceledOr<void> {
+              return CanceledOr<void>{outcome::success()};
+            });
+      });
 }
 
 Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::RetrieveModuleSymbols(
-    const ModuleIdentifier& module_id) {
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) {
   ORBIT_SCOPE_FUNCTION;
   ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
 
-  const ModuleData* module_data = app_interface_->GetModuleByModuleIdentifier(module_id);
+  const ModuleData* module_data =
+      app_interface_->GetModuleByModulePathAndBuildId(module_path_and_build_id);
   if (module_data == nullptr) {
-    return {ErrorMessage{absl::StrFormat("Module \"%s\" was not found.", module_id.file_path)}};
+    return {ErrorMessage{
+        absl::StrFormat("Module \"%s\" was not found.", module_path_and_build_id.module_path)}};
   }
 
   Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> retrieve_from_local_future =
       FindModuleLocally(module_data)
           .Then(main_thread_executor_,
-                [module_id](const ErrorMessageOr<std::filesystem::path>& retrieve_result)
+                [module_path_and_build_id](
+                    const ErrorMessageOr<std::filesystem::path>& retrieve_result)
                     -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
                   if (retrieve_result.has_value()) return {retrieve_result.value()};
 
                   return {ErrorMessage{absl::StrFormat(
                       "Failed to find symbols for module \"%s\" with build_id=\"%s\":\n"
                       "- %s",
-                      module_id.file_path, module_id.build_id, retrieve_result.error().message())}};
+                      module_path_and_build_id.module_path, module_path_and_build_id.build_id,
+                      retrieve_result.error().message())}};
                 });
 
   Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> retrieve_from_remote_future =
-      orbit_base::UnwrapFuture(retrieve_from_local_future.Then(
+      retrieve_from_local_future.Then(
           main_thread_executor_,
-          [this, module_id](
+          [this, module_path_and_build_id](
               const ErrorMessageOr<CanceledOr<std::filesystem::path>>& previous_result) mutable
           -> Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> {
-            if (download_disabled_modules_.contains(module_id.file_path)) return previous_result;
+            if (download_disabled_modules_.contains(module_path_and_build_id.module_path))
+              return previous_result;
 
             if (previous_result.has_value()) return {previous_result.value()};
 
-            return RetrieveModuleFromRemote(module_id).Then(
-                main_thread_executor_,
-                [module_id, current_message = previous_result.error().message()](
-                    const ErrorMessageOr<CanceledOr<std::filesystem::path>>&
-                        retrieve_result) mutable
-                -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
-                  if (retrieve_result.has_value()) return retrieve_result;
+            return RetrieveModuleFromRemote(module_path_and_build_id)
+                .Then(main_thread_executor_,
+                      [current_message = previous_result.error().message()](
+                          const ErrorMessageOr<CanceledOr<std::filesystem::path>>&
+                              retrieve_result) mutable
+                      -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
+                        if (retrieve_result.has_value()) return retrieve_result;
 
-                  current_message.append(retrieve_result.error().message());
-                  return ErrorMessage{current_message};
-                });
-          }));
+                        current_message.append(retrieve_result.error().message());
+                        return ErrorMessage{current_message};
+                      });
+          });
 
   return retrieve_from_remote_future;
 }
@@ -264,7 +287,7 @@ static ErrorMessageOr<std::optional<std::filesystem::path>> GetOverrideSymbolFil
 }
 
 static ErrorMessageOr<std::filesystem::path> FindModuleLocallyImpl(
-    const orbit_symbols::SymbolHelper& symbol_helper, const ModuleData& module_data) {
+    orbit_symbols::SymbolHelper& symbol_helper, const ModuleData& module_data) {
   ORBIT_SCOPE_FUNCTION;
   if (absl::GetFlag(FLAGS_enable_unsafe_symbols)) {
     // First checkout if a symbol file override exists and if it does, use it
@@ -311,7 +334,10 @@ static ErrorMessageOr<std::filesystem::path> FindModuleLocallyImpl(
     }
     error_message += "\n  * " + symbols_path.error().message();
   }
-  if (absl::GetFlag(FLAGS_local)) {
+  {
+    // Check whether a valid symbol file exists on the local machine at module_data.file_path().
+    // This is valuable when a local target is profiled (aka OrbitService runs on the local
+    // machine). In case Orbit is connected to a remote machine this will likely fail.
     const auto symbols_included_in_module =
         orbit_symbols::VerifySymbolFile(module_data.file_path(), module_data.build_id());
     if (symbols_included_in_module.has_value()) {
@@ -361,10 +387,11 @@ ConvertSymbolProviderRetrieveFuture(const Future<SymbolLoadingOutcome>& future,
 };
 
 Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::RetrieveModuleFromRemote(
-    const ModuleIdentifier& module_id) {
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) {
   ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
 
-  if (const auto it = symbol_files_currently_downloading_.find(module_id.file_path);
+  if (const auto it =
+          symbol_files_currently_downloading_.find(module_path_and_build_id.module_path);
       it != symbol_files_currently_downloading_.end()) {
     return it->second.future;
   }
@@ -372,19 +399,19 @@ Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::Retrieve
   orbit_base::StopSource stop_source;
 
   using SymbolRetrieveResult = ErrorMessageOr<CanceledOr<std::filesystem::path>>;
-  Future<SymbolRetrieveResult> retrieve_from_instance_future = orbit_base::UnwrapFuture(
-      main_thread_executor_->Schedule([this, module_id,
-                                       stop_token = stop_source.GetStopToken()]() mutable
-                                      -> Future<SymbolRetrieveResult> {
-        // If --local, Orbit cannot download files from the instance, because no ssh channel
-        // exists. We still return an ErrorMessage to enable continuing searching for symbols
-        // from other symbol sources.
-        if (absl::GetFlag(FLAGS_local) || !app_interface_->IsConnected() ||
+  Future<SymbolRetrieveResult> retrieve_from_instance_future = main_thread_executor_->Schedule(
+      [this, module_path_and_build_id,
+       stop_token = stop_source.GetStopToken()]() mutable -> Future<SymbolRetrieveResult> {
+        // If Orbit is in local profiling mode, it cannot download files from the instance, because
+        // no ssh channel exists. We still return an ErrorMessage to enable continuing searching for
+        // symbols from other symbol sources.
+        if (app_interface_->IsLocalTarget() || !app_interface_->IsConnected() ||
             absl::GetFlag(FLAGS_disable_instance_symbols)) {
           return {ErrorMessage{"\n- Not able to search for symbols on the instance."}};
         }
 
-        return RetrieveModuleFromInstance(module_id.file_path, std::move(stop_token))
+        return RetrieveModuleFromInstance(module_path_and_build_id.module_path,
+                                          std::move(stop_token))
             .Then(main_thread_executor_,
                   [](const SymbolRetrieveResult& retrieve_result) mutable -> SymbolRetrieveResult {
                     if (retrieve_result.has_value()) return retrieve_result;
@@ -393,53 +420,34 @@ Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::Retrieve
                         absl::StrFormat("\n- Did not find symbols on the instance: %s",
                                         retrieve_result.error().message())};
                   });
-      }));
+      });
 
-  Future<SymbolRetrieveResult> retrieve_from_stadia_future =
-      orbit_base::UnwrapFuture(retrieve_from_instance_future.Then(
-          main_thread_executor_,
-          [this, module_id, stop_token = stop_source.GetStopToken()](
-              const SymbolRetrieveResult& previous_result) mutable -> Future<SymbolRetrieveResult> {
-            if (orbit_client_symbols::QSettingsBasedStorageManager storage_manager;
-                stadia_symbol_provider_ == std::nullopt ||
-                !storage_manager.LoadEnableStadiaSymbolStore()) {
-              return {previous_result};
-            }
+  Future<SymbolRetrieveResult> retrieve_from_microsoft_future = retrieve_from_instance_future.Then(
+      main_thread_executor_,
+      [this, module_path_and_build_id, stop_token = stop_source.GetStopToken()](
+          const SymbolRetrieveResult& previous_result) mutable -> Future<SymbolRetrieveResult> {
+        if (orbit_client_symbols::QSettingsBasedStorageManager storage_manager;
+            microsoft_symbol_provider_ == std::nullopt ||
+            !storage_manager.LoadEnableMicrosoftSymbolServer()) {
+          return {previous_result};
+        }
 
-            if (previous_result.has_value()) return {previous_result.value()};
+        if (previous_result.has_value()) return {previous_result.value()};
 
-            return ConvertSymbolProviderRetrieveFuture(
-                stadia_symbol_provider_->RetrieveSymbols(module_id, std::move(stop_token)),
-                main_thread_executor_, "Stadia symbol store", previous_result.error().message());
-          }));
-
-  Future<SymbolRetrieveResult> retrieve_from_microsoft_future =
-      orbit_base::UnwrapFuture(retrieve_from_stadia_future.Then(
-          main_thread_executor_,
-          [this, module_id, stop_token = stop_source.GetStopToken()](
-              const SymbolRetrieveResult& previous_result) mutable -> Future<SymbolRetrieveResult> {
-            if (orbit_client_symbols::QSettingsBasedStorageManager storage_manager;
-                microsoft_symbol_provider_ == std::nullopt ||
-                !storage_manager.LoadEnableMicrosoftSymbolServer()) {
-              return {previous_result};
-            }
-
-            if (previous_result.has_value()) return {previous_result.value()};
-
-            return ConvertSymbolProviderRetrieveFuture(
-                microsoft_symbol_provider_->RetrieveSymbols(module_id, std::move(stop_token)),
-                main_thread_executor_, "Microsoft symbol server",
-                previous_result.error().message());
-          }));
+        return ConvertSymbolProviderRetrieveFuture(
+            microsoft_symbol_provider_->RetrieveSymbols(module_path_and_build_id,
+                                                        std::move(stop_token)),
+            main_thread_executor_, "Microsoft symbol server", previous_result.error().message());
+      });
 
   symbol_files_currently_downloading_.emplace(
-      module_id.file_path,
+      module_path_and_build_id.module_path,
       ModuleDownloadOperation{std::move(stop_source), retrieve_from_microsoft_future});
   app_interface_->OnModuleListUpdated();
   retrieve_from_microsoft_future.Then(
       main_thread_executor_,
-      [this, module_file_path = module_id.file_path](const SymbolRetrieveResult& /*result*/) {
-        symbol_files_currently_downloading_.erase(module_file_path);
+      [this, module_path_and_build_id](const SymbolRetrieveResult& /*result*/) {
+        symbol_files_currently_downloading_.erase(module_path_and_build_id.module_path);
         app_interface_->OnModuleListUpdated();
       });
 
@@ -447,23 +455,23 @@ Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::Retrieve
 }
 
 Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::RetrieveModuleFromInstance(
-    const std::string& module_file_path, StopToken stop_token) {
+    std::string_view module_file_path, StopToken stop_token) {
   ORBIT_SCOPE_FUNCTION;
   ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
 
   Future<ErrorMessageOr<NotFoundOr<std::filesystem::path>>> check_file_on_remote =
-      thread_pool_->Schedule(
-          [this, module_file_path]() -> ErrorMessageOr<NotFoundOr<std::filesystem::path>> {
-            std::vector<std::string> additional_instance_folder;
-            if (!absl::GetFlag(FLAGS_instance_symbols_folder).empty()) {
-              additional_instance_folder.emplace_back(absl::GetFlag(FLAGS_instance_symbols_folder));
-            }
-            ORBIT_CHECK(process_manager_ != nullptr);
-            return process_manager_->FindDebugInfoFile(module_file_path,
-                                                       additional_instance_folder);
-          });
+      thread_pool_->Schedule([this, module_file_path = std::string{module_file_path}]()
+                                 -> ErrorMessageOr<NotFoundOr<std::filesystem::path>> {
+        std::vector<std::string> additional_instance_folder;
+        if (!absl::GetFlag(FLAGS_instance_symbols_folder).empty()) {
+          additional_instance_folder.emplace_back(absl::GetFlag(FLAGS_instance_symbols_folder));
+        }
+        ORBIT_CHECK(process_manager_ != nullptr);
+        return process_manager_->FindDebugInfoFile(module_file_path, additional_instance_folder);
+      });
 
-  auto download_file = [this, module_file_path, stop_token = std::move(stop_token)](
+  auto download_file = [this, module_file_path = std::string{module_file_path},
+                        stop_token = std::move(stop_token)](
                            const NotFoundOr<std::filesystem::path>& remote_search_outcome) mutable
       -> Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> {
     // TODO(b/231455031): For now, we treat the ErrorMessage and the NotFound the same way.
@@ -506,24 +514,23 @@ Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::Retrieve
                             });
   };
 
-  Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> chained_result_future = UnwrapFuture(
-      check_file_on_remote.ThenIfSuccess(main_thread_executor_, std::move(download_file)));
-
-  return chained_result_future;
+  return check_file_on_remote.ThenIfSuccess(main_thread_executor_, std::move(download_file));
 }
 
 Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleItselfAndLoadFallbackSymbols(
-    const ModuleIdentifier& module_id, uint64_t module_file_size) {
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id,
+    uint64_t module_file_size) {
   Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> retrieve_module_itself_future =
-      RetrieveModuleItself(module_id, module_file_size);
+      RetrieveModuleItself(module_path_and_build_id, module_file_size);
 
-  return orbit_base::UnwrapFuture(retrieve_module_itself_future.Then(
+  return retrieve_module_itself_future.Then(
       main_thread_executor_,
-      [this, module_id](const ErrorMessageOr<CanceledOr<std::filesystem::path>>& retrieve_result)
+      [this, module_path_and_build_id](
+          const ErrorMessageOr<CanceledOr<std::filesystem::path>>& retrieve_result)
           -> Future<ErrorMessageOr<CanceledOr<void>>> {
         if (retrieve_result.has_error()) {
           return ErrorMessage{absl::StrFormat("Could not load fallback symbols for \"%s\": %s",
-                                              module_id.file_path,
+                                              module_path_and_build_id.module_path,
                                               retrieve_result.error().message())};
         }
         if (orbit_base::IsCanceled(retrieve_result.value())) {
@@ -533,13 +540,16 @@ Future<ErrorMessageOr<CanceledOr<void>>> SymbolLoader::RetrieveModuleItselfAndLo
             orbit_base::GetNotCanceled(retrieve_result.value());
 
         orbit_base::ImmediateExecutor executor;
-        return LoadFallbackSymbols(local_file_path, module_id)
-            .ThenIfSuccess(&executor, []() -> CanceledOr<void> { return CanceledOr<void>{}; });
-      }));
+        return LoadFallbackSymbols(local_file_path, module_path_and_build_id)
+            .ThenIfSuccess(&executor, []() -> CanceledOr<void> {
+              return CanceledOr<void>{outcome::success()};
+            });
+      });
 }
 
 Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::RetrieveModuleItself(
-    const ModuleIdentifier& module_id, uint64_t module_file_size) {
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id,
+    uint64_t module_file_size) {
   ORBIT_SCOPE_FUNCTION;
   ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
 
@@ -548,24 +558,27 @@ Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::Retrieve
   // ErrorMessage that also has bullet points (with no indentation, i.e., at top level).
 
   auto find_in_cache_or_locally =
-      [this, module_id, module_file_size]() -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
+      [this, module_path_and_build_id,
+       module_file_size]() -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
     std::string error_message;
     {
-      auto object_in_cache = symbol_helper_.FindObjectInCache(module_id.file_path,
-                                                              module_id.build_id, module_file_size);
+      auto object_in_cache =
+          symbol_helper_.FindObjectInCache(module_path_and_build_id.module_path,
+                                           module_path_and_build_id.build_id, module_file_size);
       if (object_in_cache.has_value()) {
-        ORBIT_LOG("Found module file \"%s\" itself in cache", module_id.file_path);
+        ORBIT_LOG("Found module file \"%s\" itself in cache", module_path_and_build_id.module_path);
         return {object_in_cache.value()};
       }
       error_message += absl::StrFormat("\n  * Could not find module file itself in cache: %s",
                                        object_in_cache.error().message());
     }
-    if (absl::GetFlag(FLAGS_local)) {
-      auto verify_object_file_result = orbit_symbols::VerifyObjectFile(
-          module_id.file_path, module_id.build_id, module_file_size);
+    if (app_interface_->IsLocalTarget()) {
+      auto verify_object_file_result =
+          orbit_symbols::VerifyObjectFile(module_path_and_build_id.module_path,
+                                          module_path_and_build_id.build_id, module_file_size);
       if (verify_object_file_result.has_value()) {
-        ORBIT_LOG("Found module file \"%s\" itself locally", module_id.file_path);
-        return module_id.file_path;
+        ORBIT_LOG("Found module file \"%s\" itself locally", module_path_and_build_id.module_path);
+        return module_path_and_build_id.module_path;
       }
       error_message += "\n  * Could not find module file itself locally.";
     }
@@ -575,70 +588,69 @@ Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> SymbolLoader::Retrieve
   Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> find_in_cache_or_locally_future =
       thread_pool_->Schedule(find_in_cache_or_locally);
 
-  auto retrieve_from_instance = [this,
-                                 module_id](const ErrorMessageOr<CanceledOr<std::filesystem::path>>&
-                                                find_in_cache_or_locally_result) mutable
+  auto retrieve_from_instance = [this, module_file_path = module_path_and_build_id.module_path](
+                                    const ErrorMessageOr<CanceledOr<std::filesystem::path>>&
+                                        find_in_cache_or_locally_result) mutable
       -> Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> {
-    if (download_disabled_modules_.contains(module_id.file_path)) {
+    if (download_disabled_modules_.contains(module_file_path)) {
       return find_in_cache_or_locally_result;
     }
     if (find_in_cache_or_locally_result.has_value()) {
       return {find_in_cache_or_locally_result};
     }
 
-    if (absl::GetFlag(FLAGS_local) || !app_interface_->IsConnected() ||
+    if (app_interface_->IsLocalTarget() || !app_interface_->IsConnected() ||
         absl::GetFlag(FLAGS_disable_instance_symbols)) {
       return {ErrorMessage{
           absl::StrFormat("%s\n  * Could not search for module file itself on the instance.",
                           find_in_cache_or_locally_result.error().message())}};
     }
 
-    return RetrieveModuleItselfFromInstance(module_id).Then(
-        main_thread_executor_,
-        [current_message = find_in_cache_or_locally_result.error().message()](
-            const ErrorMessageOr<CanceledOr<std::filesystem::path>>& retrieve_from_instance_result)
-            -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
-          if (retrieve_from_instance_result.has_error()) {
-            return ErrorMessage{absl::StrFormat("%s\n  * %s", current_message,
-                                                retrieve_from_instance_result.error().message())};
-          }
-          return retrieve_from_instance_result;
-        });
+    return RetrieveModuleItselfFromInstance(module_file_path)
+        .Then(main_thread_executor_,
+              [current_message = find_in_cache_or_locally_result.error().message()](
+                  const ErrorMessageOr<CanceledOr<std::filesystem::path>>&
+                      retrieve_from_instance_result)
+                  -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
+                if (retrieve_from_instance_result.has_error()) {
+                  return ErrorMessage{
+                      absl::StrFormat("%s\n  * %s", current_message,
+                                      retrieve_from_instance_result.error().message())};
+                }
+                return retrieve_from_instance_result;
+              });
   };
 
-  Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> retrieve_from_instance_future =
-      orbit_base::UnwrapFuture(find_in_cache_or_locally_future.Then(
-          main_thread_executor_, std::move(retrieve_from_instance)));
-
-  return retrieve_from_instance_future;
+  return find_in_cache_or_locally_future.Then(main_thread_executor_,
+                                              std::move(retrieve_from_instance));
 }
 
 Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>>
-SymbolLoader::RetrieveModuleItselfFromInstance(const ModuleIdentifier& module_id) {
+SymbolLoader::RetrieveModuleItselfFromInstance(std::string_view module_file_path) {
   ORBIT_SCOPE_FUNCTION;
   ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
 
-  if (const auto it = symbol_files_currently_downloading_.find(module_id.file_path);
+  if (const auto it = symbol_files_currently_downloading_.find(module_file_path);
       it != symbol_files_currently_downloading_.end()) {
     return it->second.future;
   }
 
   orbit_base::StopSource stop_source;
 
-  auto download = [this, module_id, stop_token = stop_source.GetStopToken()]() mutable
+  auto download = [this, module_file_path, stop_token = stop_source.GetStopToken()]() mutable
       -> Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> {
-    ORBIT_LOG("Copying module file \"%s\" itself using scp...", module_id.file_path);
+    ORBIT_LOG("Copying module file \"%s\" itself using scp...", module_file_path);
     const std::filesystem::path cache_path =
-        symbol_helper_.GenerateCachedFilePath(module_id.file_path);
+        symbol_helper_.GenerateCachedFilePath(module_file_path);
     const std::chrono::time_point<std::chrono::steady_clock> copy_begin =
         std::chrono::steady_clock::now();
     Future<ErrorMessageOr<CanceledOr<void>>> copy_result = app_interface_->DownloadFileFromInstance(
-        module_id.file_path, cache_path, std::move(stop_token));
+        module_file_path, cache_path, std::move(stop_token));
 
     orbit_base::ImmediateExecutor immediate_executor{};
     return copy_result.Then(
         &immediate_executor,
-        [module_id, cache_path, copy_begin](ErrorMessageOr<CanceledOr<void>> sftp_result)
+        [module_file_path, cache_path, copy_begin](ErrorMessageOr<CanceledOr<void>> sftp_result)
             -> ErrorMessageOr<CanceledOr<std::filesystem::path>> {
           if (sftp_result.has_error()) {
             return ErrorMessage{absl::StrFormat("Could not copy module file from the remote: %s",
@@ -649,19 +661,19 @@ SymbolLoader::RetrieveModuleItselfFromInstance(const ModuleIdentifier& module_id
           }
           const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - copy_begin);
-          ORBIT_LOG("Copying \"%s\" took %.3f ms", module_id.file_path, duration.count());
+          ORBIT_LOG("Copying \"%s\" took %.3f ms", module_file_path, duration.count());
           return cache_path;
         });
   };
 
   Future<ErrorMessageOr<CanceledOr<std::filesystem::path>>> download_future =
-      UnwrapFuture(thread_pool_->Schedule(std::move(download)));
+      thread_pool_->Schedule(std::move(download));
 
   symbol_files_currently_downloading_.emplace(
-      module_id.file_path, ModuleDownloadOperation{std::move(stop_source), download_future});
+      module_file_path, ModuleDownloadOperation{std::move(stop_source), download_future});
   app_interface_->OnModuleListUpdated();
   download_future.Then(main_thread_executor_,
-                       [this, module_file_path = module_id.file_path](
+                       [this, module_file_path](
                            const ErrorMessageOr<CanceledOr<std::filesystem::path>>& /*result*/) {
                          symbol_files_currently_downloading_.erase(module_file_path);
                          app_interface_->OnModuleListUpdated();
@@ -669,13 +681,16 @@ SymbolLoader::RetrieveModuleItselfFromInstance(const ModuleIdentifier& module_id
   return download_future;
 }
 
-Future<ErrorMessageOr<void>> SymbolLoader::LoadSymbols(const std::filesystem::path& symbols_path,
-                                                       const ModuleIdentifier& module_id) {
+Future<ErrorMessageOr<void>> SymbolLoader::LoadSymbols(
+    const std::filesystem::path& symbols_path,
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) {
   ORBIT_SCOPE_FUNCTION;
 
   auto load_symbols_from_file_future = thread_pool_->Schedule(
-      [this, symbols_path, module_id]() -> ErrorMessageOr<orbit_grpc_protos::ModuleSymbols> {
-        const ModuleData* module_data = app_interface_->GetModuleByModuleIdentifier(module_id);
+      [this, symbols_path,
+       module_path_and_build_id]() -> ErrorMessageOr<orbit_grpc_protos::ModuleSymbols> {
+        const ModuleData* module_data =
+            app_interface_->GetModuleByModulePathAndBuildId(module_path_and_build_id);
         orbit_object_utils::ObjectFileInfo object_file_info{module_data->load_bias()};
         ErrorMessageOr<orbit_grpc_protos::ModuleSymbols> symbols_or_error =
             orbit_symbols::SymbolHelper::LoadSymbolsFromFile(symbols_path, object_file_info);
@@ -687,11 +702,11 @@ Future<ErrorMessageOr<void>> SymbolLoader::LoadSymbols(const std::filesystem::pa
 
   auto add_symbols_future = load_symbols_from_file_future.ThenIfSuccess(
       main_thread_executor_,
-      [this,
-       module_id](const orbit_grpc_protos::ModuleSymbols& symbols) mutable -> ErrorMessageOr<void> {
-        app_interface_->AddSymbols(module_id, symbols);
+      [this, module_path_and_build_id](
+          const orbit_grpc_protos::ModuleSymbols& symbols) mutable -> ErrorMessageOr<void> {
+        app_interface_->AddSymbols(module_path_and_build_id, symbols);
         ORBIT_LOG("Successfully loaded %d symbols for \"%s\"", symbols.symbol_infos_size(),
-                  module_id.file_path);
+                  module_path_and_build_id.module_path);
         return outcome::success();
       });
 
@@ -699,7 +714,8 @@ Future<ErrorMessageOr<void>> SymbolLoader::LoadSymbols(const std::filesystem::pa
 }
 
 Future<ErrorMessageOr<void>> SymbolLoader::LoadFallbackSymbols(
-    const std::filesystem::path& object_path, const ModuleIdentifier& module_id) {
+    const std::filesystem::path& object_path,
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) {
   ORBIT_SCOPE_FUNCTION;
 
   auto load_fallback_symbols_future =
@@ -715,11 +731,11 @@ Future<ErrorMessageOr<void>> SymbolLoader::LoadFallbackSymbols(
 
   auto add_fallback_symbols_future = load_fallback_symbols_future.ThenIfSuccess(
       main_thread_executor_,
-      [this,
-       module_id](const orbit_grpc_protos::ModuleSymbols& symbols) mutable -> ErrorMessageOr<void> {
-        app_interface_->AddFallbackSymbols(module_id, symbols);
+      [this, module_path_and_build_id](
+          const orbit_grpc_protos::ModuleSymbols& symbols) mutable -> ErrorMessageOr<void> {
+        app_interface_->AddFallbackSymbols(module_path_and_build_id, symbols);
         ORBIT_LOG("Successfully loaded %d fallback symbols for \"%s\"", symbols.symbol_infos_size(),
-                  module_id.file_path);
+                  module_path_and_build_id.module_path);
         return outcome::success();
       });
 
@@ -727,11 +743,11 @@ Future<ErrorMessageOr<void>> SymbolLoader::LoadFallbackSymbols(
 }
 
 Future<ErrorMessageOr<std::filesystem::path>> SymbolLoader::RetrieveModuleWithDebugInfo(
-    const ModuleIdentifier& module_id) {
-  auto loaded_module = RetrieveModuleSymbols(module_id);
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) {
+  auto loaded_module = RetrieveModuleSymbols(module_path_and_build_id);
   return loaded_module.ThenIfSuccess(
       main_thread_executor_,
-      [this, module_path = module_id.file_path](
+      [this, module_path_and_build_id](
           const CanceledOr<std::filesystem::path>& local_file_path_or_canceled)
           -> ErrorMessageOr<std::filesystem::path> {
         if (orbit_base::IsCanceled(local_file_path_or_canceled)) {
@@ -751,7 +767,7 @@ Future<ErrorMessageOr<std::filesystem::path>> SymbolLoader::RetrieveModuleWithDe
               absl::StrFormat("Module \"%s\" neither includes debug info, nor does it contain "
                               "a .gnu_debuglink section which could refer to a separate debug "
                               "info file.",
-                              module_path)};
+                              module_path_and_build_id.module_path)};
         }
 
         const auto debuglink = elf_file.value()->GetGnuDebugLinkInfo().value();
@@ -764,7 +780,7 @@ Future<ErrorMessageOr<std::filesystem::path>> SymbolLoader::RetrieveModuleWithDe
               "found on this machine, when searching the folders from the Symbol Locations. Please "
               "make sure that the debuginfo file can be found in one of the added folders. "
               "According to the .gnu_debuglink section, the debuginfo file must be called \"%s\".",
-              module_path, debuglink.path.string())};
+              module_path_and_build_id.module_path, debuglink.path.string())};
         }
 
         elf_file = orbit_object_utils::CreateElfFile(local_debuginfo_path.value());
@@ -773,14 +789,14 @@ Future<ErrorMessageOr<std::filesystem::path>> SymbolLoader::RetrieveModuleWithDe
       });
 }
 
-void SymbolLoader::RequestSymbolDownloadStop(const std::string& module_path) {
+void SymbolLoader::RequestSymbolDownloadStop(std::string_view module_path) {
   ORBIT_CHECK(main_thread_id_ == std::this_thread::get_id());
   if (symbol_files_currently_downloading_.contains(module_path)) {
     symbol_files_currently_downloading_.at(module_path).stop_source.RequestStop();
   }
 }
 
-bool SymbolLoader::IsModuleDownloading(const std::string& module_path) const {
+bool SymbolLoader::IsModuleDownloading(std::string_view module_path) const {
   ORBIT_CHECK(main_thread_id_ == std::this_thread::get_id());
   return symbol_files_currently_downloading_.contains(module_path);
 }
@@ -789,36 +805,42 @@ orbit_data_views::SymbolLoadingState SymbolLoader::GetSymbolLoadingStateForModul
     const orbit_client_data::ModuleData* module) const {
   ORBIT_CHECK(module != nullptr);
   ORBIT_CHECK(main_thread_id_ == std::this_thread::get_id());
+  ORBIT_CHECK(module_identifier_provider != nullptr);
 
-  if (IsModuleDownloading(module->file_path())) return SymbolLoadingState::kDownloading;
+  if (IsModuleDownloading(module->file_path())) {
+    return SymbolLoadingState(SymbolLoadingState::kDownloading);
+  }
 
-  ModuleIdentifier module_id = module->module_id();
-  if (symbols_currently_loading_.contains(module_id)) {
-    return SymbolLoadingState::kLoading;
+  std::optional<ModuleIdentifier> module_identifier =
+      module_identifier_provider->GetModuleIdentifier(
+          {.module_path = module->file_path(), .build_id = module->build_id()});
+  ORBIT_CHECK(module_identifier.has_value());
+  if (symbols_currently_loading_.contains(module_identifier.value())) {
+    return SymbolLoadingState(SymbolLoadingState::kLoading);
   }
 
   switch (module->GetLoadedSymbolsCompleteness()) {
     case ModuleData::SymbolCompleteness::kNoSymbols:
       break;
     case ModuleData::SymbolCompleteness::kDynamicLinkingAndUnwindInfo:
-      return SymbolLoadingState::kFallback;
+      return SymbolLoadingState(SymbolLoadingState::kFallback);
     case ModuleData::SymbolCompleteness::kDebugSymbols:
-      return SymbolLoadingState::kLoaded;
+      return SymbolLoadingState(SymbolLoadingState::kLoaded);
   }
 
   if (download_disabled_modules_.contains(module->file_path())) {
-    return SymbolLoadingState::kDisabled;
+    return SymbolLoadingState(SymbolLoadingState::kDisabled);
   }
 
-  if (modules_with_symbol_loading_error_.contains(module_id)) {
-    return SymbolLoadingState::kError;
+  if (modules_with_symbol_loading_error_.contains(module_identifier.value())) {
+    return SymbolLoadingState(SymbolLoadingState::kError);
   }
 
-  return SymbolLoadingState::kUnknown;
+  return SymbolLoadingState(SymbolLoadingState::kUnknown);
 }
 
 bool SymbolLoader::IsSymbolLoadingInProgressForModule(
-    const orbit_symbol_provider::ModuleIdentifier& module_id) const {
+    const orbit_client_data::ModuleIdentifier& module_id) const {
   ORBIT_CHECK(main_thread_id_ == std::this_thread::get_id());
   return symbols_currently_loading_.contains(module_id);
 }

@@ -2,26 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "PageFaultsTrack.h"
+#include "OrbitGl/PageFaultsTrack.h"
 
-#include "ApiUtils/EncodedEvent.h"
-#include "CaptureClient/CaptureEventProcessor.h"
-#include "GrpcProtos/Constants.h"
-#include "TextRenderer.h"
-#include "TimeGraphLayout.h"
-#include "Viewport.h"
+#include <GteVector.h>
+#include <stddef.h>
+
+#include <algorithm>
+#include <utility>
+
+#include "ApiInterface/Orbit.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/TextRenderer.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/Viewport.h"
 
 namespace orbit_gl {
-
-namespace {
-using orbit_capture_client::CaptureEventProcessor;
-using orbit_grpc_protos::kMissingInfo;
-}  // namespace
 
 PageFaultsTrack::PageFaultsTrack(CaptureViewElement* parent,
                                  const orbit_gl::TimelineInfoInterface* timeline_info,
                                  orbit_gl::Viewport* viewport, TimeGraphLayout* layout,
-                                 const std::string& cgroup_name, uint64_t memory_sampling_period_ms,
+                                 std::string cgroup_name, uint64_t memory_sampling_period_ms,
                                  const orbit_client_data::ModuleManager* module_manager,
                                  const orbit_client_data::CaptureData* capture_data)
     : Track(parent, timeline_info, viewport, layout, module_manager, capture_data),
@@ -29,7 +29,7 @@ PageFaultsTrack::PageFaultsTrack(CaptureViewElement* parent,
           this, timeline_info, viewport, layout, cgroup_name, memory_sampling_period_ms,
           module_manager, capture_data)},
       minor_page_faults_track_{std::make_shared<MinorPageFaultsTrack>(
-          this, timeline_info, viewport, layout, cgroup_name, memory_sampling_period_ms,
+          this, timeline_info, viewport, layout, std::move(cgroup_name), memory_sampling_period_ms,
           module_manager, capture_data)} {
   // PageFaults track is collapsed by default. The major and minor page faults subtracks are
   // expanded by default, but not shown while the page faults track is collapsed.
@@ -45,7 +45,7 @@ float PageFaultsTrack::GetHeight() const {
     return major_page_faults_track_->GetHeight();
   }
 
-  float height = layout_->GetTrackTabHeight();
+  float height = 0;
   if (major_page_faults_track_->ShouldBeRendered()) {
     height += major_page_faults_track_->GetHeight() + layout_->GetSpaceBetweenSubtracks();
   }
@@ -87,7 +87,7 @@ void PageFaultsTrack::UpdatePositionOfSubtracks() {
   minor_page_faults_track_->SetVisible(true);
   minor_page_faults_track_->SetIndentationLevel(indentation_level_ + 1);
 
-  float current_y = pos[1] + layout_->GetTrackTabHeight();
+  float current_y = pos[1];
   if (major_page_faults_track_->ShouldBeRendered()) {
     current_y += layout_->GetSpaceBetweenSubtracks();
   }
@@ -99,45 +99,27 @@ void PageFaultsTrack::UpdatePositionOfSubtracks() {
   minor_page_faults_track_->SetPos(pos[0], current_y);
 }
 
-void PageFaultsTrack::OnTimer(const orbit_client_protos::TimerInfo& timer_info) {
-  int64_t system_page_faults = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::PageFaultsEncodingIndex::kSystemPageFaults)));
-  int64_t system_major_page_faults = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::PageFaultsEncodingIndex::kSystemMajorPageFaults)));
-  int64_t cgroup_page_faults = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::PageFaultsEncodingIndex::kCGroupPageFaults)));
-  int64_t cgroup_major_page_faults = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::PageFaultsEncodingIndex::kCGroupMajorPageFaults)));
-  int64_t process_minor_page_faults =
-      orbit_api::Decode<int64_t>(timer_info.registers(static_cast<size_t>(
-          CaptureEventProcessor::PageFaultsEncodingIndex::kProcessMinorPageFaults)));
-  int64_t process_major_page_faults =
-      orbit_api::Decode<int64_t>(timer_info.registers(static_cast<size_t>(
-          CaptureEventProcessor::PageFaultsEncodingIndex::kProcessMajorPageFaults)));
-
-  if (system_major_page_faults != kMissingInfo && cgroup_major_page_faults != kMissingInfo &&
-      process_major_page_faults != kMissingInfo) {
-    std::array<double, orbit_gl::kBasicPageFaultsTrackDimension> values;
+void PageFaultsTrack::OnPageFaultsInfo(const orbit_client_data::PageFaultsInfo& page_faults_info) {
+  if (page_faults_info.HasMajorPageFaultsInfo()) {
+    std::vector<double> values(major_page_faults_track_->GetDimension());
     values[static_cast<size_t>(MajorPageFaultsTrack::SeriesIndex::kProcess)] =
-        static_cast<double>(process_major_page_faults);
+        static_cast<double>(page_faults_info.process_major_page_faults);
     values[static_cast<size_t>(MajorPageFaultsTrack::SeriesIndex::kCGroup)] =
-        static_cast<double>(cgroup_major_page_faults);
+        static_cast<double>(page_faults_info.cgroup_major_page_faults);
     values[static_cast<size_t>(MajorPageFaultsTrack::SeriesIndex::kSystem)] =
-        static_cast<double>(system_major_page_faults);
-    AddValuesAndUpdateAnnotationsForMajorPageFaultsSubtrack(timer_info.start(), values);
+        static_cast<double>(page_faults_info.system_major_page_faults);
+    AddValuesAndUpdateAnnotationsForMajorPageFaultsSubtrack(page_faults_info.timestamp_ns, values);
   }
 
-  if (system_page_faults != kMissingInfo && system_major_page_faults != kMissingInfo &&
-      cgroup_page_faults != kMissingInfo && cgroup_major_page_faults != kMissingInfo &&
-      process_minor_page_faults != kMissingInfo) {
-    std::array<double, orbit_gl::kBasicPageFaultsTrackDimension> values;
+  if (page_faults_info.HasMinorPageFaultsInfo()) {
+    std::vector<double> values(minor_page_faults_track_->GetDimension());
     values[static_cast<size_t>(MinorPageFaultsTrack::SeriesIndex::kProcess)] =
-        static_cast<double>(process_minor_page_faults);
-    values[static_cast<size_t>(MinorPageFaultsTrack::SeriesIndex::kCGroup)] =
-        static_cast<double>(cgroup_page_faults - cgroup_major_page_faults);
-    values[static_cast<size_t>(MinorPageFaultsTrack::SeriesIndex::kSystem)] =
-        static_cast<double>(system_page_faults - system_major_page_faults);
-    AddValuesAndUpdateAnnotationsForMinorPageFaultsSubtrack(timer_info.start(), values);
+        static_cast<double>(page_faults_info.process_minor_page_faults);
+    values[static_cast<size_t>(MinorPageFaultsTrack::SeriesIndex::kCGroup)] = static_cast<double>(
+        page_faults_info.cgroup_page_faults - page_faults_info.cgroup_major_page_faults);
+    values[static_cast<size_t>(MinorPageFaultsTrack::SeriesIndex::kSystem)] = static_cast<double>(
+        page_faults_info.system_page_faults - page_faults_info.system_major_page_faults);
+    AddValuesAndUpdateAnnotationsForMinorPageFaultsSubtrack(page_faults_info.timestamp_ns, values);
   }
 }
 

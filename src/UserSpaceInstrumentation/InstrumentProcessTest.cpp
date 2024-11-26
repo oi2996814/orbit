@@ -2,23 +2,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <linux/seccomp.h>
+#include <signal.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
-#include <syscall.h>
 #include <unistd.h>
 
+#include <array>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <random>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "GrpcProtos/capture.pb.h"
 #include "OrbitBase/GetProcessIds.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 #include "TestUtils.h"
 #include "TestUtils/TestUtils.h"
 #include "Trampoline.h"
@@ -29,7 +39,7 @@ namespace orbit_user_space_instrumentation {
 
 namespace {
 
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasNoError;
 using ::testing::HasSubstr;
 
@@ -120,7 +130,7 @@ TEST(InstrumentProcessTest, FailToInstrumentAlreadyAttached) {
   orbit_grpc_protos::CaptureOptions capture_options;
   capture_options.set_pid(pid);
   auto result_or_error = instrumentation_manager->InstrumentProcess(capture_options);
-  ASSERT_THAT(result_or_error, HasError("is already being traced by"));
+  ASSERT_THAT(result_or_error, HasErrorWithMessage("is already being traced by"));
 
   // End tracer process, end child process.
   kill(pid_tracer, SIGKILL);
@@ -135,7 +145,7 @@ TEST(InstrumentProcessTest, FailToInstrumentInvalidPid) {
   orbit_grpc_protos::CaptureOptions capture_options;
   capture_options.set_pid(-1);
   auto result_or_error = instrumentation_manager->InstrumentProcess(capture_options);
-  ASSERT_THAT(result_or_error, HasError("There is no process with pid"));
+  ASSERT_THAT(result_or_error, HasErrorWithMessage("There is no process with pid"));
 }
 
 TEST(InstrumentProcessTest, FailToInstrumentThisProcess) {
@@ -144,7 +154,7 @@ TEST(InstrumentProcessTest, FailToInstrumentThisProcess) {
   orbit_grpc_protos::CaptureOptions capture_options;
   capture_options.set_pid(getpid());
   auto result_or_error = instrumentation_manager->InstrumentProcess(capture_options);
-  ASSERT_THAT(result_or_error, HasError("The target process is OrbitService itself."));
+  ASSERT_THAT(result_or_error, HasErrorWithMessage("The target process is OrbitService itself."));
 }
 
 static void VerifyTrampolineAddressRangesAndLibraryPath(
@@ -365,8 +375,9 @@ TEST(InstrumentProcessTest, AnyTargetThreadInStrictSeccompMode) {
   orbit_grpc_protos::CaptureOptions capture_options = BuildCaptureOptions();
   capture_options.set_pid(pid);
   auto result_or_error = instrumentation_manager->InstrumentProcess(capture_options);
-  ASSERT_THAT(result_or_error,
-              HasError("At least one thread of the target process is in strict seccomp mode."));
+  ASSERT_THAT(
+      result_or_error,
+      HasErrorWithMessage("At least one thread of the target process is in strict seccomp mode."));
 
   kill(pid, SIGKILL);
   waitpid(pid, nullptr, 0);

@@ -5,27 +5,39 @@
 #include <absl/algorithm/container.h>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
-#include <functional>
+#include <initializer_list>
 #include <iterator>
 #include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "BaselineAndComparisonHelper.h"
 #include "ClientData/ScopeId.h"
 #include "ClientData/ScopeStats.h"
+#include "MizarBase/AbsoluteAddress.h"
 #include "MizarBase/BaselineOrComparison.h"
 #include "MizarBase/FunctionSymbols.h"
 #include "MizarBase/SampledFunctionId.h"
+#include "MizarBase/ThreadId.h"
 #include "MizarBase/Time.h"
 #include "MizarData/BaselineAndComparison.h"
+#include "MizarData/FrameTrack.h"
+#include "MizarData/SamplingWithFrameTrackComparisonReport.h"
 #include "MizarStatistics/ActiveFunctionTimePerFrameComparator.h"
 #include "OrbitBase/ThreadConstants.h"
+#include "OrbitBase/Typedef.h"
 #include "TestUtils/ContainerHelpers.h"
 
 using ::orbit_client_data::ScopeId;
@@ -66,8 +78,8 @@ static std::array<FunctionSymbol, N> MakeFunctionSymbols(
     const std::array<std::string, N>& functions) {
   std::array<FunctionSymbol, N> symbols;
   absl::c_transform(functions, kModuleNames, std::begin(symbols),
-                    [](const std::string& function, const std::string& module) {
-                      return FunctionSymbol{function, module};
+                    [](std::string_view function, std::string_view module) {
+                      return FunctionSymbol{std::string{function}, std::string{module}};
                     });
   return symbols;
 }
@@ -238,7 +250,7 @@ class MockFunctionTimeComparator {
       const Comparison<SamplingCounts>& /*comparison_counts*/,
       const Comparison<orbit_client_data::ScopeStats>& /*comparison_frame_stats*/) {}
 
-  [[nodiscard]] orbit_mizar_statistics::ComparisonResult Compare(SampledFunctionId sfid) const {
+  [[nodiscard]] static orbit_mizar_statistics::ComparisonResult Compare(SampledFunctionId sfid) {
     return {kStatistic, kSfidToPvalue.at(sfid)};
   };
 };

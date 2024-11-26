@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "CallTreeViewItemModel.h"
+#include "OrbitQt/CallTreeViewItemModel.h"
 
 #include <absl/strings/str_format.h>
 #include <stddef.h>
 
 #include <QColor>
+#include <QStringLiteral>
 #include <QtCore>
 #include <algorithm>
 #include <iterator>
@@ -19,7 +20,7 @@
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadConstants.h"
 
-CallTreeViewItemModel::CallTreeViewItemModel(std::unique_ptr<CallTreeView> call_tree_view,
+CallTreeViewItemModel::CallTreeViewItemModel(std::shared_ptr<const CallTreeView> call_tree_view,
                                              QObject* parent)
     : QAbstractItemModel{parent}, call_tree_view_{std::move(call_tree_view)} {}
 
@@ -60,7 +61,8 @@ QVariant CallTreeViewItemModel::GetDisplayRoleData(const QModelIndex& index) con
   } else if (function_item != nullptr) {
     switch (index.column()) {
       case kThreadOrFunction:
-        return QString::fromStdString(function_item->function_name());
+        return QString::fromStdString(function_item->RetrieveFunctionName(
+            call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
       case kInclusive:
         return QString::fromStdString(absl::StrFormat(
             "%.2f%% (%llu)", function_item->GetInclusivePercent(call_tree_view_->sample_count()),
@@ -73,7 +75,8 @@ QVariant CallTreeViewItemModel::GetDisplayRoleData(const QModelIndex& index) con
         return QString::fromStdString(
             absl::StrFormat("%.2f%%", function_item->GetPercentOfParent()));
       case kModule:
-        return QString::fromStdString(function_item->GetModuleName());
+        return QString::fromStdString(function_item->RetrieveModuleName(
+            call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
       case kFunctionAddress:
         return QString::fromStdString(
             absl::StrFormat("%#llx", function_item->function_absolute_address()));
@@ -109,7 +112,7 @@ QVariant CallTreeViewItemModel::GetDisplayRoleData(const QModelIndex& index) con
             absl::StrFormat("%.2f%%", unwind_error_type_item->GetPercentOfParent()));
     }
   }
-  return QVariant();
+  return {};
 }
 
 QVariant CallTreeViewItemModel::GetEditRoleData(const QModelIndex& index) const {
@@ -136,7 +139,8 @@ QVariant CallTreeViewItemModel::GetEditRoleData(const QModelIndex& index) const 
   } else if (function_item != nullptr) {
     switch (index.column()) {
       case kThreadOrFunction:
-        return QString::fromStdString(function_item->function_name());
+        return QString::fromStdString(function_item->RetrieveFunctionName(
+            call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
       case kInclusive:
         return function_item->GetInclusivePercent(call_tree_view_->sample_count());
       case kExclusive:
@@ -144,7 +148,8 @@ QVariant CallTreeViewItemModel::GetEditRoleData(const QModelIndex& index) const 
       case kOfParent:
         return function_item->GetPercentOfParent();
       case kModule:
-        return QString::fromStdString(function_item->GetModuleName());
+        return QString::fromStdString(function_item->RetrieveModuleName(
+            call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
       case kFunctionAddress:
         return static_cast<qulonglong>(function_item->function_absolute_address());
     }
@@ -167,7 +172,7 @@ QVariant CallTreeViewItemModel::GetEditRoleData(const QModelIndex& index) const 
         return unwind_error_type_item->GetPercentOfParent();
     }
   }
-  return QVariant();
+  return {};
 }
 
 QVariant CallTreeViewItemModel::GetToolTipRoleData(const QModelIndex& index) const {
@@ -178,9 +183,11 @@ QVariant CallTreeViewItemModel::GetToolTipRoleData(const QModelIndex& index) con
   if (function_item != nullptr) {
     switch (index.column()) {
       case kThreadOrFunction:
-        return QString::fromStdString(function_item->function_name());
+        return QString::fromStdString(function_item->RetrieveFunctionName(
+            call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
       case kModule:
-        return QString::fromStdString(function_item->module_path());
+        return QString::fromStdString(function_item->RetrieveModulePath(
+            call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
     }
   } else if (unwind_error_type_item != nullptr) {
     switch (index.column()) {
@@ -189,10 +196,10 @@ QVariant CallTreeViewItemModel::GetToolTipRoleData(const QModelIndex& index) con
             orbit_client_data::CallstackTypeToDescription(unwind_error_type_item->error_type()));
     }
   }
-  return QVariant();
+  return {};
 }
 
-QVariant CallTreeViewItemModel::GetForegroundRoleData(const QModelIndex& index) const {
+QVariant CallTreeViewItemModel::GetForegroundRoleData(const QModelIndex& index) {
   ORBIT_CHECK(index.isValid());
   auto* item = static_cast<CallTreeNode*>(index.internalPointer());
   auto* unwind_errors_item = dynamic_cast<CallTreeUnwindErrors*>(item);
@@ -210,7 +217,7 @@ QVariant CallTreeViewItemModel::GetForegroundRoleData(const QModelIndex& index) 
     static const QColor kUnwindErrorFunctionColor{Qt::lightGray};
     return kUnwindErrorFunctionColor;
   }
-  return QVariant();
+  return {};
 }
 
 QVariant CallTreeViewItemModel::GetModulePathRoleData(const QModelIndex& index) const {
@@ -218,9 +225,10 @@ QVariant CallTreeViewItemModel::GetModulePathRoleData(const QModelIndex& index) 
   auto* item = static_cast<CallTreeNode*>(index.internalPointer());
   auto* function_item = dynamic_cast<CallTreeFunction*>(item);
   if (function_item != nullptr) {
-    return QString::fromStdString(function_item->module_path());
+    return QString::fromStdString(function_item->RetrieveModulePath(
+        call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
   }
-  return QVariant();
+  return {};
 }
 
 QVariant CallTreeViewItemModel::GetModuleBuildIdRoleData(const QModelIndex& index) const {
@@ -228,9 +236,10 @@ QVariant CallTreeViewItemModel::GetModuleBuildIdRoleData(const QModelIndex& inde
   auto* item = static_cast<CallTreeNode*>(index.internalPointer());
   auto* function_item = dynamic_cast<CallTreeFunction*>(item);
   if (function_item != nullptr) {
-    return QString::fromStdString(function_item->module_build_id());
+    return QString::fromStdString(function_item->RetrieveModuleBuildId(
+        call_tree_view_->GetModuleManager(), call_tree_view_->GetCaptureData()));
   }
-  return QVariant();
+  return {};
 }
 
 // For columns with two values, a percentage and a raw number, only copy the percentage, so that it
@@ -280,7 +289,7 @@ QVariant CallTreeViewItemModel::GetExclusiveCallstackEventsRoleData(const QModel
 
 QVariant CallTreeViewItemModel::data(const QModelIndex& index, int role) const {
   if (!index.isValid()) {
-    return QVariant();
+    return {};
   }
   switch (role) {
     case Qt::DisplayRole:
@@ -302,7 +311,7 @@ QVariant CallTreeViewItemModel::data(const QModelIndex& index, int role) const {
     case kExclusiveCallstackEventsRole:
       return GetExclusiveCallstackEventsRoleData(index);
   }
-  return QVariant();
+  return {};
 }
 
 Qt::ItemFlags CallTreeViewItemModel::flags(const QModelIndex& index) const {
@@ -315,7 +324,7 @@ Qt::ItemFlags CallTreeViewItemModel::flags(const QModelIndex& index) const {
 QVariant CallTreeViewItemModel::headerData(int section, Qt::Orientation orientation,
                                            int role) const {
   if (orientation != Qt::Horizontal) {
-    return QVariant();
+    return {};
   }
   switch (role) {
     case Qt::DisplayRole:
@@ -353,24 +362,24 @@ QVariant CallTreeViewItemModel::headerData(int section, Qt::Orientation orientat
       }
     } break;
   }
-  return QVariant();
+  return {};
 }
 
 QModelIndex CallTreeViewItemModel::index(int row, int column, const QModelIndex& parent) const {
   if (!hasIndex(row, column, parent)) {
-    return QModelIndex();
+    return {};
   }
 
-  CallTreeNode* parent_item;
+  const CallTreeNode* parent_item = nullptr;
   if (!parent.isValid()) {
-    parent_item = call_tree_view_.get();
+    parent_item = call_tree_view_->GetCallTreeRoot();
   } else {
     parent_item = static_cast<CallTreeNode*>(parent.internalPointer());
   }
 
   const std::vector<const CallTreeNode*>& siblings = parent_item->children();
   if (row < 0 || static_cast<size_t>(row) >= siblings.size()) {
-    return QModelIndex();
+    return {};
   }
   const CallTreeNode* item = siblings[row];
   return createIndex(row, column, const_cast<CallTreeNode*>(item));
@@ -378,13 +387,13 @@ QModelIndex CallTreeViewItemModel::index(int row, int column, const QModelIndex&
 
 QModelIndex CallTreeViewItemModel::parent(const QModelIndex& index) const {
   if (!index.isValid()) {
-    return QModelIndex();
+    return {};
   }
 
   auto* child_item = static_cast<CallTreeNode*>(index.internalPointer());
   const CallTreeNode* item = child_item->parent();
-  if (item == call_tree_view_.get()) {
-    return QModelIndex();
+  if (item == call_tree_view_->GetCallTreeRoot()) {
+    return {};
   }
 
   const CallTreeNode* parent_item = item->parent();
@@ -403,7 +412,7 @@ int CallTreeViewItemModel::rowCount(const QModelIndex& parent) const {
     return 0;
   }
   if (!parent.isValid()) {
-    return call_tree_view_->child_count();
+    return call_tree_view_->GetCallTreeRoot()->child_count();
   }
   auto* item = static_cast<CallTreeNode*>(parent.internalPointer());
   return item->child_count();

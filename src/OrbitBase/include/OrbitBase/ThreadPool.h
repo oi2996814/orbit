@@ -8,9 +8,11 @@
 #include <absl/time/time.h>
 #include <stddef.h>
 
+#include <functional>
 #include <memory>
 #include <utility>
 
+#include "OrbitBase/Action.h"
 #include "OrbitBase/Executor.h"
 
 namespace orbit_base {
@@ -78,7 +80,7 @@ class ThreadPool : public orbit_base::Executor {
   static void InitializeDefaultThreadPool();
   // Set the default thread pool. This can only be called once and with a non-null thread pool,
   // before any call to "GetDefaultThreadPool()".
-  static void SetDefaultThreadPool(std::shared_ptr<ThreadPool> thread_pool);
+  static void SetDefaultThreadPool(const std::shared_ptr<ThreadPool>& thread_pool);
   // Get the default thread pool. Create one if none was set, as if we had called
   // "InitializeDefaultThreadPool()" explicitly.
   [[nodiscard]] static ThreadPool* GetDefaultThreadPool();

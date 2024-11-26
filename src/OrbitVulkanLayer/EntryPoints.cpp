@@ -3,8 +3,18 @@
 // found in the LICENSE file.
 
 #include <absl/base/casts.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
+#include <absl/types/span.h>
+#include <stdint.h>
+#include <string.h>
 #include <vulkan/vk_layer.h>
-#include <vulkan/vulkan.h>
+#include <vulkan/vk_platform.h>
+#include <vulkan/vulkan_core.h>
+
+#include <algorithm>
+#include <array>
+#include <vector>
 
 #include "DeviceManager.h"
 #include "DispatchTable.h"
@@ -110,8 +120,8 @@ VKAPI_ATTR VkResult VKAPI_CALL OrbitResetCommandBuffer(VkCommandBuffer command_b
 }
 
 VKAPI_ATTR void VKAPI_CALL OrbitGetDeviceQueue(VkDevice device, uint32_t queue_family_index,
-                                               uint32_t queue_index, VkQueue* pQueue) {
-  controller.OnGetDeviceQueue(device, queue_family_index, queue_index, pQueue);
+                                               uint32_t queue_index, VkQueue* p_queue) {
+  controller.OnGetDeviceQueue(device, queue_family_index, queue_index, p_queue);
 }
 
 VKAPI_ATTR void VKAPI_CALL OrbitGetDeviceQueue2(VkDevice device,

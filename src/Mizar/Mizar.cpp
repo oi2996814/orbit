@@ -2,16 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <absl/container/flat_hash_set.h>
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
+#include <absl/strings/string_view.h>
+#include <stdlib.h>
 
 #include <QApplication>
-#include <QMainWindow>
-#include <iostream>
+#include <QString>
+#include <atomic>
+#include <filesystem>
 #include <memory>
-#include <optional>
 #include <string>
+#include <tuple>
+#include <utility>
 
 #include "CaptureClient/LoadCapture.h"
 #include "CaptureFile/CaptureFile.h"
@@ -20,8 +23,10 @@
 #include "MizarBase/ThreadId.h"
 #include "MizarData/BaselineAndComparison.h"
 #include "MizarData/MizarData.h"
+#include "MizarData/MizarDataProvider.h"
 #include "MizarWidgets/MizarMainWindow.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 
 using ::orbit_client_data::ScopeId;
 using ::orbit_mizar_base::Baseline;
@@ -42,10 +47,10 @@ using ::orbit_mizar_base::TID;
 ABSL_FLAG(std::string, baseline_path, "", "The path to the baseline capture file");
 ABSL_FLAG(std::string, comparison_path, "", "The path to the comparison capture file");
 
-static std::string ExpandPathHomeFolder(const std::string& path) {
-  const std::string kHomeForderEnvVariable = "HOME";
-  if (path[0] == '~') return getenv(kHomeForderEnvVariable.c_str()) + path.substr(1);
-  return path;
+static std::string ExpandPathHomeFolder(std::string_view path) {
+  constexpr const char* kHomeForderEnvVariable = "HOME";
+  if (path[0] == '~') return std::string{getenv(kHomeForderEnvVariable)}.append(path.substr(1));
+  return std::string{path};
 }
 
 [[nodiscard]] static QString MakeFileName(const std::filesystem::path& path) {

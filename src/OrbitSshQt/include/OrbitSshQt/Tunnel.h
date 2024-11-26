@@ -17,6 +17,7 @@
 #include <string>
 #include <system_error>
 
+#include "OrbitBase/Future.h"
 #include "OrbitBase/Result.h"
 #include "OrbitSsh/Channel.h"
 #include "OrbitSshQt/ScopedConnection.h"
@@ -26,18 +27,18 @@
 namespace orbit_ssh_qt {
 namespace details {
 enum class TunnelState {
-  kInitial,
+  kInitialized,
   kNoChannel,
   kChannelInitialized,
   kStarted,
   kServerListening,
-  kShutdown,
+  kStopping,
   kFlushing,
   kSendEOF,
   kWaitRemoteEOF,
   kClosingChannel,
   kWaitRemoteClosed,
-  kDone,
+  kStopped,
   kError
 };
 }  // namespace details
@@ -60,13 +61,15 @@ class Tunnel : public StateMachineHelper<Tunnel, details::TunnelState> {
   explicit Tunnel(Session* session, std::string remote_host, uint16_t remote_port,
                   QObject* parent = nullptr);
 
-  void Start();
-  void Stop();
+  orbit_base::Future<ErrorMessageOr<void>> Start();
+  orbit_base::Future<ErrorMessageOr<void>> Stop();
 
-  uint16_t GetListenPort() const { return local_server_ ? local_server_->serverPort() : 0; }
+  [[nodiscard]] uint16_t GetListenPort() const {
+    return local_server_ ? local_server_->serverPort() : 0;
+  }
 
  signals:
-  void tunnelOpened(uint16_t listen_port);
+  void tunnelOpened(int listen_port);
   void started();
   void stopped();
   void errorOccurred(std::error_code);

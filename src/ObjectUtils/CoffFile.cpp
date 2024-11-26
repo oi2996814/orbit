@@ -6,19 +6,44 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+#include <absl/meta/type_traits.h>
+#include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/StringRef.h>
+#include <llvm/ADT/iterator.h>
+#include <llvm/ADT/iterator_range.h>
+#include <llvm/BinaryFormat/COFF.h>
+#include <llvm/DebugInfo/DIContext.h>
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
+#include <llvm/DebugInfo/DWARF/DWARFDie.h>
+#include <llvm/DebugInfo/DWARF/DWARFUnit.h>
 #include <llvm/Demangle/Demangle.h>
 #include <llvm/Object/Binary.h>
 #include <llvm/Object/COFF.h>
 #include <llvm/Object/CVDebugRecord.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/Object/SymbolicFile.h>
+#include <llvm/Support/Casting.h>
+#include <llvm/Support/Endian.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/Win64EH.h>
+
+#include <algorithm>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "GrpcProtos/module.pb.h"
 #include "GrpcProtos/symbol.pb.h"
 #include "Introspection/Introspection.h"
+#include "ObjectUtils/SymbolsFile.h"
 #include "ObjectUtils/WindowsBuildIdUtils.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
@@ -88,9 +113,9 @@ class CoffFileImpl : public CoffFile {
 
 CoffFileImpl::CoffFileImpl(std::filesystem::path file_path,
                            llvm::object::OwningBinary<llvm::object::ObjectFile>&& owning_binary)
-    : file_path_(std::move(file_path)), owning_binary_(std::move(owning_binary)) {
-  object_file_ = llvm::dyn_cast<llvm::object::COFFObjectFile>(owning_binary_.getBinary());
-
+    : file_path_(std::move(file_path)),
+      owning_binary_(std::move(owning_binary)),
+      object_file_(llvm::dyn_cast<llvm::object::COFFObjectFile>(owning_binary_.getBinary())) {
   for (const llvm::object::SectionRef& section_ref : object_file_->sections()) {
     const llvm::object::coff_section* coff_section = object_file_->getCOFFSection(section_ref);
     ModuleInfo::ObjectSegment& object_segment = sections_.emplace_back();
@@ -148,6 +173,9 @@ std::optional<SymbolInfo> CoffFileImpl::CreateSymbolInfo(
   // that the size is unknown for now and try to deduce it later. We will later use that placeholder
   // in DeduceDebugSymbolMissingSizesAsDistanceFromNextSymbol.
   symbol_info.set_size(kUnknownSymbolSize);
+
+  // We currently only support hotpatchable functions in elf files.
+  symbol_info.set_is_hotpatchable(false);
 
   return symbol_info;
 }
@@ -269,6 +297,8 @@ void CoffFileImpl::AddNewDebugSymbolsFromDwarf(llvm::DWARFContext* dwarf_context
       symbol_info.set_demangled_name(llvm::demangle(name));
       symbol_info.set_address(low_pc);
       symbol_info.set_size(high_pc - low_pc);
+      // We currently only support hotpatchable functions in elf files.
+      symbol_info.set_is_hotpatchable(false);
     }
   }
 
@@ -457,6 +487,9 @@ ErrorMessageOr<ModuleSymbols> CoffFileImpl::LoadSymbolsFromExportTableInternal(
     } else {
       symbol_info.set_size(unwind_range_start_to_size_it->second);
     }
+
+    // We currently only support hotpatchable functions in elf files.
+    symbol_info.set_is_hotpatchable(false);
 
     *module_symbols.add_symbol_infos() = std::move(symbol_info);
   }
@@ -679,6 +712,8 @@ ErrorMessageOr<ModuleSymbols> CoffFileImpl::LoadExceptionTableEntriesAsSymbolsIn
     symbol_info->set_demangled_name(absl::StrFormat("[function@%#x]", unwind_range.start));
     symbol_info->set_address(unwind_range.start);
     symbol_info->set_size(unwind_range.end - unwind_range.start);
+    // We currently only support hotpatchable functions in elf files.
+    symbol_info->set_is_hotpatchable(false);
   }
 
   if (module_symbols.symbol_infos().empty()) {
@@ -826,8 +861,7 @@ ErrorMessageOr<std::unique_ptr<CoffFile>> CreateCoffFile(
     const std::filesystem::path& file_path,
     llvm::object::OwningBinary<llvm::object::ObjectFile>&& file) {
   ORBIT_SCOPE_FUNCTION;
-  llvm::object::COFFObjectFile* coff_object_file =
-      llvm::dyn_cast<llvm::object::COFFObjectFile>(file.getBinary());
+  auto* coff_object_file = llvm::dyn_cast<llvm::object::COFFObjectFile>(file.getBinary());
   if (coff_object_file == nullptr) {
     return ErrorMessage(absl::StrFormat("Unable to load object file \"%s\":", file_path.string()));
   }

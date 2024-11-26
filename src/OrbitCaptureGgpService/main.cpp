@@ -2,19 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stdint.h>
+#include <absl/flags/flag.h>
+#include <absl/flags/parse.h>
+#include <absl/flags/usage.h>
+#include <absl/flags/usage_config.h>
+#include <absl/strings/string_view.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include "OrbitBase/Logging.h"
 #include "OrbitCaptureGgpService.h"
 #include "OrbitVersion/OrbitVersion.h"
-#include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
-#include "absl/flags/usage_config.h"
 
 ABSL_FLAG(uint16_t, grpc_port, 44767, "gRPC server port for capture ggp service");
 ABSL_FLAG(uint16_t, orbit_service_grpc_port, 44765, "gRPC server port for OrbitService");
@@ -34,7 +37,7 @@ ABSL_FLAG(uint64_t, max_local_marker_depth_per_command_buffer, std::numeric_limi
 
 namespace {
 
-std::string GetLogFilePath(const std::string& log_directory) {
+std::string GetLogFilePath(std::string_view log_directory) {
   std::filesystem::path log_directory_path{log_directory};
   std::filesystem::create_directory(log_directory_path);
   const std::string log_file_path = log_directory_path / "OrbitCaptureGgpService.log";
@@ -58,7 +61,7 @@ int main(int argc, char** argv) {
     orbit_base::InitLogFile(GetLogFilePath(log_directory));
   }
 
-  if (!absl::GetFlag(FLAGS_pid)) {
+  if (absl::GetFlag(FLAGS_pid) == 0) {
     ORBIT_FATAL("pid to capture not provided; set using -pid");
   }
 

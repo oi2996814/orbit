@@ -3,26 +3,32 @@
 // found in the LICENSE file.
 
 #include <absl/base/casts.h>
-#include <absl/strings/match.h>
+#include <absl/strings/numbers.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
 #include <dlfcn.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/prctl.h>
-#include <sys/sysmacros.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
-#include <charconv>
 #include <chrono>
 #include <csignal>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "AllocateInTracee.h"
 #include "ExecuteMachineCode.h"
 #include "GetTestLibLibraryPath.h"
+#include "GrpcProtos/module.pb.h"
 #include "MachineCode.h"
 #include "ModuleUtils/ReadLinuxModules.h"
 #include "OrbitBase/Logging.h"
@@ -36,7 +42,7 @@ namespace orbit_user_space_instrumentation {
 
 namespace {
 
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasNoError;
 using testing::Eq;
 
@@ -65,9 +71,9 @@ ErrorMessageOr<bool> IsInodeInMapsFile(ino_t inode, pid_t pid) {
   return false;
 }
 
-ErrorMessageOr<ino_t> GetInodeFromFilePath(const std::string& file_path) {
+ErrorMessageOr<ino_t> GetInodeFromFilePath(const std::filesystem::path& file_path) {
   struct stat stat_buf {};
-  if (stat(file_path.c_str(), &stat_buf) != 0) {
+  if (stat(file_path.string().c_str(), &stat_buf) != 0) {
     return ErrorMessage{absl::StrFormat("Failed to obtain inode of '%s'", file_path)};
   }
   return stat_buf.st_ino;
@@ -81,7 +87,7 @@ void OpenUseAndCloseLibrary(pid_t pid) {
   ASSERT_THAT(library_path_or_error, HasNoError());
   std::filesystem::path library_path = std::move(library_path_or_error.value());
 
-  ErrorMessageOr<ino_t> inode_of_library = GetInodeFromFilePath(library_path);
+  ErrorMessageOr<ino_t> inode_of_library = GetInodeFromFilePath(library_path.string());
   ASSERT_THAT(inode_of_library, HasNoError());
 
   // Tracee does not have the dynamic lib loaded, obviously.
@@ -92,7 +98,8 @@ void OpenUseAndCloseLibrary(pid_t pid) {
   ASSERT_THAT(modules_or_error, orbit_test_utils::HasNoError());
   const std::vector<orbit_grpc_protos::ModuleInfo>& modules = modules_or_error.value();
 
-  auto library_handle_or_error = DlopenInTracee(pid, modules, library_path, RTLD_NOW);
+  auto library_handle_or_error =
+      DlmopenInTracee(pid, modules, library_path, RTLD_NOW, LinkerNamespace::kCreateNewNamespace);
   ASSERT_TRUE(library_handle_or_error.has_value());
 
   // Tracee now does have the dynamic lib loaded.
@@ -103,7 +110,7 @@ void OpenUseAndCloseLibrary(pid_t pid) {
   auto dlsym_or_error =
       DlsymInTracee(pid, modules, library_handle_or_error.value(), "TrivialFunction");
   ASSERT_TRUE(dlsym_or_error.has_value());
-  const uint64_t function_address = absl::bit_cast<uint64_t>(dlsym_or_error.value());
+  const auto function_address = absl::bit_cast<uint64_t>(dlsym_or_error.value());
 
   {
     // Write machine code to call "TrivialFunction" from the dynamic lib.
@@ -209,9 +216,10 @@ TEST(InjectLibraryInTraceeTest, NonExistingLibrary) {
   const std::vector<orbit_grpc_protos::ModuleInfo>& modules = modules_or_error.value();
 
   // Try to load non existing dynamic lib into tracee.
-  const std::string kNonExistingLibName = "libNotFound.so";
-  auto library_handle_or_error = DlopenInTracee(pid, modules, kNonExistingLibName, RTLD_NOW);
-  ASSERT_THAT(library_handle_or_error, HasError("Library does not exist at"));
+  const std::string non_existing_lib_name = "libNotFound.so";
+  auto library_handle_or_error = DlmopenInTracee(pid, modules, non_existing_lib_name, RTLD_NOW,
+                                                 LinkerNamespace::kCreateNewNamespace);
+  ASSERT_THAT(library_handle_or_error, HasErrorWithMessage("Library does not exist at"));
 
   // Continue child process.
   ORBIT_CHECK(!DetachAndContinueProcess(pid).has_error());

@@ -6,7 +6,9 @@
 
 #include <absl/synchronization/mutex.h>
 
+#include <algorithm>
 #include <memory>
+#include <utility>
 
 namespace orbit_base {
 void SimpleExecutor::ScheduleImpl(std::unique_ptr<Action> action) {
@@ -27,10 +29,5 @@ void SimpleExecutor::ExecuteScheduledTasks() {
     }
     scheduled_tasks_.pop_front();
   }
-}
-
-std::shared_ptr<SimpleExecutor> SimpleExecutor::Create() {
-  // NOLINTNEXTLINE
-  return std::shared_ptr<SimpleExecutor>{new SimpleExecutor{}};
 }
 }  // namespace orbit_base

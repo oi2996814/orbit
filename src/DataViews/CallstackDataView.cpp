@@ -4,21 +4,26 @@
 
 #include "DataViews/CallstackDataView.h"
 
-#include <absl/flags/declare.h>
-#include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
+#include <absl/strings/ascii.h>
+#include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
+#include <absl/types/span.h>
 #include <stddef.h>
+#include <stdint.h>
 
-#include <cstdint>
+#include <algorithm>
+#include <array>
 #include <filesystem>
+#include <functional>
 
 #include "ClientData/CaptureData.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
+#include "ClientData/ModuleManager.h"
 #include "DataViews/DataViewType.h"
 #include "DataViews/FunctionsDataView.h"
-#include "OrbitBase/Append.h"
 #include "OrbitBase/Logging.h"
 
 using orbit_client_data::CallstackInfo;
@@ -32,7 +37,7 @@ namespace orbit_data_views {
 CallstackDataView::CallstackDataView(AppInterface* app) : DataView(DataViewType::kCallstack, app) {}
 
 const std::vector<DataView::Column>& CallstackDataView::GetColumns() {
-  static const std::vector<Column> columns = [] {
+  static const std::vector<Column> kColumns = [] {
     std::vector<Column> columns;
     columns.resize(kNumColumns);
     columns[kColumnSelected] = {"Hooked", .0f, SortingOrder::kDescending};
@@ -42,7 +47,7 @@ const std::vector<DataView::Column>& CallstackDataView::GetColumns() {
     columns[kColumnAddress] = {"Sampled Address", .0f, SortingOrder::kAscending};
     return columns;
   }();
-  return columns;
+  return kColumns;
 }
 
 std::string CallstackDataView::GetValue(int row, int column) {
@@ -98,17 +103,17 @@ std::string CallstackDataView::GetToolTip(int row, int column) {
     return absl::StrFormat(
         "%s\n\nFunctions marked with %s are part of the selection in the sampling report above",
         function_name, CallstackDataView::kHighlightedFunctionString);
-  } else {
-    return function_name;
   }
+  return function_name;
 }
 
 const std::string CallstackDataView::kHighlightedFunctionString = "➜ ";
 const std::string CallstackDataView::kHighlightedFunctionBlankString =
     std::string(kHighlightedFunctionString.size(), ' ');
 
-DataView::ActionStatus CallstackDataView::GetActionStatus(
-    std::string_view action, int clicked_index, const std::vector<int>& selected_indices) {
+DataView::ActionStatus CallstackDataView::GetActionStatus(std::string_view action,
+                                                          int clicked_index,
+                                                          absl::Span<const int> selected_indices) {
   bool is_capture_connected = app_->IsCaptureConnected(app_->GetCaptureData());
   if (!is_capture_connected &&
       (action == kMenuActionSelect || action == kMenuActionUnselect ||
@@ -247,11 +252,11 @@ CallstackDataView::CallstackDataViewFrame CallstackDataView::GetFrameFromIndex(
       orbit_client_data::FindModuleByAddress(*capture_data.process(), *module_manager, address);
 
   if (function != nullptr) {
-    return CallstackDataViewFrame(address, function, module);
+    return {address, function, module};
   }
   const std::string& fallback_name =
       orbit_client_data::GetFunctionNameByAddress(*module_manager, capture_data, address);
-  return CallstackDataViewFrame(address, fallback_name, module);
+  return {address, fallback_name, module};
 }
 
 }  // namespace orbit_data_views

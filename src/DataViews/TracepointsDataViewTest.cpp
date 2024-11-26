@@ -2,14 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/strings/str_format.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "DataViewTestUtils.h"
 #include "DataViews/DataView.h"
 #include "DataViews/TracepointsDataView.h"
 #include "GrpcProtos/tracepoint.pb.h"
 #include "MockAppInterface.h"
+#include "OrbitBase/Logging.h"
 
 using orbit_data_views::CheckCopySelectionIsInvoked;
 using orbit_data_views::CheckExportToCsvIsInvoked;
@@ -54,7 +65,7 @@ class TracepointsDataViewTest : public testing::Test {
     }
   }
 
-  void SetTracepointsByIndices(const std::vector<size_t>& indices) {
+  void SetTracepointsByIndices(absl::Span<const size_t> indices) {
     std::vector<TracepointInfo> tracepoints_to_add;
     for (size_t index : indices) {
       ORBIT_CHECK(index < kNumTracepoints);
@@ -114,7 +125,7 @@ TEST_F(TracepointsDataViewTest, ContextMenuEntriesArePresentCorrectly) {
         return tracepoints_selected.at(index.value());
       });
 
-  auto verify_context_menu_action_availability = [&](const std::vector<int>& selected_indices) {
+  auto verify_context_menu_action_availability = [&](absl::Span<const int> selected_indices) {
     FlattenContextMenu context_menu = FlattenContextMenuWithGroupingAndCheckOrder(
         view_.GetContextMenuWithGrouping(0, selected_indices));
 

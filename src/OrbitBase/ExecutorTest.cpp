@@ -5,17 +5,28 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "OrbitBase/Action.h"
 #include "OrbitBase/Executor.h"
+#include "OrbitBase/Future.h"
+#include "OrbitBase/Promise.h"
+#include "OrbitBase/Result.h"
 
 namespace {
 class MockExecutor : public orbit_base::Executor {
  public:
   MOCK_METHOD(void, ScheduleImpl, (std::unique_ptr<Action> action), (override));
 
-  [[nodiscard]] static std::shared_ptr<MockExecutor> Create() {
-    return std::make_shared<MockExecutor>();
-  }
+  [[nodiscard]] Handle GetExecutorHandle() const override { return handle_.Get(); }
+
+ private:
+  ScopedHandle handle_{this};
 };
 
 // Since testing::SaveArg can't deal with move-only arguments we define our own helper here.
@@ -23,17 +34,26 @@ template <typename T>
 auto SaveUniquePtr(std::unique_ptr<T>* destination) {
   return [destination](std::unique_ptr<T> arg) { *destination = std::move(arg); };
 }
+
+// This is an error type - similar to ErrorMessage. We are not using ErrorMessage to make sure the
+// logic works with some unknown generic error type.
+struct ArbitraryError {
+  std::string message;
+};
+
+template <typename T>
+using ArbitraryErrorOr = Result<T, ArbitraryError>;
 }  // namespace
 
 namespace orbit_base {
 
 TEST(Executor, ScheduledTaskShouldBeCalledSimpleWithVoid) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
   bool called = false;
-  auto future = executor->Schedule([&called]() { called = true; });
+  auto future = executor.Schedule([&called]() { called = true; });
   ASSERT_NE(action, nullptr);
   EXPECT_FALSE(called);
   EXPECT_FALSE(future.IsFinished());
@@ -43,12 +63,12 @@ TEST(Executor, ScheduledTaskShouldBeCalledSimpleWithVoid) {
 }
 
 TEST(Executor, ScheduledTaskShouldBeCalledSimpleWithInt) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
   bool called = false;
-  auto future = executor->Schedule([&called]() {
+  auto future = executor.Schedule([&called]() {
     called = true;
     return 42;
   });
@@ -62,13 +82,13 @@ TEST(Executor, ScheduledTaskShouldBeCalledSimpleWithInt) {
 }
 
 TEST(Executor, ChainedTaskedShouldBeCalledSimple) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
   Promise<void> promise{};
   auto future = promise.GetFuture();
-  auto chained_future = executor->ScheduleAfter(future, []() {});
+  auto chained_future = executor.ScheduleAfter(future, []() {});
   EXPECT_EQ(action, nullptr);
   EXPECT_FALSE(chained_future.IsFinished());
 
@@ -79,60 +99,60 @@ TEST(Executor, ChainedTaskedShouldBeCalledSimple) {
 }
 
 TEST(Executor, ScheduleAfterIfSuccessShortCircuitOnErrorVoid) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
-  Promise<ErrorMessageOr<void>> promise{};
+  Promise<ArbitraryErrorOr<void>> promise{};
   auto future = promise.GetFuture();
-  auto chained_future = executor->ScheduleAfterIfSuccess(future, []() {});
+  auto chained_future = executor.ScheduleAfterIfSuccess(future, []() {});
   EXPECT_FALSE(chained_future.IsFinished());
 
   constexpr const char* const kErrorMessage{"Error"};
-  promise.SetResult(ErrorMessage{kErrorMessage});
+  promise.SetResult(ArbitraryError{kErrorMessage});
   ASSERT_TRUE(chained_future.IsFinished());
   EXPECT_TRUE(chained_future.Get().has_error());
-  EXPECT_EQ(chained_future.Get().error().message(), kErrorMessage);
+  EXPECT_EQ(chained_future.Get().error().message, kErrorMessage);
 
-  EXPECT_EQ(executor->GetNumberOfWaitingContinuations(), 1);
+  EXPECT_EQ(executor.GetNumberOfWaitingContinuations(), 1);
   ASSERT_NE(action, nullptr);
   action->Execute();
-  EXPECT_EQ(executor->GetNumberOfWaitingContinuations(), 0);
+  EXPECT_EQ(executor.GetNumberOfWaitingContinuations(), 0);
 }
 
 TEST(Executor, ScheduleAfterIfSuccessShortCircuitOnErrorInt) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
-  Promise<ErrorMessageOr<int>> promise{};
+  Promise<ArbitraryErrorOr<int>> promise{};
   auto future = promise.GetFuture();
-  auto chained_future = executor->ScheduleAfterIfSuccess(future, [](int value) {
+  auto chained_future = executor.ScheduleAfterIfSuccess(future, [](int value) {
     EXPECT_EQ(value, 42);
     return 1 + value;
   });
   EXPECT_FALSE(chained_future.IsFinished());
 
   constexpr const char* const kErrorMessage{"Error"};
-  promise.SetResult(ErrorMessage{kErrorMessage});
+  promise.SetResult(ArbitraryError{kErrorMessage});
   ASSERT_TRUE(chained_future.IsFinished());
   EXPECT_TRUE(chained_future.Get().has_error());
-  EXPECT_EQ(chained_future.Get().error().message(), kErrorMessage);
+  EXPECT_EQ(chained_future.Get().error().message, kErrorMessage);
 
-  EXPECT_EQ(executor->GetNumberOfWaitingContinuations(), 1);
+  EXPECT_EQ(executor.GetNumberOfWaitingContinuations(), 1);
   ASSERT_NE(action, nullptr);
   action->Execute();
-  EXPECT_EQ(executor->GetNumberOfWaitingContinuations(), 0);
+  EXPECT_EQ(executor.GetNumberOfWaitingContinuations(), 0);
 }
 
 TEST(Executor, ScheduleAfterIfSuccessCallOnSuccessVoid) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
-  Promise<ErrorMessageOr<void>> promise{};
+  Promise<ArbitraryErrorOr<void>> promise{};
   auto future = promise.GetFuture();
-  auto chained_future = executor->ScheduleAfterIfSuccess(future, []() {});
+  auto chained_future = executor.ScheduleAfterIfSuccess(future, []() {});
   EXPECT_EQ(action, nullptr);
   EXPECT_FALSE(chained_future.IsFinished());
 
@@ -144,13 +164,13 @@ TEST(Executor, ScheduleAfterIfSuccessCallOnSuccessVoid) {
 }
 
 TEST(Executor, ScheduleAfterIfSuccessCallOnSuccessInt) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
-  Promise<ErrorMessageOr<int>> promise{};
+  Promise<ArbitraryErrorOr<int>> promise{};
   auto future = promise.GetFuture();
-  auto chained_future = executor->ScheduleAfterIfSuccess(future, [](int value) {
+  auto chained_future = executor.ScheduleAfterIfSuccess(future, [](int value) {
     EXPECT_EQ(value, 42);
     return 1 + value;
   });
@@ -169,23 +189,26 @@ TEST(Executor, ScheduleAfterIfSuccessCallOnSuccessInt) {
 }
 
 TEST(Executor, TryScheduleFailing) {
-  std::weak_ptr<Executor> executor{};
+  // The executor constructed by `MockExecutor::Create()` is a temporary, so it will go out of scope
+  // after this line and the handle will become invalid - just what we want for this test.
+  Executor::Handle handle = MockExecutor{}.GetExecutorHandle();
 
   bool called = false;
   std::optional<orbit_base::Future<void>> result =
-      TrySchedule(executor, [&called]() { called = true; });
+      TrySchedule(handle, [&called]() { called = true; });
 
   EXPECT_FALSE(result.has_value());
   EXPECT_FALSE(called);
 }
 
 TEST(Executor, TrySchedule) {
-  auto executor = MockExecutor::Create();
+  MockExecutor executor{};
   std::unique_ptr<Action> action;
-  EXPECT_CALL(*executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
+  EXPECT_CALL(executor, ScheduleImpl(testing::_)).Times(1).WillOnce(SaveUniquePtr(&action));
 
   bool called = false;
-  auto future_or_nullopt = TrySchedule(executor->weak_from_this(), [&called]() { called = true; });
+  auto future_or_nullopt =
+      TrySchedule(executor.GetExecutorHandle(), [&called]() { called = true; });
   ASSERT_TRUE(future_or_nullopt.has_value());
   EXPECT_FALSE(future_or_nullopt->IsFinished());
 

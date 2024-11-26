@@ -2,7 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "AnnotationTrack.h"
+#include "OrbitGl/AnnotationTrack.h"
+
+#include <GteVector.h>
+
+#include <memory>
+
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/PickingManager.h"
 
 namespace {
 

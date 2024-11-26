@@ -2,13 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <signal.h>
+#include <stdlib.h>
 #include <sys/ptrace.h>
-#include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
+
+#include <array>
+#include <cstdint>
+#include <memory>
 
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 #include "RegisterState.h"
 #include "TestUtils/TestUtils.h"
 
@@ -16,7 +23,7 @@ namespace orbit_user_space_instrumentation {
 
 namespace {
 
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 
 // Let the parent trace us, write into rax and ymm0, then enter a breakpoint. While the child is
 // stopped the parent modifies the registers and continues the child. The child then reads back the
@@ -26,7 +33,7 @@ void Child() {
   ORBIT_CHECK(ptrace(PTRACE_TRACEME, 0, nullptr, 0) != -1);
 
   uint64_t rax = 0xaabbccdd;
-  std::array<uint8_t, 32> avx_bytes;
+  std::array<uint8_t, 32> avx_bytes{};
   for (size_t i = 0; i < avx_bytes.size(); ++i) {
     avx_bytes[i] = i;
   }
@@ -103,8 +110,10 @@ TEST(RegisterStateTest, BackupModifyRestore) {
   EXPECT_EQ(WEXITSTATUS(status), 0);
 
   // After the process exited we get errors when backing up / restoring registers.
-  EXPECT_THAT(state.RestoreRegisters(), HasError("PTRACE_SETREGSET failed to write NT_PRSTATUS"));
-  EXPECT_THAT(state.BackupRegisters(pid), HasError("PTRACE_GETREGS, NT_PRSTATUS failed"));
+  EXPECT_THAT(state.RestoreRegisters(),
+              HasErrorWithMessage("PTRACE_SETREGSET failed to write NT_PRSTATUS"));
+  EXPECT_THAT(state.BackupRegisters(pid),
+              HasErrorWithMessage("PTRACE_GETREGS, NT_PRSTATUS failed"));
 }
 
 }  // namespace orbit_user_space_instrumentation

@@ -5,14 +5,18 @@
 #ifndef SESSION_SETUP_TARGET_LABEL_H_
 #define SESSION_SETUP_TARGET_LABEL_H_
 
+#include <QColor>
 #include <QObject>
+#include <QString>
 #include <QWidget>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 
 #include "ClientData/ProcessData.h"
-#include "OrbitGgp/Instance.h"
+#include "GrpcProtos/process.pb.h"
 #include "TargetConfiguration.h"
 
 namespace Ui {
@@ -30,11 +34,11 @@ class TargetLabel : public QWidget {
 
   void ChangeToFileTarget(const FileTarget& file_target);
   void ChangeToFileTarget(const std::filesystem::path& path);
-  void ChangeToStadiaTarget(const StadiaTarget& stadia_target);
-  void ChangeToStadiaTarget(const orbit_client_data::ProcessData& process,
-                            const orbit_ggp::Instance& instance);
+  void ChangeToSshTarget(const SshTarget& ssh_target);
+  void ChangeToSshTarget(const orbit_grpc_protos::ProcessInfo& process,
+                         std::string_view ssh_target_id);
   void ChangeToLocalTarget(const LocalTarget& local_target);
-  void ChangeToLocalTarget(const orbit_client_data::ProcessData& process);
+  void ChangeToLocalTarget(const orbit_grpc_protos::ProcessInfo& process_info);
   void ChangeToLocalTarget(const QString& process_name, double cpu_usage);
 
   bool SetProcessCpuUsageInPercent(double cpu_usage);

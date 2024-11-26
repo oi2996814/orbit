@@ -9,6 +9,7 @@
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/synchronization/mutex.h>
+#include <absl/types/span.h>
 #include <linux/perf_event.h>
 #include <sys/types.h>
 
@@ -16,8 +17,10 @@
 #include <atomic>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include "GpuTracepointVisitor.h"
@@ -65,19 +68,19 @@ class TracerImpl : public Tracer {
   void Shutdown();
   void ProcessOneRecord(PerfEventRingBuffer* ring_buffer);
   void InitUprobesEventVisitor();
-  bool OpenUserSpaceProbes(const std::vector<int32_t>& cpus);
-  bool OpenUprobesToRecordAdditionalStackOn(const std::vector<int32_t>& cpus);
-  bool OpenUprobes(const orbit_grpc_protos::InstrumentedFunction& function,
-                   const std::vector<int32_t>& cpus,
-                   absl::flat_hash_map<int32_t, int>* fds_per_cpu);
-  bool OpenUprobesWithStack(const orbit_grpc_protos::FunctionToRecordAdditionalStackOn& function,
-                            const std::vector<int32_t>& cpus,
-                            absl::flat_hash_map<int32_t, int>* fds_per_cpu);
-  bool OpenUretprobes(const orbit_grpc_protos::InstrumentedFunction& function,
-                      const std::vector<int32_t>& cpus,
-                      absl::flat_hash_map<int32_t, int>* fds_per_cpu);
-  bool OpenMmapTask(const std::vector<int32_t>& cpus);
-  bool OpenSampling(const std::vector<int32_t>& cpus);
+  [[nodiscard]] bool OpenUserSpaceProbes(absl::Span<const int32_t> cpus);
+  [[nodiscard]] bool OpenUprobesToRecordAdditionalStackOn(absl::Span<const int32_t> cpus);
+  [[nodiscard]] static bool OpenUprobes(const orbit_grpc_protos::InstrumentedFunction& function,
+                                        absl::Span<const int32_t> cpus,
+                                        absl::flat_hash_map<int32_t, int>* fds_per_cpu);
+  [[nodiscard]] bool OpenUprobesWithStack(
+      const orbit_grpc_protos::FunctionToRecordAdditionalStackOn& function,
+      absl::Span<const int32_t> cpus, absl::flat_hash_map<int32_t, int>* fds_per_cpu) const;
+  [[nodiscard]] static bool OpenUretprobes(const orbit_grpc_protos::InstrumentedFunction& function,
+                                           absl::Span<const int32_t> cpus,
+                                           absl::flat_hash_map<int32_t, int>* fds_per_cpu);
+  [[nodiscard]] bool OpenMmapTask(absl::Span<const int32_t> cpus);
+  [[nodiscard]] bool OpenSampling(absl::Span<const int32_t> cpus);
 
   void AddUprobesFileDescriptors(const absl::flat_hash_map<int32_t, int>& uprobes_fds_per_cpu,
                                  const orbit_grpc_protos::InstrumentedFunction& function);
@@ -85,14 +88,14 @@ class TracerImpl : public Tracer {
   void AddUretprobesFileDescriptors(const absl::flat_hash_map<int32_t, int>& uretprobes_fds_per_cpu,
                                     const orbit_grpc_protos::InstrumentedFunction& function);
 
-  bool OpenThreadNameTracepoints(const std::vector<int32_t>& cpus);
+  [[nodiscard]] bool OpenThreadNameTracepoints(absl::Span<const int32_t> cpus);
   void InitSwitchesStatesNamesVisitor();
-  bool OpenContextSwitchAndThreadStateTracepoints(const std::vector<int32_t>& cpus);
+  [[nodiscard]] bool OpenContextSwitchAndThreadStateTracepoints(absl::Span<const int32_t> cpus);
 
   void InitGpuTracepointEventVisitor();
-  bool OpenGpuTracepoints(const std::vector<int32_t>& cpus);
+  [[nodiscard]] bool OpenGpuTracepoints(absl::Span<const int32_t> cpus);
 
-  bool OpenInstrumentedTracepoints(const std::vector<int32_t>& cpus);
+  [[nodiscard]] bool OpenInstrumentedTracepoints(absl::Span<const int32_t> cpus);
 
   void InitLostAndDiscardedEventVisitor();
 
@@ -106,7 +109,7 @@ class TracerImpl : public Tracer {
                                                               PerfEventRingBuffer* ring_buffer);
   [[nodiscard]] uint64_t ProcessLostEventAndReturnTimestamp(const perf_event_header& header,
                                                             PerfEventRingBuffer* ring_buffer);
-  [[nodiscard]] uint64_t ProcessThrottleUnthrottleEventAndReturnTimestamp(
+  [[nodiscard]] static uint64_t ProcessThrottleUnthrottleEventAndReturnTimestamp(
       const perf_event_header& header, PerfEventRingBuffer* ring_buffer);
 
   void DeferEvent(PerfEvent&& event);
@@ -121,24 +124,23 @@ class TracerImpl : public Tracer {
 
   // Number of records to read consecutively from a perf_event_open ring buffer
   // before switching to another one.
-  static constexpr int32_t ROUND_ROBIN_POLLING_BATCH_SIZE = 5;
+  static constexpr int32_t kRoundRobinPollingBatchSize = 5;
 
   // These values are supposed to be large enough to accommodate enough events
   // in case TracerThread::Run's thread is not scheduled for a few tens of
   // milliseconds.
-  static constexpr uint64_t UPROBES_RING_BUFFER_SIZE_KB = 8 * 1024;
-  static constexpr uint64_t MMAP_TASK_RING_BUFFER_SIZE_KB = 64;
-  static constexpr uint64_t SAMPLING_RING_BUFFER_SIZE_KB = 16 * 1024;
-  static constexpr uint64_t THREAD_NAMES_RING_BUFFER_SIZE_KB = 64;
-  static constexpr uint64_t CONTEXT_SWITCHES_AND_THREAD_STATE_RING_BUFFER_SIZE_KB = 2 * 1024;
-  static constexpr uint64_t CONTEXT_SWITCHES_AND_THREAD_STATE_WITH_STACKS_RING_BUFFER_SIZE_KB =
-      64 * 1024;
-  static constexpr uint64_t GPU_TRACING_RING_BUFFER_SIZE_KB = 256;
-  static constexpr uint64_t INSTRUMENTED_TRACEPOINTS_RING_BUFFER_SIZE_KB = 8 * 1024;
-  static constexpr uint64_t UPROBES_WITH_STACK_RING_BUFFER_SIZE_KB = 64 * 1024;
+  static constexpr uint64_t kUprobesRingBufferSizeKb = 8 * 1024;
+  static constexpr uint64_t kMmapTaskRingBufferSizeKb = 64;
+  static constexpr uint64_t kSamplingRingBufferSizeKb = 16 * 1024;
+  static constexpr uint64_t kThreadNamesRingBufferSizeKb = 64;
+  static constexpr uint64_t kContextSwitchesAndThreadStateRingBufferSizeKb = 2 * 1024;
+  static constexpr uint64_t kContextSwitchesAndThreadStateWithStacksRingBufferSizeKb = 64 * 1024;
+  static constexpr uint64_t kGpuTracingRingBufferSizeKb = 256;
+  static constexpr uint64_t kInstrumentedTracepointsRingBufferSizeKb = 8 * 1024;
+  static constexpr uint64_t kUprobesWithStackRingBufferSizeKb = 64 * 1024;
 
-  static constexpr uint32_t IDLE_TIME_ON_EMPTY_RING_BUFFERS_US = 5000;
-  static constexpr uint32_t IDLE_TIME_ON_EMPTY_DEFERRED_EVENTS_US = 5000;
+  static constexpr uint32_t kIdleTimeOnEmptyRingBuffersUs = 5000;
+  static constexpr uint32_t kIdleTimeOnEmptyDeferredEventsUs = 5000;
 
   bool trace_context_switches_;
   bool introspection_enabled_;
@@ -164,7 +166,7 @@ class TracerImpl : public Tracer {
   std::atomic<bool> stop_run_thread_ = true;
   std::thread run_thread_;
 
-  std::vector<int> tracing_fds_;
+  absl::flat_hash_map<std::string, std::vector<int>> tracing_fds_by_type_;
   std::vector<PerfEventRingBuffer> ring_buffers_;
   absl::flat_hash_map<int, uint64_t> fds_to_last_timestamp_ns_;
 
@@ -240,10 +242,10 @@ class TracerImpl : public Tracer {
     std::atomic<uint64_t> thread_state_count = 0;
   };
 
-  static constexpr uint64_t EVENT_STATS_WINDOW_S = 5;
+  static constexpr uint64_t kEventStatsWindowS = 5;
   EventStats stats_{};
 
-  static constexpr uint64_t NS_PER_SECOND = 1'000'000'000;
+  static constexpr uint64_t kNsPerSecond = 1'000'000'000;
 };
 
 }  // namespace orbit_linux_tracing

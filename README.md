@@ -1,6 +1,11 @@
 # ORBIT
+![builds and tests](https://github.com/google/orbit/actions/workflows/build-and-test.yml/badge.svg?branch=main)
+![Debian package](https://github.com/google/orbit/actions/workflows/release.yml/badge.svg?branch=main)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/google/orbit/badge)](https://api.securityscorecards.dev/projects/github.com/google/orbit)
 
-<img alt="ORBIT Logo" src="logos/orbit_logo_simple.png" align="right" width="520" >
+<img alt="ORBIT Logo" src="contrib/logos/orbit_logo_simple.png" align="right" width="520" >
+
+**This project is not maintained by Google engineers anymore at this point.**
 
 Orbit, the **O**pen **R**untime **B**inary **I**nstrumentation **T**ool is a
 standalone **native** application profiler for Windows and Linux. It supports
@@ -53,14 +58,15 @@ Orbit's focus has shifted to the Linux version. Windows local profiling is
 currently only supported partially and major features, such as dynamic
 instrumentation, are not yet implemented. It is possible however to profile
 Linux executables from a Windows UI instance. For Windows local profiling,
-please use the released
-[binaries](https://github.com/google/orbit/releases).
+you can still use the released
+[binaries](https://github.com/google/orbit/releases), but please note that
+they are deprecated and mostly undocumented.
 
 ## Build
 
 Please have a look at the first three sections of our
 [development documentation](DEVELOPMENT.md). It describes how to build Orbit and
-what Compilers, Platforms, and Tools are supported and needed.
+which compilers, platforms, and tools are supported and needed.
 
 ## Workflow
 
@@ -100,9 +106,11 @@ Questions and comments are more than welcome: please open an
 
 ## About
 
-Orbit was created by [Pierric Gimmig](https://www.linkedin.com/in/pgimmig/), but
-is now developed and maintained by a team of engineers at Google. The current
-maintainers are:
+Orbit was created by [Pierric Gimmig](https://www.linkedin.com/in/pgimmig/). It was 
+further developed and maintained by a team of engineers at Google. As of now, the 
+project is however not being maintained by Google engineers anymore. 
+
+The following people worked on Orbit: 
 * [@akopich](https://github.com/akopich)
 * [@antonrohr](https://github.com/antonrohr)
 * [@beckerhe](https://github.com/beckerhe)
@@ -153,4 +161,4 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 
-[orbit_youtube_presentation]: logos/orbit_presentation_youtube.png
+[orbit_youtube_presentation]: contrib/logos/orbit_presentation_youtube.png

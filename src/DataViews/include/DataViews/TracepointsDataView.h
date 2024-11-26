@@ -5,10 +5,12 @@
 #ifndef DATA_VIEWS_TRACEPOINTS_DATA_VIEW_H_
 #define DATA_VIEWS_TRACEPOINTS_DATA_VIEW_H_
 
+#include <absl/types/span.h>
 #include <stdint.h>
 
 #include <deque>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "DataViews/AppInterface.h"
@@ -25,14 +27,14 @@ class TracepointsDataView : public DataView {
   int GetDefaultSortingColumn() override { return kColumnCategory; }
   std::string GetValue(int row, int column) override;
 
-  void OnSelectRequested(const std::vector<int>& selection) override;
-  void OnUnselectRequested(const std::vector<int>& selection) override;
+  void OnSelectRequested(absl::Span<const int> selection) override;
+  void OnUnselectRequested(absl::Span<const int> selection) override;
 
-  void SetTracepoints(const std::vector<orbit_grpc_protos::TracepointInfo>& tracepoints);
+  void SetTracepoints(absl::Span<const orbit_grpc_protos::TracepointInfo> tracepoints);
 
  private:
   [[nodiscard]] ActionStatus GetActionStatus(std::string_view action, int clicked_index,
-                                             const std::vector<int>& selected_indices) override;
+                                             absl::Span<const int> selected_indices) override;
   void DoSort() override;
   void DoFilter() override;
 
@@ -40,7 +42,7 @@ class TracepointsDataView : public DataView {
 
   enum ColumnIndex { kColumnSelected, kColumnCategory, kColumnName, kNumColumns };
 
-  const orbit_grpc_protos::TracepointInfo& GetTracepoint(uint32_t row) const;
+  [[nodiscard]] const orbit_grpc_protos::TracepointInfo& GetTracepoint(uint32_t row) const;
 };
 
 }  // namespace orbit_data_views

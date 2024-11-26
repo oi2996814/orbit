@@ -11,29 +11,43 @@
 #include <absl/strings/str_format.h>
 #include <stdint.h>
 
+#include <QAbstractItemView>
 #include <QAbstractListModel>
 #include <QComboBox>
+#include <QIntValidator>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QListWidgetItem>
+#include <QMetaType>
 #include <QObject>
+#include <QString>
+#include <QVariant>
 #include <QWidget>
 #include <Qt>
 #include <chrono>
+#include <cstdint>
+#include <functional>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ClientData/ScopeInfo.h"
 #include "GrpcProtos/capture.pb.h"
+#include "MizarBase/ThreadId.h"
 #include "MizarBase/Time.h"
 #include "MizarData/FrameTrack.h"
 #include "MizarData/MizarPairedData.h"
 #include "MizarData/SamplingWithFrameTrackComparisonReport.h"
 #include "MizarModels/FrameTrackListModel.h"
 #include "OrbitBase/Sort.h"
+#include "OrbitBase/Typedef.h"
 
 namespace Ui {
 class SamplingWithFrameTrackInputWidget;
@@ -129,10 +143,9 @@ class SamplingWithFrameTrackInputWidgetTmpl : public SamplingWithFrameTrackInput
   }
 
   void InitFrameTrackList(const PairedData& data) {
-    auto model =
-        std::make_unique<FrameTrackListModel>(&data, &selected_tids_, &start_timestamp_, parent());
+    frame_track_list_model_.emplace(&data, &selected_tids_, &start_timestamp_, parent());
 
-    GetFrameTrackList()->setModel(model.release());
+    GetFrameTrackList()->setModel(&frame_track_list_model_.value());
     OnFrameTrackSelectionChanged(0);
   }
 
@@ -140,6 +153,8 @@ class SamplingWithFrameTrackInputWidgetTmpl : public SamplingWithFrameTrackInput
     GetStartMs()->setValidator(new QIntValidator(0, std::numeric_limits<int>::max(), this));
     GetStartMs()->setText("0");
   }
+
+  std::optional<FrameTrackListModel> frame_track_list_model_;
 };
 
 using SamplingWithFrameTrackInputWidget =

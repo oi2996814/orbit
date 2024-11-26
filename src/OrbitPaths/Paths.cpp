@@ -6,6 +6,8 @@
 
 #include <absl/flags/flag.h>
 #include <absl/strings/str_format.h>
+#include <absl/strings/string_view.h>
+#include <stdlib.h>
 
 #include <filesystem>
 #include <optional>
@@ -19,6 +21,8 @@
 #include <KnownFolders.h>
 // clang-format on
 #include <shlobj.h>
+
+#include "OrbitBase/StringConversion.h"
 #endif
 
 #include "OrbitBase/File.h"

@@ -2,34 +2,42 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
-#include <gmock/gmock-actions.h>
-#include <gmock/gmock-function-mocker.h>
-#include <gmock/gmock-matchers.h>
-#include <gmock/gmock-spec-builders.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <QDialogButtonBox>
+#include <QApplication>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPushButton>
+#include <QString>
 #include <QTest>
+#include <Qt>
 #include <filesystem>
+#include <optional>
+#include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ClientData/ModuleData.h"
 #include "ClientSymbols/PersistentStorageManager.h"
 #include "ConfigWidgets/SymbolLocationsDialog.h"
 #include "GrpcProtos/module.pb.h"
+#include "OrbitBase/Result.h"
 #include "Test/Path.h"
 #include "TestUtils/TestUtils.h"
 
 namespace orbit_config_widgets {
 
+namespace {
+
 using orbit_client_symbols::ModuleSymbolFileMappings;
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasValue;
 
 class MockPersistentStorageManager : public orbit_client_symbols::PersistentStorageManager {
@@ -79,21 +87,21 @@ class SymbolLocationsDialogTest : public ::testing::Test {
     SetLoadMappings({});
     SetExpectedSaveMappings({});
   }
-  static void ScheduleMessageBoxCancellation(SymbolLocationsDialog* dialog, bool& called) {
+  static void ScheduleMessageBoxCancellation(SymbolLocationsDialog* dialog, bool* called) {
     QMetaObject::invokeMethod(
         dialog,
-        [&]() {
+        [=]() {
           auto* message_box = dialog->findChild<QMessageBox*>();
           ASSERT_NE(message_box, nullptr);
           message_box->reject();
-          called = true;
+          *called = true;
         },
         Qt::QueuedConnection);
   }
   static void ScheduleMessageBoxAcceptOverride(SymbolLocationsDialog* dialog, bool* called) {
     QMetaObject::invokeMethod(
         dialog,
-        [&]() {
+        [=]() {
           auto* message_box = dialog->findChild<QMessageBox*>();
           ASSERT_NE(message_box, nullptr);
           // Since the override button is a "custom button" (added via addButton), it is hard to get
@@ -107,6 +115,8 @@ class SymbolLocationsDialogTest : public ::testing::Test {
 
   MockPersistentStorageManager mock_storage_manager_;
 };
+
+}  // namespace
 
 TEST_F(SymbolLocationsDialogTest, ConstructEmpty) {
   SetLoadAndExpectedSaveEmpty();
@@ -166,6 +176,7 @@ TEST_F(SymbolLocationsDialogTest, ConstructWithElfModuleNoBuildId) {
   module_info.set_object_file_type(orbit_grpc_protos::ModuleInfo::kElfFile);
   module_info.set_file_path("/path/to/lib.so");
   module_info.set_name("lib.so");
+
   orbit_client_data::ModuleData module{module_info};
 
   SetLoadAndExpectedSaveEmpty();
@@ -226,7 +237,8 @@ TEST_F(SymbolLocationsDialogTest, TryAddSymbolPath) {
   {  // add the same path again -> warning that needs to be dismissed and nothing changes
     auto result = dialog.TryAddSymbolPath(path);
     ASSERT_TRUE(result.has_error());
-    EXPECT_THAT(result, HasError("Unable to add selected path, it is already part of the list."));
+    EXPECT_THAT(result, HasErrorWithMessage(
+                            "Unable to add selected path, it is already part of the list."));
     EXPECT_EQ(list_widget->count(), 1);
   }
 
@@ -263,7 +275,7 @@ TEST_F(SymbolLocationsDialogTest, TryAddSymbolFileWithoutModule) {
   std::filesystem::path text_file = orbit_test::GetTestdataDir() / "textfile.txt";
   {
     auto result = dialog.TryAddSymbolFile(text_file);
-    EXPECT_THAT(result, HasError("The selected file is not a viable symbol file"));
+    EXPECT_THAT(result, HasErrorWithMessage("The selected file is not a viable symbol file"));
   }
 
   // fails because no build-id
@@ -272,7 +284,7 @@ TEST_F(SymbolLocationsDialogTest, TryAddSymbolFileWithoutModule) {
   {
     auto result = dialog.TryAddSymbolFile(hello_world_elf_no_build_id);
 
-    EXPECT_THAT(result, HasError("The selected file does not contain a build id"));
+    EXPECT_THAT(result, HasErrorWithMessage("The selected file does not contain a build id"));
   }
 }
 
@@ -304,7 +316,8 @@ TEST_F(SymbolLocationsDialogTest, TryAddSymbolFileWithModuleNoOverride) {
   std::filesystem::path libc_debug = orbit_test::GetTestdataDir() / "libc.debug";
   {
     auto result = dialog.TryAddSymbolFile(libc_debug);
-    EXPECT_THAT(result, HasError("The build ids of module and symbols file do not match."));
+    EXPECT_THAT(result,
+                HasErrorWithMessage("The build ids of module and symbols file do not match."));
   }
 }
 
@@ -339,7 +352,7 @@ TEST_F(SymbolLocationsDialogTest, TryAddSymbolFileOverrideStaleSymbols) {
 
   {  // build id mismatch. Warning is displayed and dismissed
     bool message_box_cancelled = false;
-    ScheduleMessageBoxCancellation(&dialog, message_box_cancelled);
+    ScheduleMessageBoxCancellation(&dialog, &message_box_cancelled);
     EXPECT_THAT(dialog.TryAddSymbolFile(no_symbols_elf_stale_debug), HasValue());
     EXPECT_TRUE(message_box_cancelled);
     EXPECT_EQ(list_widget->count(), 1);

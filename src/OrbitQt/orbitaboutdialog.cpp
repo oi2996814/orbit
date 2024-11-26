@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "orbitaboutdialog.h"
+#include "OrbitQt/orbitaboutdialog.h"
 
 #include <QLabel>
 #include <QPlainTextEdit>
+
+#include "ui_orbitaboutdialog.h"
 
 namespace orbit_qt {
 
@@ -13,6 +15,8 @@ OrbitAboutDialog::OrbitAboutDialog(QWidget* parent)
     : QDialog(parent), ui_(new Ui::OrbitAboutDialog) {
   ui_->setupUi(this);
 }
+
+OrbitAboutDialog::~OrbitAboutDialog() = default;
 
 void OrbitAboutDialog::SetLicenseText(const QString& text) {
   ui_->licenseTextEdit->setPlainText(text);

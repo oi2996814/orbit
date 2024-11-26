@@ -2,12 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <GteVector4.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 
-#include "CaptureViewElementTester.h"
-#include "TrackControlInterface.h"
-#include "TrackHeader.h"
+#include <string>
+
+#include "OrbitGl/CaptureViewElementTester.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/TrackControlInterface.h"
+#include "OrbitGl/TrackHeader.h"
+#include "OrbitGl/TriangleToggle.h"
 
 namespace orbit_gl {
 
@@ -38,7 +44,7 @@ TEST(TrackHeader, TrackHeaderDragsTheTrack) {
   CaptureViewElementTester tester;
 
   MockTrack track;
-  const int kDelta = 5;
+  constexpr int kDelta = 5;
 
   EXPECT_CALL(track, DragBy(kDelta)).Times(Exactly(2));
   EXPECT_CALL(track, Draggable()).Times(Exactly(2)).WillRepeatedly(Return(true));
@@ -56,7 +62,7 @@ TEST(TrackHeader, TrackHeaderDoesNotDragNonDraggableTracks) {
   CaptureViewElementTester tester;
 
   MockTrack track;
-  const int kDelta = 5;
+  constexpr int kDelta = 5;
 
   EXPECT_CALL(track, DragBy(kDelta)).Times(Exactly(0));
   EXPECT_CALL(track, Draggable()).Times(Exactly(2)).WillRepeatedly(Return(false));

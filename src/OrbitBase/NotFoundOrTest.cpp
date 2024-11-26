@@ -5,14 +5,18 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <string>
+#include <tuple>
+#include <utility>
 
 #include "OrbitBase/NotFoundOr.h"
+#include "outcome.hpp"
 
 namespace orbit_base {
 
 TEST(NotFoundOr, IsNotFound) {
   // Default constructor is found
-  NotFoundOr<int> not_found_or_int;
+  NotFoundOr<int> not_found_or_int{0};
   EXPECT_FALSE(IsNotFound(not_found_or_int));
 
   not_found_or_int = NotFound{"message"};
@@ -21,7 +25,7 @@ TEST(NotFoundOr, IsNotFound) {
   not_found_or_int = 5;
   EXPECT_FALSE(IsNotFound(not_found_or_int));
 
-  NotFoundOr<void> not_found_or_void;
+  NotFoundOr<void> not_found_or_void{outcome::success()};
   EXPECT_FALSE(IsNotFound(not_found_or_void));
 
   not_found_or_void = NotFound{"message"};
@@ -29,7 +33,7 @@ TEST(NotFoundOr, IsNotFound) {
 }
 
 TEST(NotFoundOr, GetNotFoundMessage) {
-  NotFoundOr<int> not_found_or_int;
+  NotFoundOr<int> not_found_or_int{0};
   EXPECT_DEATH(std::ignore = GetNotFoundMessage(not_found_or_int), "Check failed");
 
   not_found_or_int = 5;
@@ -57,7 +61,7 @@ TEST(NotFoundOr, GetFound) {
 
 TEST(NotFoundOr, MoveOnlyType) {
   // unique_ptr<int>; tests move only type
-  NotFoundOr<std::unique_ptr<int>> not_found_or_unique_ptr;
+  NotFoundOr<std::unique_ptr<int>> not_found_or_unique_ptr{std::unique_ptr<int>{}};
 
   EXPECT_FALSE(IsNotFound(not_found_or_unique_ptr));
 

@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include <gtest/gtest.h>
-#include <stdint.h>
 
 #include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "OrbitBase/Overloaded.h"
 
@@ -19,13 +21,13 @@ constexpr std::string_view kTwoInts = "two ints";
 constexpr auto kFromInt = [](int /*unused*/) { return kInt; };
 constexpr auto kFromTwoInts = [](int /*unused*/, int /*unused*/) { return kTwoInts; };
 auto kFromIntMutable = [](int /*unused*/) mutable { return kInt; };
-constexpr auto kFromString = [](std::string /*unused*/) { return kString; };
+constexpr auto kFromString = [](const std::string& /*unused*/) { return kString; };
 
 std::string_view FromString(std::string /*unused*/) { return kString; }
 std::string_view FromInt(int /*unused*/) { return kInt; }
 
 TEST(OverloadedTest, TwoLambdas) {
-  const auto overloaded_lambda = overloaded{kFromInt, kFromString};
+  const auto overloaded_lambda = Overloaded{kFromInt, kFromString};
   EXPECT_EQ(overloaded_lambda(1), kInt);
   EXPECT_EQ(overloaded_lambda("foo"), kString);
 }
@@ -34,13 +36,13 @@ constexpr std::string_view kTwoStrings = "two strings";
 
 TEST(OverloadedTest, TwoLambdasOnePolymorphic) {
   const auto overloaded_lambda =
-      overloaded{[](auto /*unused*/, auto /*unused*/) { return kTwoStrings; }, kFromTwoInts};
+      Overloaded{[](auto /*unused*/, auto /*unused*/) { return kTwoStrings; }, kFromTwoInts};
   EXPECT_EQ(overloaded_lambda(1, 1), kTwoInts);
   EXPECT_EQ(overloaded_lambda("foo", "bar"), kTwoStrings);
 }
 
 TEST(OverloadedTest, StackedOverloaded) {
-  const auto overloaded_lambda = overloaded{overloaded{kFromInt, kFromString}, kFromTwoInts};
+  const auto overloaded_lambda = Overloaded{Overloaded{kFromInt, kFromString}, kFromTwoInts};
   EXPECT_EQ(overloaded_lambda(1, 1), kTwoInts);
   EXPECT_EQ(overloaded_lambda(1), kInt);
   EXPECT_EQ(overloaded_lambda("foo"), kString);
@@ -48,41 +50,41 @@ TEST(OverloadedTest, StackedOverloaded) {
 
 TEST(OverloadedTest, MoveOnlyArgumentLambda) {
   const auto lambda = [](std::unique_ptr<int> /*unused*/) { return kInt; };
-  const auto overloaded_lambda = overloaded{lambda};
+  const auto overloaded_lambda = Overloaded{lambda};
   auto int_ptr = std::make_unique<int>(1);
   EXPECT_EQ(overloaded_lambda(std::move(int_ptr)), kInt);
 }
 
 TEST(OverloadedTest, TwoLambdasWithOneAndTwoArguments) {
-  const auto overloaded_lambda = overloaded{kFromInt, kFromTwoInts};
+  const auto overloaded_lambda = Overloaded{kFromInt, kFromTwoInts};
   EXPECT_EQ(overloaded_lambda(1), kInt);
   EXPECT_EQ(overloaded_lambda(1, 1), kTwoInts);
 }
 
 TEST(OverloadedTest, MutableAndImmutableLambdas) {
-  auto overloaded_lambda = overloaded{kFromIntMutable, kFromString};
+  auto overloaded_lambda = Overloaded{kFromIntMutable, kFromString};
   EXPECT_EQ(overloaded_lambda(1), kInt);
   EXPECT_EQ(overloaded_lambda("foo"), kString);
 }
 
 TEST(OverloadedTest, SingleLambda) {
-  const auto overloaded_lambda = overloaded{kFromInt};
+  const auto overloaded_lambda = Overloaded{kFromInt};
   EXPECT_EQ(overloaded_lambda(1), kInt);
 }
 
 TEST(OverloadedTest, SingleFreeFunction) {
-  const auto overloaded_lambda = overloaded{&FromString};
+  const auto overloaded_lambda = Overloaded{&FromString};
   EXPECT_EQ(overloaded_lambda("foo"), kString);
 }
 
 TEST(OverloadedTest, TwoFreeFunctions) {
-  const auto overloaded_lambda = overloaded{&FromString, &FromInt};
+  const auto overloaded_lambda = Overloaded{&FromString, &FromInt};
   EXPECT_EQ(overloaded_lambda(1), kInt);
   EXPECT_EQ(overloaded_lambda("foo"), kString);
 }
 
 TEST(OverloadedTest, FreeFunctionAndLambda) {
-  const auto overloaded_lambda = overloaded{&FromString, kFromInt};
+  const auto overloaded_lambda = Overloaded{&FromString, kFromInt};
   EXPECT_EQ(overloaded_lambda(1), kInt);
   EXPECT_EQ(overloaded_lambda("foo"), kString);
 }

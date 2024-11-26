@@ -6,10 +6,13 @@
 #define UTIL_WIDGETS_NOTICE_WIDGET_H_
 
 #include <QColor>
+#include <QObject>
 #include <QPaintEvent>
+#include <QString>
 #include <QWidget>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace Ui {
 class NoticeWidget;
@@ -24,8 +27,7 @@ class NoticeWidget : public QWidget {
   explicit NoticeWidget(QWidget* parent = nullptr);
   ~NoticeWidget() override;
 
-  void Initialize(const std::string& label_text, const std::string& button_text,
-                  const QColor& color);
+  void Initialize(std::string_view label_text, std::string_view button_text, const QColor& color);
   void InitializeAsInspection();
 
  signals:

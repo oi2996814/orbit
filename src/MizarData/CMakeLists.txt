@@ -22,7 +22,6 @@ target_sources(MizarData PRIVATE
                 BaselineAndComparisonHelper.h
                 DummyFunctionSymbolToKey.cpp
                 DummyFunctionSymbolToKey.h
-                FunctionSymbolToKeyExactNameMatch.h
                 GetCallstackSamplingIntervals.cpp
                 MizarData.cpp)
 
@@ -51,7 +50,7 @@ target_sources(MizarDataTests PRIVATE
 
 target_link_libraries(MizarDataTests PRIVATE GrpcProtos
                                                 MizarData
-                                                GTest::GTest
+                                                GTest::gtest
                                                 GTest::Main
                                                 TestUtils)
 register_test(MizarDataTests)

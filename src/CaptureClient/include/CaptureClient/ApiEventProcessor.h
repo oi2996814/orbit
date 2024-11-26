@@ -7,7 +7,9 @@
 
 #include <absl/container/flat_hash_map.h>
 
-#include "ApiUtils/EncodedEvent.h"
+#include <cstdint>
+#include <vector>
+
 #include "CaptureClient/CaptureListener.h"
 #include "GrpcProtos/capture.pb.h"
 
@@ -21,10 +23,6 @@ namespace orbit_capture_client {
 class ApiEventProcessor {
  public:
   explicit ApiEventProcessor(CaptureListener* listener);
-
-  // The new manual instrumentation events (see below) could not use `ApiEvent`, so this is
-  // deprecated. The methods for the concrete (new) events should be used instead.
-  [[deprecated]] void ProcessApiEventLegacy(const orbit_grpc_protos::ApiEvent& grpc_api_event);
 
   void ProcessApiScopeStart(const orbit_grpc_protos::ApiScopeStart& api_scope_start);
   void ProcessApiScopeStartAsync(
@@ -41,20 +39,9 @@ class ApiEventProcessor {
   void ProcessApiTrackUint64(const orbit_grpc_protos::ApiTrackUint64& grpc_api_track_uint64);
 
  private:
-  [[deprecated]] void ProcessApiEventLegacy(const orbit_api::ApiEvent& api_event);
-  [[deprecated]] void ProcessStartEventLegacy(const orbit_api::ApiEvent& api_event);
-  [[deprecated]] void ProcessStopEventLegacy(const orbit_api::ApiEvent& api_event);
-  [[deprecated]] void ProcessAsyncStartEventLegacy(const orbit_api::ApiEvent& api_event);
-  [[deprecated]] void ProcessAsyncStopEventLegacy(const orbit_api::ApiEvent& api_event);
-  [[deprecated]] void ProcessTrackingEventLegacy(const orbit_api::ApiEvent& api_event);
-  [[deprecated]] void ProcessStringEventLegacy(const orbit_api::ApiEvent& api_event);
-
   CaptureListener* capture_listener_ = nullptr;
-  absl::flat_hash_map<int32_t, std::vector<orbit_api::ApiEvent>>
-      synchronous_legacy_event_stack_by_tid_;
   absl::flat_hash_map<int32_t, std::vector<orbit_grpc_protos::ApiScopeStart>>
       synchronous_scopes_stack_by_tid_;
-  absl::flat_hash_map<uint64_t, orbit_api::ApiEvent> asynchronous_legacy_events_by_id_;
   absl::flat_hash_map<uint64_t, orbit_grpc_protos::ApiScopeStartAsync> asynchronous_scopes_by_id_;
 };
 

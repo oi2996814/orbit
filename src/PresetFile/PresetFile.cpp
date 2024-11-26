@@ -5,8 +5,14 @@
 #include "PresetFile/PresetFile.h"
 
 #include <absl/strings/match.h>
+#include <absl/strings/str_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl_lite.h>
+#include <google/protobuf/stubs/port.h>
 #include <google/protobuf/text_format.h>
+#include <string.h>
+
+#include <algorithm>
+#include <string_view>
 
 #include "OrbitBase/File.h"
 #include "OrbitBase/Logging.h"
@@ -31,9 +37,9 @@ ErrorMessageOr<PresetInfo> ReadPresetFromString(std::string_view content) {
   return preset_info;
 }
 
-ErrorMessageOr<PresetInfoLegacy> ReadLegacyPresetFromString(const std::string& content) {
+ErrorMessageOr<PresetInfoLegacy> ReadLegacyPresetFromString(std::string_view content) {
   PresetInfoLegacy preset_info;
-  if (!preset_info.ParseFromString(content)) {
+  if (!preset_info.ParseFromArray(content.data(), content.size())) {
     return ErrorMessage{"Unable to parse message"};
   }
 

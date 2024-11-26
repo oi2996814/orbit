@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/support/channel_arguments.h>
@@ -11,10 +12,12 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <string>
 #include <thread>
 
 #include "CaptureEventProducer/CaptureEventProducer.h"
 #include "FakeProducerSideService/FakeProducerSideService.h"
+#include "GrpcProtos/capture.pb.h"
 #include "GrpcProtos/producer_side_services.pb.h"
 
 namespace orbit_capture_event_producer {

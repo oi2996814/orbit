@@ -8,11 +8,16 @@
 #include <absl/container/flat_hash_set.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "CaptureClient/CaptureListener.h"
 #include "GrpcProtos/capture.pb.h"
+#include "OrbitBase/Result.h"
 
 namespace orbit_capture_client {
 
@@ -33,33 +38,6 @@ class CaptureEventProcessor {
 
   static std::unique_ptr<CaptureEventProcessor> CreateCompositeProcessor(
       std::vector<std::unique_ptr<CaptureEventProcessor>> event_processors);
-
-  enum class SystemMemoryUsageEncodingIndex {
-    kTotalKb = 0,
-    kFreeKb = 1,
-    kAvailableKb = 2,
-    kBuffersKb = 3,
-    kCachedKb = 4,
-    kEnd = 5
-  };
-  enum class CGroupAndProcessMemoryUsageEncodingIndex {
-    kCGroupNameHash = 0,
-    kCGroupLimitBytes = 1,
-    kCGroupRssBytes = 2,
-    kCGroupMappedFileBytes = 3,
-    kProcessRssAnonKb = 4,
-    kEnd = 5
-  };
-  enum class PageFaultsEncodingIndex {
-    kSystemPageFaults = 0,
-    kSystemMajorPageFaults = 1,
-    kCGroupNameHash = 2,
-    kCGroupPageFaults = 3,
-    kCGroupMajorPageFaults = 4,
-    kProcessMinorPageFaults = 5,
-    kProcessMajorPageFaults = 6,
-    kEnd = 7
-  };
 };
 
 }  // namespace orbit_capture_client

@@ -7,7 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <string>
+#include <string_view>
 #include <system_error>
 
 #include "OrbitBase/Logging.h"
@@ -50,8 +50,8 @@ outcome::result<Socket> Socket::Accept() const {
   return Socket{descriptor};
 }
 
-void Socket::PrintWithLastError(const std::string& message) {
-  ORBIT_ERROR("%s: %s", message.c_str(), SafeStrerror(errno));
+void Socket::PrintWithLastError(std::string_view message) {
+  ORBIT_ERROR("%s: %s", message, SafeStrerror(errno));
 }
 
 outcome::result<void> Socket::Shutdown() const {

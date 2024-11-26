@@ -5,6 +5,8 @@
 #ifndef LINUX_CAPTURE_SERVICE_MEMORY_INFO_HANDLER_H_
 #define LINUX_CAPTURE_SERVICE_MEMORY_INFO_HANDLER_H_
 
+#include <memory>
+
 #include "GrpcProtos/capture.pb.h"
 #include "MemoryTracing/MemoryInfoListener.h"
 #include "MemoryTracing/MemoryInfoProducer.h"
@@ -31,7 +33,7 @@ class MemoryInfoHandler : public orbit_memory_tracing::MemoryInfoListener {
   MemoryInfoHandler(MemoryInfoHandler&&) = delete;
   MemoryInfoHandler& operator=(MemoryInfoHandler&&) = delete;
 
-  void Start(orbit_grpc_protos::CaptureOptions capture_options);
+  void Start(const orbit_grpc_protos::CaptureOptions& capture_options);
   void Stop();
 
  private:

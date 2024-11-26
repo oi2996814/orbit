@@ -2,16 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/strings/numbers.h>
+#include <absl/strings/str_format.h>
+#include <sys/types.h>
+
+#include <chrono>
 #include <filesystem>
+#include <istream>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include "OrbitBase/GetProcessIds.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
 #include "OrbitBase/Result.h"
-#include "absl/strings/numbers.h"
 
 namespace orbit_base {
 
@@ -29,7 +35,7 @@ static std::optional<pid_t> ProcEntryToPid(const std::filesystem::directory_entr
     return std::nullopt;
   }
 
-  int potential_pid;
+  int potential_pid{};
   if (!absl::SimpleAtoi(entry.path().filename().string(), &potential_pid)) {
     return std::nullopt;
   }
@@ -98,7 +104,7 @@ ErrorMessageOr<pid_t> GetTracerPidOfProcess(pid_t pid) {
 
   while (std::getline(status_file_content_ss, line)) {
     if (line.find(kTracerPidStr) == std::string::npos) continue;
-    int potential_pid;
+    int potential_pid{};
     if (!absl::SimpleAtoi(line.substr(line.find_last_of(kTracerPidStr) + 1), &potential_pid)) {
       return ErrorMessage(absl::StrFormat("Could not extract pid from line %s", line));
     }

@@ -2,20 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "PrimitiveAssembler.h"
+#include "OrbitGl/PrimitiveAssembler.h"
 
+#include <GteVector.h>
+#include <GteVector2.h>
+#include <GteVector4.h>
 #include <OrbitBase/Logging.h>
 #include <stddef.h>
 
 #include <array>
 #include <cmath>
+#include <utility>
 
-#include "CoreMath.h"
-#include "Geometry.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Geometry.h"
 
 namespace orbit_gl {
 
-void PrimitiveAssembler::AddLine(Vec2 from, Vec2 to, float z, const Color& color,
+void PrimitiveAssembler::AddLine(const Vec2& from, const Vec2& to, float z, const Color& color,
                                  std::unique_ptr<PickingUserData> user_data) {
   Color picking_color =
       PickingId::ToColor(PickingType::kLine, batcher_->GetNumElements(), GetBatcherId());
@@ -23,8 +27,8 @@ void PrimitiveAssembler::AddLine(Vec2 from, Vec2 to, float z, const Color& color
   batcher_->AddLine(from, to, z, color, picking_color, std::move(user_data));
 }
 
-void PrimitiveAssembler::AddLine(Vec2 from, Vec2 to, float z, const Color& color,
-                                 std::shared_ptr<Pickable> pickable) {
+void PrimitiveAssembler::AddLine(const Vec2& from, const Vec2& to, float z, const Color& color,
+                                 const std::shared_ptr<Pickable>& pickable) {
   ORBIT_CHECK(picking_manager_ != nullptr);
 
   Color picking_color = picking_manager_->GetPickableColor(pickable, GetBatcherId());
@@ -32,13 +36,13 @@ void PrimitiveAssembler::AddLine(Vec2 from, Vec2 to, float z, const Color& color
   batcher_->AddLine(from, to, z, color, picking_color, nullptr);
 }
 
-void PrimitiveAssembler::AddVerticalLine(Vec2 pos, float size, float z, const Color& color,
+void PrimitiveAssembler::AddVerticalLine(const Vec2& pos, float size, float z, const Color& color,
                                          std::unique_ptr<PickingUserData> user_data) {
   AddLine(pos, pos + Vec2(0, size), z, color, std::move(user_data));
 }
 
-void PrimitiveAssembler::AddVerticalLine(Vec2 pos, float size, float z, const Color& color,
-                                         std::shared_ptr<Pickable> pickable) {
+void PrimitiveAssembler::AddVerticalLine(const Vec2& pos, float size, float z, const Color& color,
+                                         const std::shared_ptr<Pickable>& pickable) {
   ORBIT_CHECK(picking_manager_ != nullptr);
 
   Color picking_color = picking_manager_->GetPickableColor(pickable, GetBatcherId());
@@ -61,7 +65,7 @@ void PrimitiveAssembler::AddBox(const Quad& box, float z, const Color& color,
 }
 
 void PrimitiveAssembler::AddBox(const Quad& box, float z, const Color& color,
-                                std::shared_ptr<Pickable> pickable) {
+                                const std::shared_ptr<Pickable>& pickable) {
   ORBIT_CHECK(picking_manager_ != nullptr);
 
   Color picking_color = picking_manager_->GetPickableColor(pickable, GetBatcherId());
@@ -71,17 +75,19 @@ void PrimitiveAssembler::AddBox(const Quad& box, float z, const Color& color,
   batcher_->AddBox(box, z, colors, picking_color, nullptr);
 }
 
-void PrimitiveAssembler::AddShadedBox(Vec2 pos, Vec2 size, float z, const Color& color) {
+void PrimitiveAssembler::AddShadedBox(const Vec2& pos, const Vec2& size, float z,
+                                      const Color& color) {
   AddShadedBox(pos, size, z, color, std::unique_ptr<PickingUserData>(),
                ShadingDirection::kLeftToRight);
 }
 
-void PrimitiveAssembler::AddShadedBox(Vec2 pos, Vec2 size, float z, const Color& color,
-                                      ShadingDirection shading_direction) {
+void PrimitiveAssembler::AddShadedBox(const Vec2& pos, const Vec2& size, float z,
+                                      const Color& color, ShadingDirection shading_direction) {
   AddShadedBox(pos, size, z, color, std::unique_ptr<PickingUserData>(), shading_direction);
 }
 
-void PrimitiveAssembler::AddShadedBox(Vec2 pos, Vec2 size, float z, const Color& color,
+void PrimitiveAssembler::AddShadedBox(const Vec2& pos, const Vec2& size, float z,
+                                      const Color& color,
                                       std::unique_ptr<PickingUserData> user_data,
                                       ShadingDirection shading_direction) {
   std::array<Color, 4> colors;
@@ -107,9 +113,9 @@ static std::vector<Triangle> GetUnitArcTriangles(float angle_0, float angle_1, u
 }
 
 static void AddRoundedCornerTriangles(PrimitiveAssembler* batcher,
-                                      const std::vector<Triangle> unit_triangles, Vec2 pos,
+                                      const std::vector<Triangle>& unit_triangles, Vec2 pos,
                                       float radius, float z, const Color& color) {
-  for (auto& unit_triangle : unit_triangles) {
+  for (const auto& unit_triangle : unit_triangles) {
     Triangle triangle = unit_triangle;
     triangle.vertices[1] *= radius;
     triangle.vertices[2] *= radius;
@@ -123,25 +129,25 @@ static void AddRoundedCornerTriangles(PrimitiveAssembler* batcher,
   }
 }
 
-void PrimitiveAssembler::AddBottomLeftRoundedCorner(Vec2 pos, float radius, float z,
+void PrimitiveAssembler::AddBottomLeftRoundedCorner(const Vec2& pos, float radius, float z,
                                                     const Color& color) {
   static auto unit_triangles = GetUnitArcTriangles(kPiFloat, 1.5f * kPiFloat, kNumArcSides);
   AddRoundedCornerTriangles(this, unit_triangles, pos, radius, z, color);
 }
 
-void PrimitiveAssembler::AddTopLeftRoundedCorner(Vec2 pos, float radius, float z,
+void PrimitiveAssembler::AddTopLeftRoundedCorner(const Vec2& pos, float radius, float z,
                                                  const Color& color) {
   static auto unit_triangles = GetUnitArcTriangles(0.5f * kPiFloat, kPiFloat, kNumArcSides);
   AddRoundedCornerTriangles(this, unit_triangles, pos, radius, z, color);
 }
 
-void PrimitiveAssembler::AddTopRightRoundedCorner(Vec2 pos, float radius, float z,
+void PrimitiveAssembler::AddTopRightRoundedCorner(const Vec2& pos, float radius, float z,
                                                   const Color& color) {
   static auto unit_triangles = GetUnitArcTriangles(0, 0.5f * kPiFloat, kNumArcSides);
   AddRoundedCornerTriangles(this, unit_triangles, pos, radius, z, color);
 }
 
-void PrimitiveAssembler::AddBottomRightRoundedCorner(Vec2 pos, float radius, float z,
+void PrimitiveAssembler::AddBottomRightRoundedCorner(const Vec2& pos, float radius, float z,
                                                      const Color& color) {
   static auto unit_triangles = GetUnitArcTriangles(-0.5f * kPiFloat, 0, kNumArcSides);
   AddRoundedCornerTriangles(this, unit_triangles, pos, radius, z, color);
@@ -173,8 +179,8 @@ void PrimitiveAssembler::AddRoundedBox(Vec2 pos, Vec2 size, float z, float radiu
   AddBottomRightRoundedCorner(bottom_right_pos, radius, z, color);
 }
 
-void PrimitiveAssembler::AddShadedBox(Vec2 pos, Vec2 size, float z, const Color& color,
-                                      std::shared_ptr<Pickable> pickable,
+void PrimitiveAssembler::AddShadedBox(const Vec2& pos, const Vec2& size, float z,
+                                      const Color& color, const std::shared_ptr<Pickable>& pickable,
                                       ShadingDirection shading_direction) {
   std::array<Color, 4> colors;
   GetBoxGradientColors(color, &colors, shading_direction);
@@ -192,7 +198,7 @@ void PrimitiveAssembler::AddTriangle(const Triangle& triangle, float z, const Co
 }
 
 void PrimitiveAssembler::AddTriangle(const Triangle& triangle, float z, const Color& color,
-                                     std::shared_ptr<Pickable> pickable) {
+                                     const std::shared_ptr<Pickable>& pickable) {
   ORBIT_CHECK(picking_manager_ != nullptr);
 
   Color picking_color = picking_manager_->GetPickableColor(pickable, GetBatcherId());
@@ -296,9 +302,17 @@ void PrimitiveAssembler::AddQuadBorder(const Quad& quad, float z, const Color& c
   AddLine(quad.vertices[3], quad.vertices[0], z, color);
 }
 
+void PrimitiveAssembler::AddAabbOutline(Vec2 pos, Vec2 size, float outline_width, float z,
+                                        const Color& color) {
+  AddBox(MakeBox(pos, {size[0], outline_width}), z, color);
+  AddBox(MakeBox({pos[0], pos[1] + size[1] - outline_width}, {size[0], outline_width}), z, color);
+  AddBox(MakeBox(pos, {outline_width, size[1]}), z, color);
+  AddBox(MakeBox({pos[0] + size[0] - outline_width, pos[1]}, {outline_width, size[1]}), z, color);
+}
+
 void PrimitiveAssembler::GetBoxGradientColors(const Color& color, std::array<Color, 4>* colors,
                                               ShadingDirection shading_direction) {
-  const float kGradientCoeff = 0.94f;
+  constexpr float kGradientCoeff = 0.94f;
   Vec3 dark = Vec3(color[0], color[1], color[2]) * kGradientCoeff;
   Color dark_color = Color(static_cast<uint8_t>(dark[0]), static_cast<uint8_t>(dark[1]),
                            static_cast<uint8_t>(dark[2]), color[3]);
@@ -336,7 +350,7 @@ void PrimitiveAssembler::StartNewFrame() { batcher_->ResetElements(); }
 const orbit_client_protos::TimerInfo* PrimitiveAssembler::GetTimerInfo(PickingId id) const {
   const PickingUserData* data = GetUserData(id);
 
-  if (data && data->timer_info_) {
+  if (data != nullptr && data->timer_info_ != nullptr) {
     return data->timer_info_;
   }
 

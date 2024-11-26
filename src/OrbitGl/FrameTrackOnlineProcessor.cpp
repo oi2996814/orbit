@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "FrameTrackOnlineProcessor.h"
+#include "OrbitGl/FrameTrackOnlineProcessor.h"
+
+#include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 
 #include <limits>
 #include <utility>
 
 #include "ClientData/CaptureData.h"
-#include "TimeGraph.h"
+#include "OrbitGl/TimeGraph.h"
 
 namespace orbit_gl {
 

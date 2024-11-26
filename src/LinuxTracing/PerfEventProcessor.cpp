@@ -5,8 +5,8 @@
 #include "PerfEventProcessor.h"
 
 #include <utility>
-#include <variant>
 
+#include "Introspection/Introspection.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Profiling.h"
 #include "PerfEvent.h"
@@ -22,7 +22,7 @@ void PerfEventProcessor::AddEvent(PerfEvent&& event) {
 
     std::optional<DiscardedPerfEvent> discarded_perf_event = HandleOutOfOrderEvent(timestamp);
     if (discarded_perf_event.has_value()) {
-      event_queue_.PushEvent(std::move(discarded_perf_event.value()));
+      event_queue_.PushEvent(discarded_perf_event.value());
     }
     return;
   }
@@ -41,6 +41,7 @@ void PerfEventProcessor::AddEvent(PerfEvent&& event) {
 // DiscardedPerfEvents.
 std::optional<DiscardedPerfEvent> PerfEventProcessor::HandleOutOfOrderEvent(
     uint64_t event_timestamp_ns) {
+  ORBIT_SCOPE("PerfEventProcessor::HandleOutOfOrderEvent");
   const uint64_t discarded_begin = event_timestamp_ns;
   const uint64_t discarded_end = last_processed_timestamp_ns_;
 
@@ -85,6 +86,7 @@ std::optional<DiscardedPerfEvent> PerfEventProcessor::HandleOutOfOrderEvent(
 }
 
 void PerfEventProcessor::ProcessAllEvents() {
+  ORBIT_SCOPE("PerfEventProcessor::ProcessAllEvents");
   ORBIT_CHECK(!visitors_.empty());
   while (event_queue_.HasEvent()) {
     const PerfEvent& event = event_queue_.TopEvent();
@@ -100,6 +102,7 @@ void PerfEventProcessor::ProcessAllEvents() {
 }
 
 void PerfEventProcessor::ProcessOldEvents() {
+  ORBIT_SCOPE("PerfEventProcessor::ProcessOldEvents");
   ORBIT_CHECK(!visitors_.empty());
   const uint64_t current_timestamp_ns = orbit_base::CaptureTimestampNs();
 

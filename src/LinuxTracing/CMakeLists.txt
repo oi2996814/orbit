@@ -71,6 +71,7 @@ target_link_libraries(LinuxTracing PUBLIC
         ModuleUtils
         ObjectUtils
         OrbitBase
+        TestUtils
         absl::flat_hash_map
         absl::flat_hash_set
         absl::meta
@@ -104,7 +105,7 @@ target_sources(LinuxTracingTests PRIVATE
 
 target_link_libraries(LinuxTracingTests PRIVATE
         LinuxTracing
-        GTest::GTest
+        GTest::gtest
         GTest::Main)
 
 register_test(LinuxTracingTests)

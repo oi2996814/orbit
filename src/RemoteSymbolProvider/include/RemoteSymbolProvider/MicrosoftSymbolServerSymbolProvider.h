@@ -5,8 +5,15 @@
 #ifndef REMOTE_SYMBOL_PROVIDER_MICROSOFT_SYMBOL_SERVER_SYMBOL_PROVIDER_H_
 #define REMOTE_SYMBOL_PROVIDER_MICROSOFT_SYMBOL_SERVER_SYMBOL_PROVIDER_H_
 
+#include <memory>
+#include <string>
+
+#include "ClientData/ModulePathAndBuildId.h"
 #include "Http/DownloadManager.h"
-#include "OrbitBase/MainThreadExecutor.h"
+#include "OrbitBase/Executor.h"
+#include "OrbitBase/Future.h"
+#include "OrbitBase/StopToken.h"
+#include "QtUtils/MainThreadExecutor.h"
 #include "SymbolProvider/SymbolLoadingOutcome.h"
 #include "SymbolProvider/SymbolProvider.h"
 #include "Symbols/SymbolCacheInterface.h"
@@ -20,16 +27,16 @@ class MicrosoftSymbolServerSymbolProvider : public orbit_symbol_provider::Symbol
       orbit_http::DownloadManager* download_manager);
 
   [[nodiscard]] orbit_base::Future<orbit_symbol_provider::SymbolLoadingOutcome> RetrieveSymbols(
-      const orbit_symbol_provider::ModuleIdentifier& module_id,
-      orbit_base::StopToken stop_token) const override;
+      const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id,
+      orbit_base::StopToken stop_token) override;
 
  private:
   [[nodiscard]] static std::string GetDownloadUrl(
-      const orbit_symbol_provider::ModuleIdentifier& module_id);
+      const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id);
 
   const orbit_symbols::SymbolCacheInterface* symbol_cache_;
   orbit_http::DownloadManager* download_manager_;
-  std::shared_ptr<orbit_base::MainThreadExecutor> main_thread_executor_;
+  orbit_qt_utils::MainThreadExecutor main_thread_executor_;
 };
 
 }  // namespace orbit_remote_symbol_provider

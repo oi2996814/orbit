@@ -3,20 +3,38 @@
 // found in the LICENSE file.
 
 #include <gtest/gtest.h>
+#include <stdint.h>
 
 #include <QCoreApplication>
+#include <QObject>
 #include <QPushButton>
+#include <QString>
+#include <QSyntaxHighlighter>
 #include <QTest>
 #include <QTimer>
+#include <Qt>
+#include <chrono>
 #include <filesystem>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 
-#include "AnnotatingSourceCodeDialog.h"
-#include "ClientProtos/capture_data.pb.h"
+#include "ClientData/FunctionInfo.h"
+#include "ClientData/ModuleIdentifierProvider.h"
+#include "ClientData/ModuleManager.h"
+#include "ClientData/ModulePathAndBuildId.h"
+#include "ClientData/ProcessData.h"
+#include "CodeReport/Disassembler.h"
 #include "CodeReport/DisassemblyReport.h"
+#include "GrpcProtos/symbol.pb.h"
+#include "ObjectUtils/ElfFile.h"
+#include "OrbitBase/Future.h"
 #include "OrbitBase/ReadFileToString.h"
+#include "OrbitBase/Result.h"
+#include "OrbitQt/AnnotatingSourceCodeDialog.h"
 #include "SourcePathsMapping/Mapping.h"
 #include "SourcePathsMapping/MappingManager.h"
-#include "SymbolProvider/ModuleIdentifier.h"
 #include "SyntaxHighlighter/X86Assembly.h"
 #include "Test/Path.h"
 
@@ -59,12 +77,14 @@ TEST(AnnotatingSourceCodeDialog, SmokeTest) {
       << source_file_contents_or_error.error().message();
   std::string source_file_contents = std::move(source_file_contents_or_error.value());
 
-  orbit_client_data::FunctionInfo function_info{"line_info_test_binary", "buildid", 0x401140,
-                                                kMainFunctionInstructions.size(), "main"};
+  orbit_client_data::FunctionInfo function_info{
+      "line_info_test_binary",          "buildid", /*address=*/0x401140,
+      kMainFunctionInstructions.size(), "main",    /*is_hotpatchable=*/false};
 
   orbit_code_report::Disassembler disassembler{};
-  orbit_client_data::ProcessData process_data{};
-  orbit_client_data::ModuleManager module_manager{};
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider;
+  orbit_client_data::ProcessData process_data{{}, &module_identifier_provider};
+  orbit_client_data::ModuleManager module_manager{&module_identifier_provider};
   disassembler.Disassemble(process_data, module_manager,
                            static_cast<const void*>(kMainFunctionInstructions.data()),
                            kMainFunctionInstructions.size(), 0x401140, true);
@@ -78,7 +98,8 @@ TEST(AnnotatingSourceCodeDialog, SmokeTest) {
 
   bool callback_called = false;
   dialog.AddAnnotatingSourceCode(
-      function_info, [&](const orbit_symbol_provider::ModuleIdentifier&) {
+      function_info,
+      [&](const orbit_client_data::ModulePathAndBuildId& /*module_path_and_build_id*/) {
         callback_called = true;
         return orbit_base::Future<ErrorMessageOr<std::filesystem::path>>{file_path};
       });
@@ -90,15 +111,15 @@ TEST(AnnotatingSourceCodeDialog, SmokeTest) {
                      dialog.close();
                    });
 
-  QObject::connect(
-      &dialog, &orbit_qt::AnnotatingSourceCodeDialog::SourceCodeAvailable, &dialog, [&]() {
-        QPushButton* button = dialog.findChild<QPushButton*>("notification_action_button");
+  QObject::connect(&dialog, &orbit_qt::AnnotatingSourceCodeDialog::SourceCodeAvailable, &dialog,
+                   [&]() {
+                     auto* button = dialog.findChild<QPushButton*>("notification_action_button");
 
-        if (button == nullptr) return;
+                     if (button == nullptr) return;
 
-        // If available we will click on the "Load" button to load the source.
-        QTest::mouseClick(button, Qt::LeftButton);
-      });
+                     // If available we will click on the "Load" button to load the source.
+                     QTest::mouseClick(button, Qt::LeftButton);
+                   });
 
   QTimer::singleShot(std::chrono::seconds{2}, &dialog, [&]() { dialog.close(); });
 

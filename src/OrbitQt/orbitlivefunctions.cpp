@@ -2,29 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "orbitlivefunctions.h"
+#include "OrbitQt/orbitlivefunctions.h"
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <absl/meta/type_traits.h>
 #include <stddef.h>
 
 #include <QBoxLayout>
 #include <QItemSelectionModel>
+#include <QLabel>
 #include <QLayout>
 #include <QModelIndex>
 #include <QObject>
-#include <cstdint>
-#include <memory>
+#include <QTabWidget>
 #include <utility>
 
-#include "App.h"
 #include "ClientData/ScopeId.h"
 #include "DataViews/DataView.h"
 #include "DataViews/LiveFunctionsDataView.h"
-#include "HistogramWidget.h"
-#include "orbitdataviewpanel.h"
-#include "orbittablemodel.h"
-#include "orbittreeview.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitQt/HistogramWidget.h"
+#include "OrbitQt/orbitdataviewpanel.h"
+#include "OrbitQt/orbittablemodel.h"
+#include "OrbitQt/orbittreeview.h"
 #include "ui_orbitlivefunctions.h"
 
 using orbit_client_data::FunctionInfo;
@@ -103,7 +104,7 @@ void OrbitLiveFunctions::OnDataChanged() {
 void OrbitLiveFunctions::AddIterator(size_t id, const FunctionInfo* function) {
   if (!live_functions_) return;
 
-  OrbitEventIterator* iterator_ui = new OrbitEventIterator(this);
+  auto* iterator_ui = new OrbitEventIterator(this);
 
   iterator_ui->SetNextButtonCallback([this, id]() {
     live_functions_->OnNextButton(id);
@@ -168,8 +169,13 @@ void OrbitLiveFunctions::OnRowSelected(std::optional<int> row) {
   ui_->data_view_panel_->GetTreeView()->SetIsInternalRefresh(false);
 }
 
-void OrbitLiveFunctions::ShowHistogram(const std::vector<uint64_t>* data,
-                                       const std::string& scope_name,
+void OrbitLiveFunctions::ShowHistogram(const std::vector<uint64_t>* data, std::string scope_name,
                                        std::optional<orbit_client_data::ScopeId> scope_id) {
-  ui_->histogram_widget_->UpdateData(data, scope_name, scope_id);
+  ui_->histogram_widget_->UpdateData(data, std::move(scope_name), scope_id);
+}
+
+void OrbitLiveFunctions::SetScopeStatsCollection(
+    std::shared_ptr<const orbit_client_data::ScopeStatsCollection> scope_collection) {
+  ui_->data_view_panel_->GetTreeView()->selectionModel()->clearSelection();
+  live_functions_->SetScopeStatsCollection(std::move(scope_collection));
 }

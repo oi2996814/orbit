@@ -5,22 +5,23 @@
 #include "DataViewTestUtils.h"
 
 #include <absl/strings/str_split.h>
-#include <gmock/gmock-matchers.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <tuple>
+#include <filesystem>
+#include <string>
+#include <utility>
 
-#include "OrbitBase/Append.h"
-#include "OrbitBase/File.h"
 #include "OrbitBase/ReadFileToString.h"
-#include "OrbitBase/TemporaryFile.h"
+#include "OrbitBase/Result.h"
+#include "TestUtils/TemporaryDirectory.h"
 #include "TestUtils/TestUtils.h"
 
 namespace orbit_data_views {
 
 int GetActionIndexOnMenu(const FlattenContextMenu& context_menu, std::string_view action_name) {
-  auto matcher = [&action_name](DataView::Action action) {
+  auto matcher = [&action_name](const DataView::Action& action) {
     return action.name == std::string{action_name};
   };
 
@@ -49,7 +50,7 @@ void CheckSingleAction(const FlattenContextMenu& context_menu, std::string_view 
 
 void CheckCopySelectionIsInvoked(const FlattenContextMenu& context_menu,
                                  const MockAppInterface& app, DataView& view,
-                                 const std::string& expected_clipboard) {
+                                 std::string_view expected_clipboard) {
   const int action_index = GetActionIndexOnMenu(context_menu, kMenuActionCopySelection);
   EXPECT_TRUE(action_index != kInvalidActionIndex);
 
@@ -67,33 +68,33 @@ static void ExpectSameLines(const std::string_view& actual, const std::string_vi
   EXPECT_THAT(actual_lines, testing::UnorderedElementsAreArray(expected_lines));
 }
 
-[[nodiscard]] orbit_base::TemporaryFile GetTemporaryFilePath() {
-  ErrorMessageOr<orbit_base::TemporaryFile> temporary_file_or_error =
-      orbit_base::TemporaryFile::Create();
+orbit_test_utils::TemporaryFile GetTemporaryFile() {
+  ErrorMessageOr<orbit_test_utils::TemporaryFile> temporary_file_or_error =
+      orbit_test_utils::TemporaryFile::Create();
   EXPECT_THAT(temporary_file_or_error, orbit_test_utils::HasNoError());
   return std::move(temporary_file_or_error.value());
 }
 
+orbit_test_utils::TemporaryDirectory GetTemporaryDirectory() {
+  ErrorMessageOr<orbit_test_utils::TemporaryDirectory> temporary_dir_or_error =
+      orbit_test_utils::TemporaryDirectory::Create();
+  EXPECT_THAT(temporary_dir_or_error, orbit_test_utils::HasNoError());
+  return std::move(temporary_dir_or_error.value());
+}
+
 void CheckExportToCsvIsInvoked(const FlattenContextMenu& context_menu, const MockAppInterface& app,
-                               DataView& view, const std::string& expected_contents,
+                               DataView& view, std::string_view expected_contents,
                                std::string_view action_name) {
   const int action_index = GetActionIndexOnMenu(context_menu, action_name);
   EXPECT_TRUE(action_index != kInvalidActionIndex);
 
-  orbit_base::TemporaryFile temporary_file = GetTemporaryFilePath();
+  orbit_test_utils::TemporaryDirectory temporary_dir = GetTemporaryDirectory();
+  std::filesystem::path temporary_file_path = temporary_dir.GetDirectoryPath() / "test.txt";
 
-  // We actually only need a temporary file path, so let's call `CloseAndRemove` and reuse the
-  // filepath. The TemporaryFile instance will still take care of deleting our new file when it
-  // gets out of scope.
-  temporary_file.CloseAndRemove();
-
-  EXPECT_CALL(app, GetSaveFile)
-      .Times(1)
-      .WillOnce(testing::Return(temporary_file.file_path().string()));
+  EXPECT_CALL(app, GetSaveFile).Times(1).WillOnce(testing::Return(temporary_file_path.string()));
   view.OnContextMenu(std::string{action_name}, action_index, {0});
 
-  ErrorMessageOr<std::string> contents_or_error =
-      orbit_base::ReadFileToString(temporary_file.file_path());
+  ErrorMessageOr<std::string> contents_or_error = orbit_base::ReadFileToString(temporary_file_path);
   ASSERT_THAT(contents_or_error, orbit_test_utils::HasNoError());
 
   ExpectSameLines(contents_or_error.value(), expected_contents);
@@ -103,7 +104,7 @@ void CheckContextMenuOrder(const FlattenContextMenu& context_menu) {
   const std::vector<std::string_view> ordered_action_names = {
       /* Hooking related actions */
       kMenuActionLoadSymbols, kMenuActionSelect, kMenuActionUnselect, kMenuActionEnableFrameTrack,
-      kMenuActionDisableFrameTrack, kMenuActionVerifyFramePointers,
+      kMenuActionDisableFrameTrack,
       /* Disassembly & source code related actions */
       kMenuActionDisassembly, kMenuActionSourceCode,
       /* Navigating related actions */
@@ -125,7 +126,7 @@ void CheckContextMenuOrder(const FlattenContextMenu& context_menu) {
 }
 
 FlattenContextMenu FlattenContextMenuWithGroupingAndCheckOrder(
-    const std::vector<DataView::ActionGroup>& menu_with_grouping) {
+    absl::Span<const DataView::ActionGroup> menu_with_grouping) {
   FlattenContextMenu menu;
   for (const DataView::ActionGroup& action_group : menu_with_grouping) {
     for (const auto& action : action_group) menu.push_back(action);

@@ -4,15 +4,18 @@
 
 #include "ClientData/TimerTrackDataIdManager.h"
 
+#include <absl/hash/hash.h>
+#include <absl/meta/type_traits.h>
+
 #include "ClientProtos/capture_data.pb.h"
+#include "OrbitBase/Logging.h"
 
 using orbit_client_protos::TimerInfo;
 
 namespace orbit_client_data {
 
-TimerTrackDataIdManager::TimerTrackDataIdManager() {
+TimerTrackDataIdManager::TimerTrackDataIdManager() : scheduler_track_id_(next_track_id_++) {
   // Since there always will be an only scheduler track, we can assign it now.
-  scheduler_track_id_ = next_track_id_++;
 }
 
 uint32_t TimerTrackDataIdManager::GenerateTrackIdFromTimerInfo(const TimerInfo& timer_info) {
@@ -31,9 +34,6 @@ uint32_t TimerTrackDataIdManager::GenerateTrackIdFromTimerInfo(const TimerInfo& 
       return GenerateGpuTrackId(timer_info.timeline_hash());
     case TimerInfo::kApiScopeAsync:
       return GenerateAsyncTrackId(timer_info.api_scope_name());
-    case TimerInfo::kSystemMemoryUsage:
-    case TimerInfo::kCGroupAndProcessMemoryUsage:
-    case TimerInfo::kPageFaults:
     case orbit_client_protos::TimerInfo_Type_TimerInfo_Type_INT_MIN_SENTINEL_DO_NOT_USE_:
     case orbit_client_protos::TimerInfo_Type_TimerInfo_Type_INT_MAX_SENTINEL_DO_NOT_USE_:
       ORBIT_UNREACHABLE();
@@ -59,7 +59,7 @@ uint32_t TimerTrackDataIdManager::GenerateGpuTrackId(uint64_t timeline_hash) {
   return it->second;
 }
 
-uint32_t TimerTrackDataIdManager::GenerateAsyncTrackId(const std::string& name) {
+uint32_t TimerTrackDataIdManager::GenerateAsyncTrackId(std::string_view name) {
   absl::MutexLock lock(&mutex_);
   auto [it, inserted] = async_track_ids_.try_emplace(name, next_track_id_);
   if (inserted) {

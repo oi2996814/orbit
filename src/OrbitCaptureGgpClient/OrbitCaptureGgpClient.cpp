@@ -4,6 +4,7 @@
 
 #include "OrbitCaptureGgpClient/OrbitCaptureGgpClient.h"
 
+#include <absl/types/span.h>
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/security/credentials.h>
 #include <grpcpp/support/channel_arguments.h>
@@ -12,7 +13,7 @@
 #include <limits>
 #include <memory>
 #include <string>
-#include <vector>
+#include <string_view>
 
 #include "GrpcProtos/services_ggp.grpc.pb.h"
 #include "GrpcProtos/services_ggp.pb.h"
@@ -33,19 +34,19 @@ using grpc::Status;
 
 class CaptureClientGgpClient::CaptureClientGgpClientImpl {
  public:
-  void SetupGrpcClient(const std::string& grpc_server_address);
+  void SetupGrpcClient(std::string_view grpc_server_address);
 
   [[nodiscard]] ErrorMessageOr<void> StartCapture();
   [[nodiscard]] ErrorMessageOr<void> StopCapture();
   [[nodiscard]] ErrorMessageOr<void> UpdateSelectedFunctions(
-      const std::vector<std::string>& selected_functions);
+      absl::Span<const std::string> selected_functions);
   void ShutdownService();
 
  private:
   std::unique_ptr<orbit_grpc_protos::CaptureClientGgpService::Stub> capture_client_ggp_service_;
 };
 
-CaptureClientGgpClient::CaptureClientGgpClient(const std::string& grpc_server_address)
+CaptureClientGgpClient::CaptureClientGgpClient(std::string_view grpc_server_address)
     : pimpl{std::make_unique<CaptureClientGgpClientImpl>()} {
   pimpl->SetupGrpcClient(grpc_server_address);
 }
@@ -69,7 +70,7 @@ int CaptureClientGgpClient::StopCapture() {
 }
 
 int CaptureClientGgpClient::UpdateSelectedFunctions(
-    const std::vector<std::string>& selected_functions) {
+    absl::Span<const std::string> selected_functions) {
   ErrorMessageOr<void> result = pimpl->UpdateSelectedFunctions(selected_functions);
   if (result.has_error()) {
     ORBIT_ERROR("Not possible to update functions %s", result.error().message());
@@ -81,16 +82,16 @@ int CaptureClientGgpClient::UpdateSelectedFunctions(
 void CaptureClientGgpClient::ShutdownService() { pimpl->ShutdownService(); }
 
 CaptureClientGgpClient::~CaptureClientGgpClient() = default;
-CaptureClientGgpClient::CaptureClientGgpClient(CaptureClientGgpClient&&) = default;
+[[maybe_unused]] CaptureClientGgpClient::CaptureClientGgpClient(CaptureClientGgpClient&&) = default;
 CaptureClientGgpClient& CaptureClientGgpClient::operator=(CaptureClientGgpClient&&) = default;
 
 void CaptureClientGgpClient::CaptureClientGgpClientImpl::SetupGrpcClient(
-    const std::string& grpc_server_address) {
+    std::string_view grpc_server_address) {
   grpc::ChannelArguments channel_arguments;
   channel_arguments.SetMaxReceiveMessageSize(std::numeric_limits<int32_t>::max());
 
   std::shared_ptr<::grpc::Channel> grpc_channel = grpc::CreateCustomChannel(
-      grpc_server_address, grpc::InsecureChannelCredentials(), channel_arguments);
+      std::string{grpc_server_address}, grpc::InsecureChannelCredentials(), channel_arguments);
   if (!grpc_channel) {
     ORBIT_ERROR("Unable to create GRPC channel to %s", grpc_server_address);
     return;
@@ -132,7 +133,7 @@ ErrorMessageOr<void> CaptureClientGgpClient::CaptureClientGgpClientImpl::StopCap
 }
 
 ErrorMessageOr<void> CaptureClientGgpClient::CaptureClientGgpClientImpl::UpdateSelectedFunctions(
-    const std::vector<std::string>& selected_functions) {
+    absl::Span<const std::string> selected_functions) {
   UpdateSelectedFunctionsRequest request;
   UpdateSelectedFunctionsResponse response;
   auto context = std::make_unique<ClientContext>();

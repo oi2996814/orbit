@@ -2,22 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "GpuDebugMarkerTrack.h"
+#include "OrbitGl/GpuDebugMarkerTrack.h"
 
-#include <absl/time/time.h>
+#include <GteVector.h>
+#include <absl/strings/str_format.h>
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 
-#include "App.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "GlUtils.h"
 #include "OrbitBase/Logging.h"
-#include "PrimitiveAssembler.h"
-#include "ThreadColor.h"
-#include "TimeGraphLayout.h"
-#include "absl/strings/str_format.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/TimeGraph.h"
+#include "OrbitGl/TimeGraphLayout.h"
 
 using orbit_client_protos::TimerInfo;
 using orbit_gl::PrimitiveAssembler;
@@ -47,26 +48,26 @@ Color GpuDebugMarkerTrack::GetTimerColor(const TimerInfo& timer_info, bool is_se
                                          bool is_highlighted,
                                          const internal::DrawData& /*draw_data*/) const {
   ORBIT_CHECK(timer_info.type() == TimerInfo::kGpuDebugMarker);
-  const Color kInactiveColor(100, 100, 100, 255);
-  const Color kSelectionColor(0, 128, 255, 255);
+  const Color inactive_color(100, 100, 100, 255);
+  const Color selection_color(0, 128, 255, 255);
   if (is_highlighted) {
     return TimerTrack::kHighlightColor;
   }
   if (is_selected) {
-    return kSelectionColor;
+    return selection_color;
   }
   if (!IsTimerActive(timer_info)) {
-    return kInactiveColor;
+    return inactive_color;
   }
   if (timer_info.has_color()) {
     ORBIT_CHECK(timer_info.color().red() < 256);
     ORBIT_CHECK(timer_info.color().green() < 256);
     ORBIT_CHECK(timer_info.color().blue() < 256);
     ORBIT_CHECK(timer_info.color().alpha() < 256);
-    return Color(static_cast<uint8_t>(timer_info.color().red()),
-                 static_cast<uint8_t>(timer_info.color().green()),
-                 static_cast<uint8_t>(timer_info.color().blue()),
-                 static_cast<uint8_t>(timer_info.color().alpha()));
+    return {static_cast<uint8_t>(timer_info.color().red()),
+            static_cast<uint8_t>(timer_info.color().green()),
+            static_cast<uint8_t>(timer_info.color().blue()),
+            static_cast<uint8_t>(timer_info.color().alpha())};
   }
   std::string marker_text = string_manager_->Get(timer_info.user_data_key()).value_or("");
   return TimeGraph::GetColor(marker_text);
@@ -111,15 +112,14 @@ float GpuDebugMarkerTrack::GetYFromDepth(uint32_t depth) const {
   if (IsCollapsed()) {
     depth = 0;
   }
-  return GetPos()[1] + layout_->GetTrackTabHeight() + layout_->GetTrackContentTopMargin() +
-         layout_->GetTextBoxHeight() * depth;
+  return GetPos()[1] + layout_->GetTrackContentTopMargin() + layout_->GetTextBoxHeight() * depth;
 }
 
 float GpuDebugMarkerTrack::GetHeight() const {
   bool collapsed = IsCollapsed();
   uint32_t depth = collapsed ? std::min<uint32_t>(1, GetDepth()) : GetDepth();
-  return layout_->GetTrackTabHeight() + layout_->GetTrackContentTopMargin() +
-         layout_->GetTextBoxHeight() * depth + layout_->GetTrackContentBottomMargin();
+  return layout_->GetTrackContentTopMargin() + layout_->GetTextBoxHeight() * depth +
+         layout_->GetTrackContentBottomMargin();
 }
 
 bool GpuDebugMarkerTrack::TimerFilter(const TimerInfo& timer_info) const {

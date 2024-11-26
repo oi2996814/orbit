@@ -2,17 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/synchronization/mutex.h>
+#include <absl/time/clock.h>
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
 
+#include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <memory>
+#include <vector>
 
+#include "OrbitBase/Action.h"
+#include "OrbitBase/Future.h"
 #include "OrbitBase/ThreadPool.h"
-#include "absl/synchronization/mutex.h"
-#include "absl/time/clock.h"
 
 using orbit_base::ThreadPool;
 
@@ -78,6 +81,10 @@ TEST(ThreadPool, QueuedActionsExecutedOnShutdown) {
 }
 
 TEST(ThreadPool, CheckTtl) {
+// TODO(https://github.com/google/orbit/issues/4503): Enable test again.
+#ifdef _WIN32
+  GTEST_SKIP();
+#endif
   constexpr size_t kThreadPoolMinSize = 1;
   constexpr size_t kThreadPoolMaxSize = 5;
   constexpr size_t kThreadTtlMillis = 5;
@@ -132,6 +139,10 @@ TEST(ThreadPool, CheckTtl) {
 }
 
 TEST(ThreadPool, ExtendThreadPool) {
+// TODO(https://github.com/google/orbit/issues/4503): Enable test again.
+#ifdef _WIN32
+  GTEST_SKIP();
+#endif
   constexpr size_t kThreadPoolMinSize = 1;
   constexpr size_t kThreadPoolMaxSize = 5;
   constexpr size_t kThreadTtlMillis = 5;

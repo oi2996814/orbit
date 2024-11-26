@@ -5,6 +5,8 @@
 #ifndef ORBIT_SSH_QT_SESSION_H_
 #define ORBIT_SSH_QT_SESSION_H_
 
+#include <stddef.h>
+
 #include <QNonConstOverload>
 #include <QObject>
 #include <QSocketNotifier>
@@ -13,6 +15,7 @@
 #include <system_error>
 #include <utility>
 
+#include "OrbitBase/Future.h"
 #include "OrbitBase/Result.h"
 #include "OrbitSsh/Context.h"
 #include "OrbitSsh/Credentials.h"
@@ -23,7 +26,7 @@
 namespace orbit_ssh_qt {
 namespace details {
 enum class SessionState {
-  kInitial,
+  kInitialized,
   kDisconnected,
   kSocketCreated,
   kSocketConnected,
@@ -32,9 +35,9 @@ enum class SessionState {
   kMatchedKnownHosts,
   kStarted,
   kConnected,
-  kShutdown,
+  kStopping,
   kAboutToDisconnect,
-  kDone,
+  kStopped,
   kError
 };
 }  // namespace details
@@ -57,8 +60,8 @@ class Session : public StateMachineHelper<Session, details::SessionState> {
   explicit Session(const orbit_ssh::Context* context, QObject* parent = nullptr)
       : StateMachineHelper(parent), context_(context) {}
 
-  void ConnectToServer(orbit_ssh::Credentials creds);
-  void Disconnect();
+  orbit_base::Future<ErrorMessageOr<void>> ConnectToServer(orbit_ssh::Credentials creds);
+  [[nodiscard]] orbit_base::Future<ErrorMessageOr<void>> Disconnect();
 
   orbit_ssh::Session* GetRawSession() { return session_ ? &session_.value() : nullptr; }
 
@@ -95,6 +98,9 @@ class Session : public StateMachineHelper<Session, details::SessionState> {
   outcome::result<void> run();
 
   void SetError(std::error_code);
+  void SetState(details::SessionState state);
+
+  size_t next_credential_key_index_ = 0;
 };
 
 }  // namespace orbit_ssh_qt

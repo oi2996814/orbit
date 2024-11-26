@@ -4,38 +4,43 @@
 
 #include "LinuxCaptureService/LinuxCaptureServiceBase.h"
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
-#include <absl/strings/match.h>
 #include <absl/strings/str_format.h>
 #include <absl/synchronization/mutex.h>
 #include <absl/time/time.h>
-#include <stdint.h>
+#include <sys/types.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <map>
 #include <optional>
 #include <regex>
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ApiLoader/EnableInTracee.h"
 #include "ApiUtils/Event.h"
+#include "CaptureServiceBase/CaptureStartStopListener.h"
 #include "CaptureServiceBase/CommonProducerCaptureEventBuilders.h"
 #include "CaptureServiceBase/StopCaptureRequestWaiter.h"
 #include "ExtractSignalFromMinidump.h"
 #include "GrpcProtos/Constants.h"
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/services.pb.h"
 #include "Introspection/Introspection.h"
 #include "MemoryInfoHandler.h"
 #include "MemoryWatchdog.h"
-#include "OrbitBase/ExecutablePath.h"
 #include "OrbitBase/File.h"
 #include "OrbitBase/Logging.h"
-#include "OrbitBase/MakeUniqueForOverwrite.h"
 #include "OrbitBase/Profiling.h"
 #include "OrbitBase/Result.h"
-#include "OrbitVersion/OrbitVersion.h"
+#include "OrbitBase/ThreadUtils.h"
+#include "ProducerEventProcessor/ClientCaptureEventCollector.h"
 #include "ProducerEventProcessor/ProducerEventProcessor.h"
 #include "TracingHandler.h"
 #include "UserSpaceInstrumentationAddressesImpl.h"
@@ -158,8 +163,8 @@ class ProducerEventProcessorHijackingFunctionEntryExitForLinuxTracing
 
 absl::flat_hash_set<std::string> ListFileNamesOfAllMinidumps() {
   absl::flat_hash_set<std::string> result;
-  const std::string kCoreDirectory = "/usr/local/cloudcast/core";
-  auto error_or_core_files = orbit_base::ListFilesInDirectory(kCoreDirectory);
+  const std::string core_directory = "/usr/local/cloudcast/core";
+  auto error_or_core_files = orbit_base::ListFilesInDirectory(core_directory);
   if (!error_or_core_files.has_error()) {
     const std::regex check_if_minidump_file(absl::StrFormat(R"(.*\.[0-9]+\.core\.dmp)"));
     for (const std::filesystem::path& path : error_or_core_files.value()) {
@@ -178,9 +183,9 @@ struct TargetProcessStateAfterCapture {
 
 TargetProcessStateAfterCapture GetTargetProcessStateAfterCapture(
     pid_t pid, const absl::flat_hash_set<std::string>& old_core_files) {
-  TargetProcessStateAfterCapture result;
-  result.process_state = CaptureFinished::kProcessStateInternalError;
-  result.termination_signal = CaptureFinished::kTerminationSignalInternalError;
+  TargetProcessStateAfterCapture result{
+      .process_state = CaptureFinished::kProcessStateInternalError,
+      .termination_signal = CaptureFinished::kTerminationSignalInternalError};
 
   const std::string pid_dir_name = absl::StrFormat("/proc/%i", pid);
   auto exists_or_error = orbit_base::FileOrDirectoryExists(pid_dir_name);
@@ -199,8 +204,8 @@ TargetProcessStateAfterCapture GetTargetProcessStateAfterCapture(
   }
 
   // Check whether we find a minidump. Otherwise we assume the process ended gracefully.
-  const std::string kCoreDirectory = "/usr/local/cloudcast/core";
-  auto error_or_core_files = orbit_base::ListFilesInDirectory(kCoreDirectory);
+  const std::string core_directory = "/usr/local/cloudcast/core";
+  auto error_or_core_files = orbit_base::ListFilesInDirectory(core_directory);
   if (error_or_core_files.has_error()) {
     // We can't access the directory with the core files; we return an error state.
     return result;
@@ -272,10 +277,10 @@ LinuxCaptureServiceBase::WaitForStopCaptureRequestOrMemoryThresholdExceeded(
         }
       }};
 
-  static const uint64_t mem_total_bytes = GetPhysicalMemoryInBytes();
-  static const uint64_t watchdog_threshold_bytes = mem_total_bytes / 2;
+  static const uint64_t kMemTotalBytes = GetPhysicalMemoryInBytes();
+  static const uint64_t kWatchdogThresholdBytes = kMemTotalBytes / 2;
   ORBIT_LOG("Starting memory watchdog with threshold %u B because total physical memory is %u B",
-            watchdog_threshold_bytes, mem_total_bytes);
+            kWatchdogThresholdBytes, kMemTotalBytes);
   while (true) {
     {
       absl::MutexLock lock{stop_capture_mutex.get()};
@@ -293,7 +298,7 @@ LinuxCaptureServiceBase::WaitForStopCaptureRequestOrMemoryThresholdExceeded(
       ORBIT_ERROR_ONCE("Reading resident set size of OrbitService");
       continue;
     }
-    if (rss_bytes.value() > watchdog_threshold_bytes) {
+    if (rss_bytes.value() > kWatchdogThresholdBytes) {
       ORBIT_LOG("Memory threshold exceeded: stopping capture (and stopping memory watchdog)");
       absl::MutexLock lock{stop_capture_mutex.get()};
       *stop_capture = true;

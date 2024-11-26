@@ -2,19 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "GlCanvas.h"
+#include "OrbitGl/GlCanvas.h"
 
 #include <GteVector.h>
-#include <absl/base/casts.h>
-#include <glad/glad.h>
+#include <stdint.h>
 
-#include "AccessibleInterfaceProvider.h"
-#include "App.h"
-#include "CaptureWindow.h"
-#include "ImGuiOrbit.h"
-#include "IntrospectionWindow.h"
+#include <QOpenGLFunctions>
+#include <array>
+#include <cstring>
+
+#include "ApiInterface/Orbit.h"
 #include "OrbitAccessibility/AccessibleWidgetBridge.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitGl/AccessibleInterfaceProvider.h"
 
 // TODO(b/227341686) z-values should not be of `float` type. E.g. make them `uint`.
 // Tracks: 0.0 - 0.1
@@ -30,6 +30,7 @@ float GlCanvas::kZValueEventBar = 0.03f;
 float GlCanvas::kZValueBox = 0.05f;
 float GlCanvas::kZValueEvent = 0.06f;
 float GlCanvas::kZValueBoxBorder = 0.07f;
+float GlCanvas::kZValueTrackHeader = 0.075f;
 float GlCanvas::kZValueTrackText = 0.08f;
 float GlCanvas::kZValueTrackLabel = 0.09f;
 float GlCanvas::kZValueTimeBar = 0.31f;
@@ -61,58 +62,15 @@ const Color GlCanvas::kTabTextColorSelected = Color(100, 181, 246, 255);
 
 GlCanvas::GlCanvas()
     : AccessibleInterfaceProvider(),
+      text_renderer_(),
       viewport_(0, 0),
       ui_batcher_(BatcherId::kUi),
-      primitive_assembler_(&ui_batcher_, &picking_manager_) {
+      primitive_assembler_(&ui_batcher_, &render_group_manager_, &picking_manager_) {
   // Note that `GlCanvas` is the bridge to OpenGl content, and `GlCanvas`'s parent needs special
   // handling for accessibility. Thus, we use `nullptr` here.
   text_renderer_.SetViewport(&viewport_);
 
-  is_selecting_ = false;
-  double_clicking_ = false;
-  control_key_ = false;
-  redraw_requested_ = true;
-
-  ref_time_click_ = 0.0;
-
-  delta_time_ = 0.0f;
-
-  hover_delay_ms_ = 300;
   ResetHoverTimer();
-}
-
-GlCanvas::~GlCanvas() {
-  if (imgui_context_ != nullptr) {
-    Orbit_ImGui_Shutdown();
-    ImGui::DestroyContext();
-  }
-}
-
-std::unique_ptr<GlCanvas> GlCanvas::Create(CanvasType canvas_type, OrbitApp* app) {
-  switch (canvas_type) {
-    case CanvasType::kCaptureWindow: {
-      auto main_capture_window = std::make_unique<CaptureWindow>(app);
-      app->SetCaptureWindow(main_capture_window.get());
-      return main_capture_window;
-    }
-    case CanvasType::kIntrospectionWindow: {
-      auto introspection_window = std::make_unique<IntrospectionWindow>(app);
-      app->SetIntrospectionWindow(introspection_window.get());
-      return introspection_window;
-    }
-    case CanvasType::kDebug:
-      return std::make_unique<GlCanvas>();
-    default:
-      ORBIT_UNREACHABLE();
-  }
-}
-
-void GlCanvas::EnableImGui() {
-  if (imgui_context_ == nullptr) {
-    imgui_context_ = ImGui::CreateContext();
-    constexpr uint32_t kImGuiFontSize = 12;
-    Orbit_ImGui_Init(kImGuiFontSize);
-  }
 }
 
 bool GlCanvas::IsRedrawNeeded() const {
@@ -143,19 +101,11 @@ void GlCanvas::LeftDown(int x, int y) {
   SetPickingMode(PickingMode::kClick);
   is_selecting_ = false;
 
-  Orbit_ImGui_MouseButtonCallback(imgui_context_, 0, true);
-
   RequestRedraw();
 }
 
-void GlCanvas::MouseWheelMoved(int x, int y, int delta, bool /*ctrl*/) {
+void GlCanvas::MouseWheelMoved(int x, int y, int /*delta*/, bool /*ctrl*/) {
   mouse_move_pos_screen_ = Vec2i(x, y);
-
-  // Normalize and invert sign, so that delta < 0 is zoom in.
-  int delta_normalized = delta < 0 ? 1 : -1;
-
-  // Use the original sign of a_Delta here.
-  Orbit_ImGui_ScrollCallback(imgui_context_, -delta_normalized);
 
   ResetHoverTimer();
   RequestRedraw();
@@ -163,7 +113,6 @@ void GlCanvas::MouseWheelMoved(int x, int y, int delta, bool /*ctrl*/) {
 
 void GlCanvas::LeftUp() {
   picking_manager_.Release();
-  Orbit_ImGui_MouseButtonCallback(imgui_context_, 0, false);
   RequestRedraw();
 }
 
@@ -178,40 +127,29 @@ void GlCanvas::RightDown(int x, int y) {
 
   select_start_pos_world_ = select_stop_pos_world_ = mouse_click_pos_world_;
   is_selecting_ = true;
-
-  Orbit_ImGui_MouseButtonCallback(imgui_context_, 1, true);
   RequestRedraw();
 }
 
-bool GlCanvas::RightUp() {
-  Orbit_ImGui_MouseButtonCallback(imgui_context_, 1, false);
+void GlCanvas::RightUp() {
   is_selecting_ = false;
   RequestRedraw();
-
-  bool show_context_menu = select_start_pos_world_ == select_stop_pos_world_;
-  return show_context_menu;
 }
 
-void GlCanvas::CharEvent(unsigned int character) {
-  Orbit_ImGui_CharCallback(imgui_context_, character);
+void GlCanvas::CharEvent(unsigned int /*character*/) { RequestRedraw(); }
+
+void GlCanvas::KeyPressed(unsigned int /*key_code*/, bool ctrl, bool shift, bool alt) {
+  UpdateSpecialKeys(ctrl, shift, alt);
   RequestRedraw();
 }
 
-void GlCanvas::KeyPressed(unsigned int key_code, bool ctrl, bool shift, bool alt) {
+void GlCanvas::KeyReleased(unsigned int /*key_code*/, bool ctrl, bool shift, bool alt) {
   UpdateSpecialKeys(ctrl, shift, alt);
-  Orbit_ImGui_KeyCallback(imgui_context_, static_cast<int>(key_code), true, ctrl, shift, alt);
-  RequestRedraw();
-}
-
-void GlCanvas::KeyReleased(unsigned int key_code, bool ctrl, bool shift, bool alt) {
-  UpdateSpecialKeys(ctrl, shift, alt);
-  Orbit_ImGui_KeyCallback(imgui_context_, static_cast<int>(key_code), false, ctrl, shift, alt);
   RequestRedraw();
 }
 
 void GlCanvas::UpdateSpecialKeys(bool ctrl, bool /*shift*/, bool /*alt*/) { control_key_ = ctrl; }
 
-bool GlCanvas::ControlPressed() { return control_key_; }
+bool GlCanvas::ControlPressed() const { return control_key_; }
 
 void GlCanvas::PrepareGlViewport() {
   glViewport(0, 0, viewport_.GetScreenWidth(), viewport_.GetScreenHeight());
@@ -223,6 +161,8 @@ void GlCanvas::PrepareGlViewport() {
 }
 
 void GlCanvas::PrepareGlState() {
+  initializeOpenGLFunctions();
+
   glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT);
 
   glClearColor(static_cast<float>(kBackgroundColor[0]) / 255.0f,
@@ -237,11 +177,13 @@ void GlCanvas::PrepareGlState() {
   picking_mode_ != PickingMode::kNone ? glDisable(GL_BLEND) : glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glUseProgram(0);
 }
 
 void GlCanvas::CleanupGlState() { glPopAttrib(); }
 
-void GlCanvas::Render(int width, int height) {
+void GlCanvas::Render(QPainter* painter, int width, int height) {
   ORBIT_SCOPE("GlCanvas::Render");
   ORBIT_CHECK(width == viewport_.GetScreenWidth() && height == viewport_.GetScreenHeight());
 
@@ -249,6 +191,7 @@ void GlCanvas::Render(int width, int height) {
     return;
   }
 
+  painter->beginNativePainting();
   redraw_requested_ = false;
   ui_batcher_.ResetElements();
 
@@ -257,9 +200,6 @@ void GlCanvas::Render(int width, int height) {
 
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  glBindTexture(GL_TEXTURE_2D, 0);
-  glUseProgram(0);
-
   // Clear text renderer
   text_renderer_.Init();
   text_renderer_.Clear();
@@ -267,18 +207,14 @@ void GlCanvas::Render(int width, int height) {
   // Reset picking manager before each draw.
   picking_manager_.Reset();
 
-  Draw();
-
-  if (picking_mode_ == PickingMode::kNone) {
-    for (const auto& render_callback : render_callbacks_) {
-      render_callback();
-    }
-  }
+  Draw(painter);
 
   glFlush();
   CleanupGlState();
 
-  PostRender();
+  PostRender(painter);
+
+  painter->endNativePainting();
 
   double_clicking_ = false;
   viewport_.ClearDirtyFlag();
@@ -294,7 +230,7 @@ void GlCanvas::PreRender() {
   }
 }
 
-void GlCanvas::PostRender() {
+void GlCanvas::PostRender(QPainter* painter) {
   PickingMode prev_picking_mode = picking_mode_;
   picking_mode_ = PickingMode::kNone;
 
@@ -302,9 +238,9 @@ void GlCanvas::PostRender() {
     can_hover_ = false;
   }
 
-  if (prev_picking_mode != PickingMode::kNone) {
+  if (!draw_as_if_picking_ && prev_picking_mode != PickingMode::kNone) {
     Pick(prev_picking_mode, mouse_move_pos_screen_[0], mouse_move_pos_screen_[1]);
-    GlCanvas::Render(viewport_.GetScreenWidth(), viewport_.GetScreenHeight());
+    GlCanvas::Render(painter, viewport_.GetScreenWidth(), viewport_.GetScreenHeight());
   }
 }
 
@@ -318,17 +254,14 @@ void GlCanvas::ResetHoverTimer() {
   can_hover_ = true;
 }
 
-void GlCanvas::SetPickingMode(PickingMode mode) {
-  if (imgui_context_ != nullptr) return;
-  picking_mode_ = mode;
-}
+void GlCanvas::SetPickingMode(PickingMode mode) { picking_mode_ = mode; }
 
 void GlCanvas::Pick(PickingMode picking_mode, int x, int y) {
   // 4 bytes per pixel (RGBA), 1x1 bitmap
   std::array<uint8_t, 4 * 1 * 1> pixels{};
-  glReadPixels(x, viewport_.GetScreenHeight() - y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &pixels[0]);
+  glReadPixels(x, viewport_.GetScreenHeight() - y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
   uint32_t value;
-  std::memcpy(&value, &pixels[0], sizeof(uint32_t));
+  std::memcpy(&value, pixels.data(), sizeof(uint32_t));
   PickingId pick_id = PickingId::FromPixelValue(value);
 
   HandlePickedElement(picking_mode, pick_id, x, y);

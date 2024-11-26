@@ -2,22 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/algorithm/container.h>
 #include <absl/container/flat_hash_map.h>
-#include <absl/strings/str_cat.h>
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/str_format.h>
-#include <gmock/gmock-matchers.h>
+#include <absl/time/time.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <initializer_list>
 #include <iterator>
+#include <memory>
+#include <optional>
+#include <set>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ClientData/CaptureData.h"
+#include "ClientData/FunctionInfo.h"
+#include "ClientData/MockScopeStatsCollection.h"
+#include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifierProvider.h"
+#include "ClientData/ModuleManager.h"
 #include "ClientData/ScopeId.h"
 #include "ClientData/ScopeStats.h"
+#include "ClientData/ThreadTrackDataProvider.h"
 #include "ClientData/TimerChain.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "DataViewTestUtils.h"
@@ -28,13 +47,17 @@
 #include "DataViews/LiveFunctionsInterface.h"
 #include "DisplayFormats/DisplayFormats.h"
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
+#include "GrpcProtos/symbol.pb.h"
 #include "MockAppInterface.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/Typedef.h"
 
 using JumpToTimerMode = orbit_data_views::AppInterface::JumpToTimerMode;
 
 using orbit_client_data::CaptureData;
 using orbit_client_data::FunctionInfo;
-using orbit_client_data::ModuleData;
+using orbit_client_data::MockScopeStatsCollection;
 using orbit_client_data::ScopeId;
 using orbit_client_data::ScopeStats;
 
@@ -66,10 +89,9 @@ using orbit_data_views::kMenuActionUnselect;
 using orbit_grpc_protos::InstrumentedFunction;
 using orbit_grpc_protos::ModuleInfo;
 
-using ::testing::_;
 using ::testing::Invoke;
-using ::testing::Pointee;
 using ::testing::Return;
+using ::testing::ReturnRef;
 
 namespace {
 
@@ -156,6 +178,18 @@ const std::vector<uint64_t> kDurations = []() {
   return durations;
 }();
 
+const std::array<ScopeStats, kNumFunctions> kScopeStats = [] {
+  std::array<ScopeStats, kNumFunctions> scope_stats;
+  for (size_t i = 0; i < kNumFunctions; i++) {
+    scope_stats[i].set_count(kCounts[i]);
+    scope_stats[i].set_total_time_ns(kTotalTimeNs[i]);
+    scope_stats[i].set_min_ns(kMinNs[i]);
+    scope_stats[i].set_max_ns(kMaxNs[i]);
+    scope_stats[i].set_variance_ns(kStdDevNs[i] * kStdDevNs[i]);
+  }
+  return scope_stats;
+}();
+
 std::string GetExpectedDisplayTime(uint64_t time_ns) {
   return orbit_display_formats::GetDisplayTime(absl::Nanoseconds(time_ns));
 }
@@ -165,7 +199,8 @@ std::string GetExpectedDisplayAddress(uint64_t address) { return absl::StrFormat
 std::string GetExpectedDisplayCount(uint64_t count) { return absl::StrFormat("%lu", count); }
 
 std::unique_ptr<CaptureData> GenerateTestCaptureData(
-    orbit_client_data::ModuleManager* module_manager) {
+    orbit_client_data::ModuleManager* module_manager,
+    const orbit_client_data::ModuleIdentifierProvider* module_identifier_provider) {
   orbit_grpc_protos::CaptureStarted capture_started{};
 
   for (size_t i = 0; i < kNumFunctions; i++) {
@@ -183,8 +218,9 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
     orbit_grpc_protos::ModuleSymbols module_symbols;
     module_symbols.mutable_symbol_infos()->Add(std::move(symbol_info));
 
-    orbit_client_data::ModuleData* module_data = module_manager->GetMutableModuleByModuleIdentifier(
-        orbit_symbol_provider::ModuleIdentifier{kModulePaths[i], kBuildIds[i]});
+    orbit_client_data::ModuleData* module_data =
+        module_manager->GetMutableModuleByModulePathAndBuildId(
+            {.module_path = kModulePaths[i], .build_id = kBuildIds[i]});
     module_data->AddSymbols(module_symbols);
 
     const FunctionInfo& function = *module_data->FindFunctionByVirtualAddress(kAddresses[i], true);
@@ -198,9 +234,9 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
     instrumented_function->set_function_name(kPrettyNames[i]);
   }
 
-  auto capture_data =
-      std::make_unique<CaptureData>(capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
-                                    CaptureData::DataSource::kLiveCapture);
+  auto capture_data = std::make_unique<CaptureData>(
+      capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
+      CaptureData::DataSource::kLiveCapture, module_identifier_provider);
 
   for (const TimerInfo* timer_info : kTimerPointers) {
     capture_data->GetThreadTrackDataProvider()->AddTimer(*timer_info);
@@ -214,7 +250,7 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
     stats.set_min_ns(kMinNs[i]);
     stats.set_max_ns(kMaxNs[i]);
     stats.set_variance_ns(kStdDevNs[i] * kStdDevNs[i]);
-    capture_data->AddScopeStats(kScopeIds[i], std::move(stats));
+    capture_data->AddScopeStats(kScopeIds[i], stats);
   }
 
   capture_data->OnCaptureComplete();
@@ -230,25 +266,37 @@ class MockLiveFunctionsInterface : public orbit_data_views::LiveFunctionsInterfa
 class LiveFunctionsDataViewTest : public testing::Test {
  public:
   explicit LiveFunctionsDataViewTest()
-      : view_{&live_functions_, &app_}, capture_data_(GenerateTestCaptureData(&module_manager_)) {
+      : view_{&live_functions_, &app_},
+        capture_data_(GenerateTestCaptureData(&module_manager_, &module_identifier_provider_)) {
     EXPECT_CALL(app_, GetModuleManager()).WillRepeatedly(Return(&module_manager_));
     EXPECT_CALL(app_, GetMutableModuleManager()).WillRepeatedly(Return(&module_manager_));
-    EXPECT_CALL(app_, HasCaptureData).WillRepeatedly(testing::Return(true));
-    EXPECT_CALL(app_, GetCaptureData).WillRepeatedly(testing::ReturnRef(*capture_data_));
+    EXPECT_CALL(app_, HasCaptureData).WillRepeatedly(Return(true));
+    EXPECT_CALL(app_, GetCaptureData).WillRepeatedly(ReturnRef(*capture_data_));
 
     view_.Init();
     for (size_t i = 0; i < kNumFunctions; i++) {
-      FunctionInfo function{kModulePaths[i], kBuildIds[i], kAddresses[i], 0, kPrettyNames[i]};
+      FunctionInfo function{kModulePaths[i], kBuildIds[i],    kAddresses[i],
+                            /*size=*/0,      kPrettyNames[i], /*is_hotpatchable=*/false};
       functions_.insert_or_assign(kScopeIds[i], std::move(function));
     }
+    view_.SetScopeStatsCollection(capture_data_->GetAllScopeStatsCollection());
   }
 
-  void AddFunctionsByIndices(const std::vector<size_t>& indices) {
+  void AddFunctionsByIndices(absl::Span<const size_t> indices) {
     std::set index_set(indices.begin(), indices.end());
+    auto scope_stats_collection = std::make_shared<MockScopeStatsCollection>();
+    std::vector<ScopeId> ids;
+    absl::c_transform(index_set, std::back_inserter(ids),
+                      [](const size_t index) { return ScopeId(kScopeIds[index]); });
+    EXPECT_CALL(*scope_stats_collection, GetAllProvidedScopeIds).WillRepeatedly(Return(ids));
     for (size_t index : index_set) {
-      ORBIT_CHECK(index < kNumFunctions);
-      view_.AddScope(kScopeIds[index]);
+      EXPECT_CALL(*scope_stats_collection, GetScopeStatsOrDefault(kScopeIds[index]))
+          .WillRepeatedly(ReturnRef(kScopeStats[index]));
     }
+    EXPECT_CALL(*scope_stats_collection, GetSortedTimerDurationsForScopeId(kScopeIds[0]))
+        .WillRepeatedly(Return(&kDurations));
+
+    view_.SetScopeStatsCollection(std::move(scope_stats_collection));
   }
 
  protected:
@@ -256,7 +304,8 @@ class LiveFunctionsDataViewTest : public testing::Test {
   orbit_data_views::MockAppInterface app_;
   orbit_data_views::LiveFunctionsDataView view_;
 
-  orbit_client_data::ModuleManager module_manager_;
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider_;
+  orbit_client_data::ModuleManager module_manager_{&module_identifier_provider_};
   absl::flat_hash_map<ScopeId, FunctionInfo> functions_;
   std::unique_ptr<CaptureData> capture_data_;
 };
@@ -339,8 +388,6 @@ TEST_F(LiveFunctionsDataViewTest, ColumnSelectedShowsRightResults) {
 
 TEST_F(LiveFunctionsDataViewTest, ContextMenuEntriesArePresentCorrectly) {
   AddFunctionsByIndices({0, 1, 2});
-  bool capture_connected;
-  bool is_capturing;
   std::array<bool, kNumFunctions> functions_selected{false, true, true};
   std::array<bool, kNumFunctions> frame_track_enabled{false, false, true};
   for (size_t i = 0; i < kNumFunctions; i++) {
@@ -355,7 +402,9 @@ TEST_F(LiveFunctionsDataViewTest, ContextMenuEntriesArePresentCorrectly) {
     }
     return std::nullopt;
   };
+  bool capture_connected{};
   EXPECT_CALL(app_, IsCaptureConnected).WillRepeatedly(testing::ReturnPointee(&capture_connected));
+  bool is_capturing{};
   EXPECT_CALL(app_, IsCapturing).WillRepeatedly(testing::ReturnPointee(&is_capturing));
   EXPECT_CALL(app_, IsFunctionSelected(testing::A<const orbit_client_data::FunctionInfo&>()))
       .WillRepeatedly([&](const FunctionInfo& function) -> bool {
@@ -369,7 +418,7 @@ TEST_F(LiveFunctionsDataViewTest, ContextMenuEntriesArePresentCorrectly) {
     return frame_track_enabled.at(index.value());
   });
 
-  auto verify_context_menu_action_availability = [&](std::vector<int> selected_indices) {
+  auto verify_context_menu_action_availability = [&](absl::Span<const int> selected_indices) {
     FlattenContextMenu context_menu = FlattenContextMenuWithGroupingAndCheckOrder(
         view_.GetContextMenuWithGrouping(0, selected_indices));
 
@@ -856,7 +905,6 @@ TEST_F(LiveFunctionsDataViewTest, HistogramIsProperlyUpdated) {
     return timer.function_id();
   }));
 
-  view_.OnDataChanged();
   AddFunctionsByIndices({0});
 
   EXPECT_CALL(app_, ShowHistogram(testing::Pointee(kDurations), kPrettyNames[0],
@@ -873,4 +921,24 @@ TEST_F(LiveFunctionsDataViewTest,
   EXPECT_CALL(app_, ShowHistogram(nullptr, "", std::optional<ScopeId>{})).Times(1);
 
   view_.UpdateHistogramWithScopeIds({kNonDynamicallyInstrumentedFunctionId});
+}
+
+TEST_F(LiveFunctionsDataViewTest, LiveTabUsesScopeStatsCollection) {
+  auto scope_stats_collection = std::make_shared<orbit_client_data::MockScopeStatsCollection>();
+  EXPECT_CALL(*scope_stats_collection, GetAllProvidedScopeIds)
+      .Times(2)
+      .WillRepeatedly(Return(std::vector<ScopeId>{}));
+  view_.SetScopeStatsCollection(scope_stats_collection);
+  EXPECT_EQ(view_.GetRowFromScopeId(kScopeIds[0]), std::nullopt);
+}
+
+TEST_F(LiveFunctionsDataViewTest, OnDataChangedUsesScopeStatsCollectionUpdates) {
+  auto scope_stats_collection = std::make_shared<orbit_client_data::MockScopeStatsCollection>();
+  view_.SetScopeStatsCollection(scope_stats_collection);
+  EXPECT_EQ(view_.GetRowFromScopeId(kScopeIds[0]), std::nullopt);
+  EXPECT_CALL(*scope_stats_collection, GetAllProvidedScopeIds)
+      .Times(2)
+      .WillRepeatedly(Return(std::vector<ScopeId>{kScopeIds[0]}));
+  view_.OnDataChanged();
+  EXPECT_EQ(view_.GetRowFromScopeId(kScopeIds[0]), 0);
 }

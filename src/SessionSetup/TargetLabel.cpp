@@ -6,15 +6,25 @@
 
 #include <QAction>
 #include <QDesktopServices>
+#include <QIcon>
 #include <QImage>
+#include <QLabel>
 #include <QMenu>
 #include <QPalette>
 #include <QPixmap>
+#include <QPoint>
 #include <QUrl>
+#include <chrono>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 
+#include "OrbitBase/Logging.h"
+#include "OrbitSsh/AddrAndPort.h"
+#include "SessionSetup/Connections.h"
 #include "SessionSetup/DoubleClickableLabel.h"
+#include "SessionSetup/TargetConfiguration.h"
 #include "ui_TargetLabel.h"
 
 namespace {
@@ -111,34 +121,34 @@ void TargetLabel::ChangeToFileTarget(const fs::path& path) {
   emit SizeChanged();
 }
 
-void TargetLabel::ChangeToStadiaTarget(const StadiaTarget& stadia_target) {
-  ChangeToStadiaTarget(*stadia_target.GetProcess(), stadia_target.GetConnection()->GetInstance());
+void TargetLabel::ChangeToSshTarget(const SshTarget& ssh_target) {
+  ChangeToSshTarget(ssh_target.GetProcess(),
+                    ssh_target.GetConnection()->GetAddrAndPort().GetHumanReadable());
 }
 
-void TargetLabel::ChangeToStadiaTarget(const orbit_client_data::ProcessData& process,
-                                       const orbit_ggp::Instance& instance) {
+void TargetLabel::ChangeToSshTarget(const orbit_grpc_protos::ProcessInfo& process,
+                                    std::string_view ssh_target_id) {
   Clear();
   process_ = QString::fromStdString(process.name());
-  machine_ = instance.display_name;
+  machine_ = QString::fromUtf8(ssh_target_id.data(), ssh_target_id.size());
   SetProcessCpuUsageInPercent(process.cpu_usage());
   ui_->targetLabel->setVisible(true);
   ui_->fileLabel->setVisible(false);
 
   setToolTip(
       QString{"Connection active.<br/><br/>"
-              "Instance: %1 (%2)<br/>"
-              "Process: %3 (%4)"}
-          .arg(instance.display_name, instance.id, process_,
-               QString::fromStdString(process.full_path())));
-  setAccessibleName("Stadia target");
+              "Machine: %1<br/>"
+              "Process: %2 (%3)"}
+          .arg(machine_, process_, QString::fromStdString(process.full_path())));
+  setAccessibleName("Ssh target");
 }
 
 void TargetLabel::ChangeToLocalTarget(const LocalTarget& local_target) {
-  ChangeToLocalTarget(*local_target.GetProcess());
+  ChangeToLocalTarget(local_target.GetProcess());
 }
 
-void TargetLabel::ChangeToLocalTarget(const orbit_client_data::ProcessData& process) {
-  ChangeToLocalTarget(QString::fromStdString(process.name()), process.cpu_usage());
+void TargetLabel::ChangeToLocalTarget(const orbit_grpc_protos::ProcessInfo& process_info) {
+  ChangeToLocalTarget(QString::fromStdString(process_info.name()), process_info.cpu_usage());
 }
 
 void TargetLabel::ChangeToLocalTarget(const QString& process_name, double cpu_usage) {

@@ -6,12 +6,17 @@
 #define DATA_VIEWS_MODULES_DATA_VIEW_H_
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
+#include <absl/types/span.h>
 #include <stdint.h>
 
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleInMemory.h"
 #include "ClientData/ProcessData.h"
 #include "DataViews/AppInterface.h"
 #include "DataViews/DataView.h"
@@ -21,6 +26,8 @@ namespace orbit_data_views {
 class ModulesDataView : public DataView {
  public:
   explicit ModulesDataView(AppInterface* app);
+
+  void OnDataChanged() override;
 
   const std::vector<Column>& GetColumns() override;
   int GetDefaultSortingColumn() override { return kColumnFileSize; }
@@ -38,7 +45,7 @@ class ModulesDataView : public DataView {
                  orbit_client_data::ModuleInMemory module_in_memory);
   void UpdateModules(const orbit_client_data::ProcessData* process);
 
-  void OnSelect(const std::vector<int>& rows) override {
+  void OnSelect(absl::Span<const int> rows) override {
     selected_indices_.clear();
     for (int row : rows) {
       selected_indices_.insert(static_cast<int>(indices_.at(row)));
@@ -47,7 +54,7 @@ class ModulesDataView : public DataView {
 
  protected:
   [[nodiscard]] ActionStatus GetActionStatus(std::string_view action, int clicked_index,
-                                             const std::vector<int>& selected_indices) override;
+                                             absl::Span<const int> selected_indices) override;
   void DoSort() override;
   void DoFilter() override;
 

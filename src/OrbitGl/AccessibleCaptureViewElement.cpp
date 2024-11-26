@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "AccessibleCaptureViewElement.h"
+#include "OrbitGl/AccessibleCaptureViewElement.h"
 
-#include "Viewport.h"
+#include <GteVector.h>
+
+#include <algorithm>
+#include <vector>
+
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Viewport.h"
 
 namespace orbit_gl {
 
@@ -61,9 +67,8 @@ orbit_accessibility::AccessibilityRect AccessibleCaptureViewElement::AccessibleR
     screen_pos[0] = 0;
   }
 
-  return orbit_accessibility::AccessibilityRect(static_cast<int>(screen_pos[0]),
-                                                static_cast<int>(screen_pos[1]), screen_size[0],
-                                                screen_size[1]);
+  return {static_cast<int>(screen_pos[0]), static_cast<int>(screen_pos[1]), screen_size[0],
+          screen_size[1]};
 }
 
 }  // namespace orbit_gl

@@ -2,22 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/time/time.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QString>
 #include <chrono>
 #include <filesystem>
+#include <optional>
 #include <set>
 #include <thread>
+#include <utility>
+#include <vector>
 
+#include "CaptureFileInfo/CaptureFileInfo.h"
 #include "CaptureFileInfo/Manager.h"
+#include "OrbitBase/Result.h"
 #include "Test/Path.h"
 #include "TestUtils/TestUtils.h"
 
 namespace orbit_capture_file_info {
 
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 
 constexpr const char* kOrgName = "The Orbit Authors";
 
@@ -191,7 +200,7 @@ TEST(CaptureFileInfoManager, FillFromDirectory) {
 
   {  // Fail
     ErrorMessageOr<void> result = manager.FillFromDirectory("/non/existent/path/to/dir");
-    EXPECT_THAT(result, HasError("Unable to list files in directory"));
+    EXPECT_THAT(result, HasErrorWithMessage("Unable to list files in directory"));
   }
 
   {  // Success

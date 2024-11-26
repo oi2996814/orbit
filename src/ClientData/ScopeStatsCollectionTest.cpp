@@ -2,15 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
-#include <iterator>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <vector>
 
 #include "ClientData/MockScopeIdProvider.h"
+#include "ClientData/ScopeId.h"
+#include "ClientData/ScopeStats.h"
 #include "ClientData/ScopeStatsCollection.h"
+#include "ClientData/TimerTrackDataIdManager.h"
 #include "ClientProtos/capture_data.pb.h"
-#include "GrpcProtos/capture.pb.h"
 
 namespace orbit_client_data {
 
@@ -39,7 +47,7 @@ const std::array<TimerInfo, kNumTimers> kTimersScopeId1 = [] {
 }();
 const ScopeStats kScope1Stats = [] {
   ScopeStats stats;
-  for (TimerInfo timer : kTimersScopeId1) {
+  for (const TimerInfo& timer : kTimersScopeId1) {
     stats.UpdateStats(timer.end() - timer.start());
   }
   return stats;
@@ -70,7 +78,7 @@ TEST(ScopeStatsCollectionTest, CreateEmpty) {
 
 TEST(ScopeStatsCollectionTest, AddTimersWithUpdateStats) {
   ScopeStatsCollection collection = ScopeStatsCollection();
-  for (TimerInfo timer : kTimersScopeId1) {
+  for (const TimerInfo& timer : kTimersScopeId1) {
     collection.UpdateScopeStats(kScopeId1, timer);
   }
   EXPECT_EQ(collection.GetAllProvidedScopeIds().size(), 1);

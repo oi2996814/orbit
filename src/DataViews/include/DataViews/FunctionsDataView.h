@@ -5,7 +5,10 @@
 #ifndef DATA_VIEWS_FUNCTIONS_DATA_VIEW_H_
 #define DATA_VIEWS_FUNCTIONS_DATA_VIEW_H_
 
+#include <absl/types/span.h>
+
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ClientData/FunctionInfo.h"
@@ -36,12 +39,12 @@ class FunctionsDataView : public DataView {
   // Note that this class and these methods are not thread-safe and should only be called from the
   // main thread.
   void AddFunctions(std::vector<const orbit_client_data::FunctionInfo*> functions);
-  void RemoveFunctionsOfModule(const std::string& module_path);
+  void RemoveFunctionsOfModule(std::string_view module_path);
   void ClearFunctions();
 
  protected:
   [[nodiscard]] ActionStatus GetActionStatus(std::string_view action, int clicked_index,
-                                             const std::vector<int>& selected_indices) override;
+                                             absl::Span<const int> selected_indices) override;
   void DoSort() override;
   void DoFilter() override;
 

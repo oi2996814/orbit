@@ -5,16 +5,19 @@
 #ifndef SESSION_SETUP_CONNECTIONS_H_
 #define SESSION_SETUP_CONNECTIONS_H_
 
+#include <absl/time/time.h>
 #include <grpcpp/channel.h>
 
 #include <memory>
 #include <optional>
 #include <utility>
 
+#include "ClientServices/ProcessManager.h"
 #include "DeploymentConfigurations.h"
 #include "OrbitBase/Logging.h"
-#include "OrbitGgp/Instance.h"
+#include "OrbitSsh/AddrAndPort.h"
 #include "OrbitSsh/Context.h"
+#include "SessionSetup/OrbitServiceInstance.h"
 #include "SessionSetup/ServiceDeployManager.h"
 
 namespace orbit_session_setup {
@@ -51,57 +54,80 @@ class SshConnectionArtifacts {
 };
 
 /*
- * The class StadiaConnection describes an active connection to a stadia instance. This class holds
- * an Instance object it is connected. The ServiceDeployManager which carries the active connection
- * and the ssh tunnel. And the grpc channel that is used for the communication with the instance.
- * This class is meant to be constructed and then not modified anymore. Only ConnectToStadiaWidget
- * is allowed to modify the members, which is used to move out members for reusing them.
+ * The class `SshConnection` describes an active connection to a machine via ssh. This class holds
+ * a `AddrAndPort` which is the target of the ssh connection. The `ServiceDeployManager` which
+ * carries the active connection and the ssh tunnel. And the grpc channel that is used for the
+ * communication with the machine. This class is meant to be constructed and then not modified
+ * anymore. Only `SshConnectionWidget` is allowed to modify the members, which is used to move out
+ * members for reusing them.
  */
-class StadiaConnection {
-  friend class ConnectToStadiaWidget;
-
+class SshConnection {
  public:
-  explicit StadiaConnection(orbit_ggp::Instance&& instance,
-                            std::unique_ptr<ServiceDeployManager> service_deploy_manager,
-                            std::shared_ptr<grpc::Channel>&& grpc_channel)
-      : instance_(std::move(instance)),
+  explicit SshConnection(orbit_ssh::AddrAndPort addr_and_port,
+                         std::unique_ptr<ServiceDeployManager> service_deploy_manager,
+                         std::shared_ptr<grpc::Channel>&& grpc_channel)
+      : addr_and_port_(std::move(addr_and_port)),
         service_deploy_manager_(std::move(service_deploy_manager)),
-        grpc_channel_(std::move(grpc_channel)) {
+        grpc_channel_(std::move(grpc_channel)),
+        process_manager_(orbit_client_services::ProcessManager::Create(grpc_channel_,
+                                                                       absl::Milliseconds(1000))) {
     ORBIT_CHECK(service_deploy_manager_ != nullptr);
     ORBIT_CHECK(grpc_channel_ != nullptr);
+    ORBIT_CHECK(process_manager_ != nullptr);
   }
-  [[nodiscard]] const orbit_ggp::Instance& GetInstance() const { return instance_; }
+  [[nodiscard]] const orbit_ssh::AddrAndPort& GetAddrAndPort() const { return addr_and_port_; }
   [[nodiscard]] ServiceDeployManager* GetServiceDeployManager() const {
     return service_deploy_manager_.get();
   }
   [[nodiscard]] const std::shared_ptr<grpc::Channel>& GetGrpcChannel() const {
     return grpc_channel_;
   }
+  [[nodiscard]] orbit_client_services::ProcessManager* GetProcessManager() const {
+    return process_manager_.get();
+  }
 
  private:
-  orbit_ggp::Instance instance_;
+  orbit_ssh::AddrAndPort addr_and_port_;
   std::unique_ptr<ServiceDeployManager> service_deploy_manager_;
   std::shared_ptr<grpc::Channel> grpc_channel_;
+  std::unique_ptr<orbit_client_services::ProcessManager> process_manager_;
 };
 
 /*
  * The LocalConnection class describes an active connection to an OrbitService running on the same
  * machine as the UI. This class holds a grpc channel which is used for the communication with
- * OrbitService.
- * This class is meant to be constructed and then not modified anymore.
+ * OrbitService and an optional OrbitServiceInstance. Optional here means that the
+ * unique_ptr<OrbitServiceInstance> can be a nullptr. This class is meant to be constructed and then
+ * not modified anymore. Only ConnectToLocalWidget is allowed to modify the members, which is used
+ * to move out members for reusing them.
  */
 class LocalConnection {
+  friend class ConnectToLocalWidget;
+
  public:
-  explicit LocalConnection(std::shared_ptr<grpc::Channel>&& grpc_channel)
-      : grpc_channel_(std::move(grpc_channel)) {
+  explicit LocalConnection(std::shared_ptr<grpc::Channel>&& grpc_channel,
+                           std::unique_ptr<OrbitServiceInstance>&& orbit_service_instance)
+      : grpc_channel_(std::move(grpc_channel)),
+        orbit_service_instance_(std::move(orbit_service_instance)),
+        process_manager_(orbit_client_services::ProcessManager::Create(grpc_channel_,
+                                                                       absl::Milliseconds(1000))) {
     ORBIT_CHECK(grpc_channel_ != nullptr);
+    ORBIT_CHECK(process_manager_ != nullptr);
   }
   [[nodiscard]] const std::shared_ptr<grpc::Channel>& GetGrpcChannel() const {
     return grpc_channel_;
   }
+  [[nodiscard]] const OrbitServiceInstance* GetOrbitServiceInstance() const {
+    return orbit_service_instance_.get();
+  }
+  [[nodiscard]] orbit_client_services::ProcessManager* GetProcessManager() const {
+    return process_manager_.get();
+  }
 
  private:
   std::shared_ptr<grpc::Channel> grpc_channel_;
+  std::unique_ptr<OrbitServiceInstance> orbit_service_instance_;
+  std::unique_ptr<orbit_client_services::ProcessManager> process_manager_;
 };
 
 }  // namespace orbit_session_setup

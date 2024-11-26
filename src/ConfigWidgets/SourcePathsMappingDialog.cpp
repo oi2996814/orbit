@@ -8,6 +8,16 @@
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QItemSelectionModel>
+#include <QLineEdit>
+#include <QListView>
+#include <QMetaObject>
+#include <QModelIndex>
+#include <QModelIndexList>
+#include <QPersistentModelIndex>
+#include <QPushButton>
+#include <QVariant>
+#include <Qt>
+#include <filesystem>
 
 #include "ui_SourcePathsMappingDialog.h"
 

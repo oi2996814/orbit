@@ -8,15 +8,18 @@
 #include <absl/strings/str_format.h>
 
 #include <QObject>
+#include <QString>
 #include <QStringLiteral>
 #include <QWidget>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include "MizarBase/BaselineOrComparison.h"
 #include "MizarData/BaselineAndComparison.h"
 #include "MizarData/MizarPairedData.h"
 #include "MizarWidgets/SamplingWithFrameTrackReportConfigValidator.h"
+#include "OrbitBase/Result.h"
 #include "SamplingWithFrameTrackInputWidget.h"
 
 namespace Ui {
@@ -59,7 +62,7 @@ class SamplingWithFrameTrackWidget : public QWidget {
   void ProcessDataValidationOutcome(const ErrorMessageOr<void>& outcome) const;
   void SetFunctionNameToShow();
 
-  const orbit_mizar_data::BaselineAndComparison* baseline_and_comparison_;
+  const orbit_mizar_data::BaselineAndComparison* baseline_and_comparison_ = nullptr;
   std::unique_ptr<Ui::SamplingWithFrameTrackWidget> ui_;
 
   static constexpr inline double kDefaultSignificanceLevel = 0.05;

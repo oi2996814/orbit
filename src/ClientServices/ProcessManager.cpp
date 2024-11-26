@@ -5,9 +5,7 @@
 #include "ClientServices/ProcessManager.h"
 
 #include <absl/synchronization/mutex.h>
-#include <grpcpp/channel.h>
 
-#include <exception>
 #include <memory>
 #include <string>
 #include <thread>
@@ -44,7 +42,7 @@ class ProcessManagerImpl final : public ProcessManager {
                                                 uint64_t size) override;
 
   ErrorMessageOr<orbit_base::NotFoundOr<std::filesystem::path>> FindDebugInfoFile(
-      const std::string& module_path,
+      std::string_view module_path,
       absl::Span<const std::string> additional_search_directories) override;
 
   void Start();
@@ -82,7 +80,7 @@ ErrorMessageOr<std::vector<ModuleInfo>> ProcessManagerImpl::LoadModuleList(uint3
 }
 
 ErrorMessageOr<orbit_base::NotFoundOr<std::filesystem::path>> ProcessManagerImpl::FindDebugInfoFile(
-    const std::string& module_path, absl::Span<const std::string> additional_search_directories) {
+    std::string_view module_path, absl::Span<const std::string> additional_search_directories) {
   return process_client_->FindDebugInfoFile(module_path, additional_search_directories);
 }
 

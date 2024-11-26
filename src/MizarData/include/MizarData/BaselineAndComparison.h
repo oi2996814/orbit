@@ -6,15 +6,25 @@
 #define MIZAR_DATA_BASELINE_AND_COMPARISON_H_
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+#include <absl/types/span.h>
 #include <stdint.h>
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "ClientData/ScopeStats.h"
 #include "MizarBase/BaselineOrComparison.h"
+#include "MizarBase/FunctionSymbols.h"
 #include "MizarBase/SampledFunctionId.h"
+#include "MizarBase/ThreadId.h"
 #include "MizarBase/Time.h"
+#include "MizarData/MizarDataProvider.h"
 #include "MizarData/MizarPairedData.h"
 #include "MizarData/SamplingWithFrameTrackComparisonReport.h"
 #include "MizarStatistics/ActiveFunctionTimePerFrameComparator.h"
@@ -70,8 +80,8 @@ class BaselineAndComparisonTmpl {
         MakeComparisons(comparator);
 
     return SamplingWithFrameTrackComparisonReport(
-        std::move(baseline_sampling_counts), std::move(baseline_frame_stats),
-        std::move(comparison_sampling_counts), std::move(comparison_frame_stats),
+        std::move(baseline_sampling_counts), baseline_frame_stats,
+        std::move(comparison_sampling_counts), comparison_frame_stats,
         std::move(sfid_to_corrected_comparison_result), &sfid_to_symbols_);
   }
 
@@ -111,7 +121,7 @@ class BaselineAndComparisonTmpl {
     absl::flat_hash_map<SFID, InclusiveAndExclusive> counts;
     for (const TID tid : config.tids) {
       data.ForEachCallstackEvent(tid, config.start_relative, config.EndRelative(),
-                                 [&total_callstacks, &counts](const std::vector<SFID>& callstack) {
+                                 [&total_callstacks, &counts](absl::Span<const SFID> callstack) {
                                    total_callstacks++;
                                    if (callstack.empty()) return;
                                    for (const SFID sfid : callstack) {

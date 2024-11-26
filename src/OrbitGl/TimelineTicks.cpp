@@ -1,9 +1,11 @@
 // Copyright (c) 2021 The Orbit Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-#include "TimelineTicks.h"
+#include "OrbitGl/TimelineTicks.h"
 
+#include <iterator>
 #include <optional>
+#include <set>
 
 #include "OrbitBase/Logging.h"
 
@@ -59,8 +61,7 @@ std::vector<std::pair<TimelineTicks::TickType, uint64_t> > TimelineTicks::GetAll
 
   uint64_t first_tick = ((start_ns + minor_scale - 1) / minor_scale) * minor_scale;
   for (uint64_t tick = first_tick; tick <= end_ns; tick += minor_scale) {
-    ticks.push_back(std::make_pair(
-        tick % major_scale == 0 ? TickType::kMajorTick : TickType::kMinorTick, tick));
+    ticks.emplace_back(tick % major_scale == 0 ? TickType::kMajorTick : TickType::kMinorTick, tick);
   }
   return ticks;
 }
@@ -78,7 +79,7 @@ std::vector<uint64_t> TimelineTicks::GetMajorTicks(uint64_t start_ns, uint64_t e
 std::optional<uint64_t> TimelineTicks::GetPreviousMajorTick(uint64_t start_ns,
                                                             uint64_t end_ns) const {
   std::vector<uint64_t> major_ticks = GetMajorTicks(start_ns, end_ns);
-  ORBIT_CHECK(major_ticks.size() != 0);
+  ORBIT_CHECK(!major_ticks.empty());
 
   uint64_t major_tick_scale = GetMajorTicksScale(end_ns + 1 - start_ns);
   if (major_ticks[0] < major_tick_scale) {
@@ -87,7 +88,7 @@ std::optional<uint64_t> TimelineTicks::GetPreviousMajorTick(uint64_t start_ns,
   return major_ticks[0] - major_tick_scale;
 }
 
-uint32_t TimelineTicks::GetTimestampNumDigitsPrecision(uint64_t timestamp_ns) const {
+uint32_t TimelineTicks::GetTimestampNumDigitsPrecision(uint64_t timestamp_ns) {
   constexpr uint32_t kMaxDigitsPrecision = 9;  // 1ns = 0.000'000'001s
 
   uint64_t current_precision_ns = kNanosecondsPerSecond;
@@ -107,7 +108,7 @@ uint64_t TimelineTicks::GetMinorTicksScale(uint64_t visible_ns) const {
   return *std::prev(kTimelineScales.lower_bound(major_scale));
 }
 
-uint64_t TimelineTicks::GetMajorTicksScale(uint64_t visible_ns) const {
+uint64_t TimelineTicks::GetMajorTicksScale(uint64_t visible_ns) {
   // Biggest scale smaller than half the total range, as we want to see at least 2 major ticks.
   uint64_t half_visible_ns = visible_ns / 2;
   ORBIT_CHECK(half_visible_ns > 0);

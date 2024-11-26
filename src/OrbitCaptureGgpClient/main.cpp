@@ -2,17 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/flags/flag.h>
+#include <absl/flags/parse.h>
 #include <absl/strings/str_format.h>
-#include <stdint.h>
+#include <absl/strings/string_view.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
 
 #include "OrbitBase/Logging.h"
 #include "OrbitCaptureGgpClient/OrbitCaptureGgpClient.h"
-#include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
 
 ABSL_FLAG(uint16_t, grpc_port, 44767, "gRPC server port for capture ggp service");
 
@@ -34,7 +36,6 @@ int main(int argc, char** argv) {
   constexpr const int kShutdownServiceCommand = 4;
   bool exit = false;
   while (!exit) {
-    int i;
     std::cout << "\n";
     std::cout << "List of available commands:\n";
     std::cout << "------------------------------\n";
@@ -46,6 +47,7 @@ int main(int argc, char** argv) {
     std::cout << "Introduce your choice (" << kStartCaptureCommand << "-" << kShutdownServiceCommand
               << "): ";
 
+    int i{};
     std::cin >> i;
     switch (i) {
       case kStartCaptureCommand:

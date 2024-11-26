@@ -2,13 +2,40 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "IntrospectionWindow.h"
+#include "OrbitGl/IntrospectionWindow.h"
 
-#include "App.h"
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+#include <stdint.h>
+
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "ApiUtils/Event.h"
+#include "CaptureClient/AppInterface.h"
+#include "ClientData/ApiStringEvent.h"
+#include "ClientData/ApiTrackValue.h"
 #include "ClientData/CallstackEvent.h"
+#include "ClientData/CallstackInfo.h"
+#include "ClientData/CgroupAndProcessMemoryInfo.h"
+#include "ClientData/LinuxAddressInfo.h"
+#include "ClientData/PageFaultsInfo.h"
+#include "ClientData/SystemMemoryInfo.h"
+#include "ClientData/ThreadStateSliceInfo.h"
+#include "ClientData/TracepointEventInfo.h"
+#include "ClientData/TracepointInfo.h"
 #include "ClientProtos/capture_data.pb.h"
-#include "ImGuiOrbit.h"
+#include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/ThreadUtils.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/TimeGraph.h"
+#include "OrbitGl/TimeGraphLayout.h"
 
 using orbit_client_data::CaptureData;
 using orbit_grpc_protos::CaptureStarted;
@@ -110,6 +137,20 @@ class IntrospectionCaptureListener : public orbit_capture_client::CaptureListene
     introspection_window_->GetTimeGraph()->ProcessTimer(timer_info);
   }
 
+  void OnCgroupAndProcessMemoryInfo(const orbit_client_data::CgroupAndProcessMemoryInfo&
+                                        cgroup_and_process_memory_info) override {
+    introspection_window_->GetTimeGraph()->ProcessCgroupAndProcessMemoryInfo(
+        cgroup_and_process_memory_info);
+  }
+
+  void OnPageFaultsInfo(const orbit_client_data::PageFaultsInfo& page_faults_info) override {
+    introspection_window_->GetTimeGraph()->ProcessPageFaultsInfo(page_faults_info);
+  }
+
+  void OnSystemMemoryInfo(const orbit_client_data::SystemMemoryInfo& system_memory_info) override {
+    introspection_window_->GetTimeGraph()->ProcessSystemMemoryInfo(system_memory_info);
+  }
+
   void OnApiStringEvent(const orbit_client_data::ApiStringEvent& api_string_event) override {
     introspection_window_->GetTimeGraph()->ProcessApiStringEvent(api_string_event);
   }
@@ -159,7 +200,9 @@ class IntrospectionCaptureListener : public orbit_capture_client::CaptureListene
                          std::vector<orbit_grpc_protos::ModuleInfo> /*module_infos*/) override {
     ORBIT_UNREACHABLE();
   }
-  void OnPresentEvent(const orbit_grpc_protos::PresentEvent&) override { ORBIT_UNREACHABLE(); }
+  void OnPresentEvent(const orbit_grpc_protos::PresentEvent& /*present_event*/) override {
+    ORBIT_UNREACHABLE();
+  }
   void OnWarningEvent(orbit_grpc_protos::WarningEvent /*warning_event*/) override {
     ORBIT_UNREACHABLE();
   }
@@ -204,8 +247,10 @@ class IntrospectionCaptureListener : public orbit_capture_client::CaptureListene
 
 }  // namespace
 
-IntrospectionWindow::IntrospectionWindow(OrbitApp* app)
-    : CaptureWindow(app),
+IntrospectionWindow::IntrospectionWindow(
+    OrbitApp* app, orbit_capture_client::CaptureControlInterface* capture_control,
+    TimeGraphLayout* time_graph_layout)
+    : CaptureWindow(app, capture_control, time_graph_layout),
       capture_listener_{std::make_unique<IntrospectionCaptureListener>(this)},
       api_event_processor_{capture_listener_.get()} {
   // Create CaptureData.
@@ -213,24 +258,25 @@ IntrospectionWindow::IntrospectionWindow(OrbitApp* app)
   capture_started.set_process_id(orbit_base::GetCurrentProcessId());
   capture_started.set_executable_path("Orbit");
   absl::flat_hash_set<uint64_t> frame_track_function_ids;
-  capture_data_ = std::make_unique<CaptureData>(capture_started, std::nullopt,
-                                                std::move(frame_track_function_ids),
-                                                CaptureData::DataSource::kLiveCapture);
+  capture_data_ = std::make_unique<CaptureData>(
+      capture_started, std::nullopt, std::move(frame_track_function_ids),
+      CaptureData::DataSource::kLiveCapture, app->GetModuleIdentifierProvider());
+  // Start recording on window creation.
+  ToggleRecording();
 }
 
 IntrospectionWindow::~IntrospectionWindow() { StopIntrospection(); }
 
-const char* IntrospectionWindow::GetHelpText() const {
-  const char* help_message =
-      "Client Side Introspection\n\n"
-      "Start/Stop Capture: 'X'\n"
-      "Toggle Help: 'H'";
-  return help_message;
+std::string IntrospectionWindow::GetHelpText() const {
+  return "Client Side Introspection\n\n"
+         "Start/Stop Capture: 'X'\n"
+         "Toggle Help: 'H'";
 }
 
 bool IntrospectionWindow::IsIntrospecting() const { return introspection_listener_ != nullptr; }
 
 void IntrospectionWindow::StartIntrospection() {
+  ORBIT_LOG("Starting introspection");
   ORBIT_CHECK(!IsIntrospecting());
   set_draw_help(false);
   CreateTimeGraph(capture_data_.get());
@@ -241,16 +287,14 @@ void IntrospectionWindow::StartIntrospection() {
             api_event_variant);
       });
 }
-void IntrospectionWindow::StopIntrospection() { introspection_listener_ = nullptr; }
-
-void IntrospectionWindow::Draw() {
-  ORBIT_SCOPE_FUNCTION;
-  CaptureWindow::Draw();
+void IntrospectionWindow::StopIntrospection() {
+  ORBIT_LOG("Stopping introspection");
+  introspection_listener_ = nullptr;
 }
 
-void IntrospectionWindow::RenderText(float layer) {
+void IntrospectionWindow::Draw(QPainter* painter) {
   ORBIT_SCOPE_FUNCTION;
-  CaptureWindow::RenderText(layer);
+  CaptureWindow::Draw(painter);
 }
 
 void IntrospectionWindow::ToggleRecording() {
@@ -258,14 +302,6 @@ void IntrospectionWindow::ToggleRecording() {
     StartIntrospection();
   } else {
     StopIntrospection();
-  }
-}
-
-void IntrospectionWindow::RenderImGuiDebugUI() {
-  CaptureWindow::RenderImGuiDebugUI();
-
-  if (ImGui::CollapsingHeader("IntrospectionWindow")) {
-    IMGUI_VAR_TO_TEXT(IsIntrospecting());
   }
 }
 

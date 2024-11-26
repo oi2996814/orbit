@@ -3,27 +3,39 @@
 // found in the LICENSE file.
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ClientData/CallstackData.h"
 #include "ClientData/CallstackInfo.h"
+#include "ClientData/CallstackType.h"
 #include "ClientData/ScopeId.h"
 #include "ClientData/ScopeInfo.h"
+#include "ClientData/TimerTrackDataIdManager.h"
+#include "ClientProtos/capture_data.pb.h"
+#include "GrpcProtos/capture.pb.h"
 #include "MizarBase/AbsoluteAddress.h"
 #include "MizarBase/SampledFunctionId.h"
+#include "MizarBase/ThreadId.h"
 #include "MizarBase/Time.h"
 #include "MizarData/FrameTrack.h"
 #include "MizarData/MizarPairedData.h"
+#include "OrbitBase/Typedef.h"
 #include "TestUtils/ContainerHelpers.h"
 
 using ::orbit_client_data::ScopeId;
@@ -149,7 +161,7 @@ const absl::flat_hash_map<TID, uint64_t> kTidToCallstackCount = {
     {kTID, 3}, {kAnotherTID, 1}, {kNamelessTID, 1}};
 
 [[nodiscard]] static std::vector<SampledFunctionId> SFIDsForCallstacks(
-    const std::vector<uint64_t>& addresses) {
+    absl::Span<const uint64_t> addresses) {
   std::vector<AbsoluteAddress> good_addresses;
   ForEachFrame(addresses, [&good_addresses](AbsoluteAddress address) {
     if (kAddressToId.contains(address)) {
@@ -187,8 +199,9 @@ class MockFrameTrackManager {
 
   explicit MockFrameTrackManager(const MockMizarData* data) { passed_data_ = data; }
 
-  [[nodiscard]] std::vector<TimestampNs> GetFrameStarts(FrameTrackId, TimestampNs,
-                                                        TimestampNs) const {
+  [[nodiscard]] static std::vector<TimestampNs> GetFrameStarts(FrameTrackId /*unused*/,
+                                                               TimestampNs /*unused*/,
+                                                               TimestampNs /*unused*/) {
     return kStarts;
   }
 };
@@ -249,7 +262,7 @@ TEST_F(MizarPairedDataTest, FrameTrackManagerIsProperlyInitialized) {
 TEST_F(MizarPairedDataTest, ForeachCallstackIsCorrect) {
   MizarPairedDataUnderTest mizar_paired_data(std::move(data_), kAddressToId);
   std::vector<std::vector<SampledFunctionId>> actual_ids_fed_to_action;
-  auto action = [&actual_ids_fed_to_action](const std::vector<SampledFunctionId> ids) {
+  auto action = [&actual_ids_fed_to_action](const std::vector<SampledFunctionId>& ids) {
     actual_ids_fed_to_action.push_back(ids);
   };
 

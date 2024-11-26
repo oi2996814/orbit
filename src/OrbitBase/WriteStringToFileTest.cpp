@@ -3,20 +3,23 @@
 // found in the LICENSE file.
 
 #include <gtest/gtest.h>
+#include <stddef.h>
 
 #include <filesystem>
-#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "OrbitBase/ReadFileToString.h"
 #include "OrbitBase/Result.h"
-#include "OrbitBase/TemporaryFile.h"
 #include "OrbitBase/WriteStringToFile.h"
+#include "TestUtils/TemporaryFile.h"
 
 namespace orbit_base {
 TEST(WriteStringToFile, Smoke) {
-  auto temporary_file_or_error = TemporaryFile::Create();
+  auto temporary_file_or_error = orbit_test_utils::TemporaryFile::Create();
   ASSERT_TRUE(temporary_file_or_error.has_value()) << temporary_file_or_error.error().message();
-  TemporaryFile temporary_file = std::move(temporary_file_or_error.value());
+  orbit_test_utils::TemporaryFile temporary_file = std::move(temporary_file_or_error.value());
 
   std::string temp_file_name = temporary_file.file_path().string();
 

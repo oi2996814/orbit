@@ -3,15 +3,20 @@
 // found in the LICENSE file.
 
 #include <dlfcn.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <csignal>
 #include <filesystem>
-#include <string>
+#include <utility>
+#include <vector>
 
 #include "GetTestLibLibraryPath.h"
+#include "GrpcProtos/module.pb.h"
 #include "ModuleUtils/ReadLinuxModules.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
@@ -51,8 +56,8 @@ class ExecuteInProcessTest : public testing::Test {
     // Load dynamic lib into tracee.
     auto modules_or_error = orbit_module_utils::ReadModules(pid_);
     ORBIT_CHECK(modules_or_error.has_value());
-    auto library_handle_or_error =
-        DlopenInTracee(pid_, modules_or_error.value(), library_path, RTLD_NOW);
+    auto library_handle_or_error = DlmopenInTracee(pid_, modules_or_error.value(), library_path,
+                                                   RTLD_NOW, LinkerNamespace::kCreateNewNamespace);
     ORBIT_CHECK(library_handle_or_error.has_value());
     library_handle_ = library_handle_or_error.value();
   }

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "PickingManager.h"
+#include "OrbitGl/PickingManager.h"
 
 #include <absl/base/casts.h>
 #include <absl/synchronization/mutex.h>
@@ -71,7 +71,7 @@ void PickingManager::Release() {
   }
 }
 
-void PickingManager::Drag(int x, int y) {
+void PickingManager::Drag(int x, int y) const {
   auto picked = GetPicked();
   if (picked && picked->Draggable()) {
     picked->OnDrag(x, y);
@@ -95,7 +95,7 @@ bool PickingManager::IsThisElementPicked(const Pickable* pickable) const {
   return picked && picked.get() == pickable;
 }
 
-Color PickingManager::ColorFromPickingID(PickingId id) const {
+Color PickingManager::ColorFromPickingID(PickingId id) {
   auto color_values = absl::bit_cast<std::array<uint8_t, 4>>(id.ToPixelValue());
-  return Color(color_values[0], color_values[1], color_values[2], color_values[3]);
+  return {color_values[0], color_values[1], color_values[2], color_values[3]};
 }

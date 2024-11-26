@@ -2,21 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <absl/container/flat_hash_map.h>
-#include <absl/strings/substitute.h>
 #include <absl/synchronization/mutex.h>
 #include <absl/time/clock.h>
-#include <gmock/gmock.h>
+#include <absl/time/time.h>
+#include <absl/types/span.h>
 #include <gtest/gtest.h>
+#include <sys/types.h>
 
-#include <numeric>
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "GrpcProtos/capture.pb.h"
 #include "MemoryTracing/MemoryInfoListener.h"
 #include "MemoryTracing/MemoryInfoProducer.h"
-#include "MemoryTracingUtils.h"
+#include "MemoryTracing/MemoryTracingUtils.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Profiling.h"
+#include "OrbitBase/Result.h"
 #include "OrbitBase/ThreadUtils.h"
 
 namespace orbit_memory_tracing {
@@ -122,9 +129,9 @@ class MemoryTracingIntegrationTestFixture {
   return fixture->StopTracingAndGetEvents();
 }
 
-void VerifyOrderAndContentOfEvents(const std::vector<ProducerCaptureEvent>& events,
+void VerifyOrderAndContentOfEvents(absl::Span<const ProducerCaptureEvent> events,
                                    uint64_t sampling_period_ns) {
-  const uint64_t kMemoryEventsTimeDifferenceTolerance =
+  const auto memory_events_time_difference_tolerance =
       static_cast<uint64_t>(sampling_period_ns * 0.2);
   uint64_t previous_memory_usage_event_timestamp_ns = 0;
 
@@ -177,13 +184,13 @@ void VerifyOrderAndContentOfEvents(const std::vector<ProducerCaptureEvent>& even
     // Verify that the memory events in the same memory_usage_event are sampled at very close time.
     uint64_t max_timestamp = *std::max_element(timestamps.begin(), timestamps.end());
     uint64_t min_timestamp = *std::min_element(timestamps.begin(), timestamps.end());
-    EXPECT_LE(max_timestamp - min_timestamp, kMemoryEventsTimeDifferenceTolerance);
+    EXPECT_LE(max_timestamp - min_timestamp, memory_events_time_difference_tolerance);
   }
 }
 
 // Verify whether the memory_sampling_period_ns_ works as expected by checking the number of
 // received events.
-void VerifyEventCounts(const std::vector<ProducerCaptureEvent>& events, size_t expected_counts) {
+void VerifyEventCounts(absl::Span<const ProducerCaptureEvent> events, size_t expected_counts) {
   constexpr size_t kEventCountsErrorTolerance = 2;
 
   size_t num_received_events = 0;
@@ -197,17 +204,17 @@ void VerifyEventCounts(const std::vector<ProducerCaptureEvent>& events, size_t e
 }  // namespace
 
 TEST(MemoryTracingIntegrationTest, MemoryTracing) {
-  const uint64_t kMemorySamplingPeriodNs = absl::Milliseconds(100) / absl::Nanoseconds(1);
-  const size_t kPeriodCounts = 10;
+  const uint64_t memory_sampling_period_ns = absl::Milliseconds(100) / absl::Nanoseconds(1);
+  const size_t period_counts = 10;
 
-  MemoryTracingIntegrationTestFixture fixture(kMemorySamplingPeriodNs);
+  MemoryTracingIntegrationTestFixture fixture(memory_sampling_period_ns);
 
-  absl::Duration tracing_period = absl::Nanoseconds(kMemorySamplingPeriodNs * kPeriodCounts);
+  absl::Duration tracing_period = absl::Nanoseconds(memory_sampling_period_ns * period_counts);
   std::vector<ProducerCaptureEvent> events = TraceAndGetEvents(&fixture, tracing_period);
 
-  VerifyOrderAndContentOfEvents(events, kMemorySamplingPeriodNs);
+  VerifyOrderAndContentOfEvents(events, memory_sampling_period_ns);
 
-  VerifyEventCounts(events, kPeriodCounts);
+  VerifyEventCounts(events, period_counts);
 }
 
 }  // namespace orbit_memory_tracing

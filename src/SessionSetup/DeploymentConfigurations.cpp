@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QProcessEnvironment>
 #include <QString>
+#include <optional>
 
 #include "ClientFlags/ClientFlags.h"
 

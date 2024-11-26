@@ -6,16 +6,22 @@
 #define ORBIT_SSH_QT_TASK_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
+#include <QMetaType>
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 
+#include "OrbitBase/Future.h"
+#include "OrbitBase/Promise.h"
 #include "OrbitBase/Result.h"
+#include "OrbitBase/Typedef.h"
 #include "OrbitSsh/Channel.h"
 #include "OrbitSshQt/ScopedConnection.h"
 #include "OrbitSshQt/Session.h"
@@ -24,16 +30,17 @@
 namespace orbit_ssh_qt {
 namespace details {
 enum class TaskState {
-  kInitial,
+  kInitialized,
   kNoChannel,
   kChannelInitialized,
   kStarted,
   kCommandRunning,
-  kShutdown,
+  kStopping,
   kSignalEOF,
   kWaitRemoteEOF,
   kSignalChannelClose,
   kWaitChannelClosed,
+  kStopped,
   kChannelClosed,
   kError
 };
@@ -63,12 +70,19 @@ class Task : public StateMachineHelper<Task, details::TaskState> {
 
  public:
   explicit Task(Session* session, std::string command);
-  void Start();
-  void Stop();
+  orbit_base::Future<ErrorMessageOr<void>> Start();
 
-  std::string ReadStdOut();
-  std::string ReadStdErr();
-  void Write(std::string_view data);
+  struct ExitCodeTag {};
+  using ExitCode = orbit_base::Typedef<ExitCodeTag, int>;
+  orbit_base::Future<ErrorMessageOr<ExitCode>> Stop();
+
+  // This is an alternative to Start() and Stop(). Prefer this function over Start/Stop if you don't
+  // need to read from or write to stdin/stdout/stderr.
+  orbit_base::Future<ErrorMessageOr<ExitCode>> Execute();
+
+  [[nodiscard]] std::string ReadStdOut();
+  [[nodiscard]] std::string ReadStdErr();
+  orbit_base::Future<ErrorMessageOr<void>> Write(std::string_view data);
 
  signals:
   void started();
@@ -100,8 +114,22 @@ class Task : public StateMachineHelper<Task, details::TaskState> {
   std::string read_std_out_buffer_;
   std::string read_std_err_buffer_;
   std::string write_buffer_;
+
+  struct WritePromise {
+    uint64_t completes_when_bytes_written;
+    orbit_base::Promise<ErrorMessageOr<void>> promise;
+
+    explicit WritePromise(uint64_t completes_when_bytes_written)
+        : completes_when_bytes_written(completes_when_bytes_written) {}
+  };
+  std::deque<WritePromise> write_promises_;
+  uint64_t bytes_written_counter_ = 0;
+
+  std::optional<ExitCode> exit_code_;
 };
 
 }  // namespace orbit_ssh_qt
+
+Q_DECLARE_METATYPE(size_t);
 
 #endif  // ORBIT_SSH_QT_TASK_H_

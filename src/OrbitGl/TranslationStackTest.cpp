@@ -2,9 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <GteVector.h>
 #include <gtest/gtest.h>
 
-#include "TranslationStack.h"
+#include <memory>
+
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/TranslationStack.h"
 
 namespace orbit_gl {
 static void ExpectEqualHasZ(const LayeredVec2& expected, const LayeredVec2& actual) {

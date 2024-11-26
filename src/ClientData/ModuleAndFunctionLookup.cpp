@@ -5,12 +5,18 @@
 #include "ClientData/ModuleAndFunctionLookup.h"
 
 #include "ClientData/CaptureData.h"
+#include "ClientData/FunctionInfo.h"
 #include "ClientData/LinuxAddressInfo.h"
+#include "ClientData/ModuleIdentifier.h"
+#include "ClientData/ModuleInMemory.h"
+#include "ClientData/ModuleManager.h"
+#include "ClientData/ProcessData.h"
 #include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
+#include "OrbitBase/Result.h"
 
 namespace orbit_client_data {
 namespace {
-using orbit_symbol_provider::ModuleIdentifier;
+using orbit_client_data::ModuleIdentifier;
 
 [[nodiscard]] std::optional<uint64_t>
 FindFunctionAbsoluteAddressByInstructionAbsoluteAddressUsingModulesInMemory(
@@ -78,17 +84,6 @@ std::optional<uint64_t> FindFunctionAbsoluteAddressByInstructionAbsoluteAddress(
   }
   return FindFunctionAbsoluteAddressByInstructionAbsoluteAddressUsingAddressInfo(capture_data,
                                                                                  absolute_address);
-}
-
-const FunctionInfo* FindFunctionByModuleIdentifierAndVirtualAddress(
-    const ModuleManager& module_manager, const ModuleIdentifier& module_id,
-    uint64_t virtual_address) {
-  const ModuleData* module_data = module_manager.GetModuleByModuleIdentifier(module_id);
-  if (module_data == nullptr) {
-    return nullptr;
-  }
-
-  return module_data->FindFunctionByVirtualAddress(virtual_address, /*is_exact=*/true);
 }
 
 const std::string& GetModulePathByAddress(const ModuleManager& module_manager,

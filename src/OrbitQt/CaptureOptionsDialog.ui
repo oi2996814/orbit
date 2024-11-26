@@ -410,7 +410,7 @@ p, li { white-space: pre-wrap; }
          <property name="title">
           <string>Auto FrameTrack</string>
          </property>
-         <layout class="QVBoxLayout" name="verticalLayout_9">
+         <layout class="QVBoxLayout" name="verticalLayout_11">
           <item>
            <widget class="QCheckBox" name="autoFrameTrackCheckBox">
             <property name="toolTip">
@@ -721,7 +721,7 @@ Setting the value to &quot;0&quot; will disable Vulkan debug marker tracking.</s
   <customwidget>
    <class>orbit_qt::MultipleOfSpinBox</class>
    <extends>QSpinBox</extends>
-   <header>MultipleOfSpinBox.h</header>
+   <header>OrbitQt/MultipleOfSpinBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "CallTreeWidget.h"
+#include "OrbitQt/CallTreeWidget.h"
 
 #include <absl/container/flat_hash_set.h>
-#include <absl/flags/declare.h>
 #include <absl/flags/flag.h>
-#include <absl/flags/internal/flag.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/match.h>
+#include <absl/types/span.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <QAbstractItemModel>
@@ -18,44 +19,52 @@
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLineEdit>
-#include <QList>
 #include <QMenu>
 #include <QModelIndexList>
 #include <QPainter>
 #include <QPalette>
 #include <QRect>
-#include <QStaticStringData>
+#include <QSlider>
 #include <QStringLiteral>
 #include <QStyle>
 #include <QStyleOptionProgressBar>
 #include <QTimer>
 #include <QTreeView>
+#include <Qt>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <list>
 #include <memory>
 #include <optional>
-#include <set>
+#include <tuple>
 #include <utility>
 
-#include "App.h"
-#include "CallTreeViewItemModel.h"
 #include "ClientData/CallstackEvent.h"
 #include "ClientData/CaptureData.h"
+#include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifier.h"
+#include "ClientData/ModuleManager.h"
+#include "ClientData/ModulePathAndBuildId.h"
 #include "ClientFlags/ClientFlags.h"
-#include "CustomSignalsTreeView.h"
 #include "DataViews/FunctionsDataView.h"
+#include "Introspection/Introspection.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Sort.h"
-#include "SymbolProvider/ModuleIdentifier.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitQt/CallTreeViewItemModel.h"
+#include "OrbitQt/CustomSignalsTreeView.h"
+#include "UtilWidgets/NoticeWidget.h"
+#include "absl/flags/internal/flag.h"
+#include "ui_CallTreeWidget.h"
 
 using orbit_client_data::CaptureData;
 using orbit_client_data::FunctionInfo;
 using orbit_client_data::ModuleData;
+using orbit_client_data::ModuleIdentifier;
 using orbit_client_data::ModuleManager;
-using orbit_symbol_provider::ModuleIdentifier;
 
 [[nodiscard]] static std::optional<float> FloatFromIndex(const QModelIndex& index) {
   bool is_float = false;
@@ -85,7 +94,7 @@ CallTreeWidget::CallTreeWidget(QWidget* parent)
   connect(ui_->searchLineEdit, &QLineEdit::textEdited, this,
           &CallTreeWidget::OnSearchLineEditTextEdited);
   connect(search_typing_finished_timer_, &QTimer::timeout, this,
-          &CallTreeWidget::OnSearchTypingFinishedTimerTimout);
+          &CallTreeWidget::OnSearchTypingFinishedTimerTimeout);
 
   if (IsSliderEnabled()) {
     connect(ui_->horizontalSlider, &QSlider::valueChanged, this,
@@ -95,7 +104,9 @@ CallTreeWidget::CallTreeWidget(QWidget* parent)
   }
 }
 
-void CallTreeWidget::SetCallTreeView(std::unique_ptr<CallTreeView> call_tree_view,
+CallTreeWidget::~CallTreeWidget() = default;
+
+void CallTreeWidget::SetCallTreeView(std::shared_ptr<const CallTreeView> call_tree_view,
                                      std::unique_ptr<QIdentityProxyModel> hide_values_proxy_model) {
   ORBIT_CHECK(app_ != nullptr);
 
@@ -115,6 +126,7 @@ void CallTreeWidget::SetCallTreeView(std::unique_ptr<CallTreeView> call_tree_vie
   ui_->callTreeTreeView->sortByColumn(CallTreeViewItemModel::kInclusive, Qt::DescendingOrder);
 
   OnSearchLineEditTextEdited(ui_->searchLineEdit->text());
+  OnSearchTypingFinishedTimerTimeout();
 
   ResizeColumnsIfNecessary();
 }
@@ -132,7 +144,7 @@ class HideValuesForTopDownProxyModel : public QIdentityProxyModel {
  public:
   explicit HideValuesForTopDownProxyModel(QObject* parent) : QIdentityProxyModel(parent) {}
 
-  QVariant data(const QModelIndex& proxy_index, int role) const override {
+  [[nodiscard]] QVariant data(const QModelIndex& proxy_index, int role) const override {
     // Don't show "Exclusive" and "Of parent" for the first level (the thread level).
     if (!proxy_index.parent().isValid() && role == Qt::DisplayRole &&
         (proxy_index.column() == CallTreeViewItemModel::kExclusive ||
@@ -147,7 +159,7 @@ class HideValuesForBottomUpProxyModel : public QIdentityProxyModel {
  public:
   explicit HideValuesForBottomUpProxyModel(QObject* parent) : QIdentityProxyModel(parent) {}
 
-  QVariant data(const QModelIndex& proxy_index, int role) const override {
+  [[nodiscard]] QVariant data(const QModelIndex& proxy_index, int role) const override {
     // Don't show "Of parent" for the first level (the innermost functions).
     if (!proxy_index.parent().isValid() && role == Qt::DisplayRole &&
         proxy_index.column() == CallTreeViewItemModel::kOfParent) {
@@ -206,9 +218,9 @@ static void ExpandRecursivelyWithThreshold(QTreeView* tree_view, const QModelInd
   }
 }
 
-void CallTreeWidget::SetTopDownView(std::unique_ptr<CallTreeView> top_down_view) {
+void CallTreeWidget::SetTopDownView(std::shared_ptr<const CallTreeView> top_down_view) {
   // Expand recursively if CallTreeView contains information for a single thread.
-  bool should_expand = IsSliderEnabled() && top_down_view->thread_count() == 1;
+  bool should_expand = IsSliderEnabled() && top_down_view->GetCallTreeRoot()->thread_count() == 1;
 
   SetCallTreeView(std::move(top_down_view),
                   std::make_unique<HideValuesForTopDownProxyModel>(nullptr));
@@ -220,28 +232,16 @@ void CallTreeWidget::SetTopDownView(std::unique_ptr<CallTreeView> top_down_view)
   }
 }
 
-void CallTreeWidget::SetBottomUpView(std::unique_ptr<CallTreeView> bottom_up_view) {
+void CallTreeWidget::SetBottomUpView(std::shared_ptr<const CallTreeView> bottom_up_view) {
   SetCallTreeView(std::move(bottom_up_view),
                   std::make_unique<HideValuesForBottomUpProxyModel>(nullptr));
   // Don't show the "Exclusive" column for the bottom-up tree, it provides no useful information.
   ui_->callTreeTreeView->hideColumn(CallTreeViewItemModel::kExclusive);
 }
 
-void CallTreeWidget::SetInspection(std::unique_ptr<CallTreeView> call_tree_view) {
-  ORBIT_CHECK(hide_values_proxy_model_ != nullptr);
-  ui_->inspectionNoticeWidget->show();
-  inspection_model_ = std::make_unique<CallTreeViewItemModel>(std::move(call_tree_view));
-  hide_values_proxy_model_->setSourceModel(inspection_model_.get());
-  OnSearchTypingFinishedTimerTimout();
-}
+void CallTreeWidget::SetInspection() { ui_->inspectionNoticeWidget->show(); }
 
-void CallTreeWidget::ClearInspection() {
-  ORBIT_CHECK(hide_values_proxy_model_ != nullptr);
-  ui_->inspectionNoticeWidget->hide();
-  inspection_model_.reset();
-  hide_values_proxy_model_->setSourceModel(model_.get());
-  OnSearchTypingFinishedTimerTimout();
-}
+void CallTreeWidget::ClearInspection() { ui_->inspectionNoticeWidget->hide(); }
 
 void CallTreeWidget::resizeEvent(QResizeEvent* /*event*/) {
   if (column_resizing_state_ == ColumnResizingState::kInitial) {
@@ -511,8 +511,8 @@ static void CollapseChildrenRecursively(QTreeView* tree_view, const QModelIndex&
 }
 
 static std::vector<ModuleData*> GetModulesFromIndices(OrbitApp* app,
-                                                      const std::vector<QModelIndex>& indices) {
-  absl::flat_hash_set<ModuleIdentifier> unique_module_ids;
+                                                      absl::Span<const QModelIndex> indices) {
+  absl::flat_hash_set<orbit_client_data::ModulePathAndBuildId> unique_module_paths_and_build_ids;
   for (const auto& index : indices) {
     const QModelIndex model_index =
         index.model()->index(index.row(), CallTreeViewItemModel::kModule, index.parent());
@@ -520,12 +520,14 @@ static std::vector<ModuleData*> GetModulesFromIndices(OrbitApp* app,
         model_index.data(CallTreeViewItemModel::kModulePathRole).toString().toStdString();
     const std::string module_build_id =
         model_index.data(CallTreeViewItemModel::kModuleBuildIdRole).toString().toStdString();
-    unique_module_ids.emplace(ModuleIdentifier{module_path, module_build_id});
+    unique_module_paths_and_build_ids.emplace(orbit_client_data::ModulePathAndBuildId{
+        .module_path = module_path, .build_id = module_build_id});
   }
 
   std::vector<ModuleData*> modules;
-  for (const ModuleIdentifier& module_id : unique_module_ids) {
-    ModuleData* module = app->GetMutableModuleByModuleIdentifier(module_id);
+  for (const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id :
+       unique_module_paths_and_build_ids) {
+    ModuleData* module = app->GetMutableModuleByModulePathAndBuildId(module_path_and_build_id);
     if (module != nullptr) {
       modules.emplace_back(module);
     }
@@ -534,7 +536,7 @@ static std::vector<ModuleData*> GetModulesFromIndices(OrbitApp* app,
 }
 
 static std::vector<const FunctionInfo*> GetFunctionsFromIndices(
-    OrbitApp* app, const std::vector<QModelIndex>& indices) {
+    OrbitApp* app, absl::Span<const QModelIndex> indices) {
   absl::flat_hash_set<const FunctionInfo*> functions_set;
   const CaptureData& capture_data = app->GetCaptureData();
   const ModuleManager* module_manager = app->GetModuleManager();
@@ -584,7 +586,7 @@ static void GetCallstackEventsUnderSelectionRecursively(
 }
 
 static absl::flat_hash_set<orbit_client_data::CallstackEvent> GetCallstackEventsUnderSelection(
-    const std::vector<QModelIndex>& indices) {
+    absl::Span<const QModelIndex> indices) {
   // We can have duplicate CallstackEvents in the selection, e.g., with the top-down view when
   // selecting both from the "(all threads)" tree and other single-thread trees. Hence the set.
   absl::flat_hash_set<orbit_client_data::CallstackEvent> callstack_events;
@@ -744,32 +746,20 @@ void CallTreeWidget::OnCustomContextMenuRequested(const QPoint& point) {
     absl::flat_hash_set<orbit_client_data::CallstackEvent> selected_callstack_events =
         GetCallstackEventsUnderSelection(selected_tree_indices);
     ORBIT_CHECK(!selected_callstack_events.empty());
-    bool origin_is_multiple_threads =
-        std::any_of(selected_callstack_events.begin(), selected_callstack_events.end(),
-                    [first_callstack_event = *selected_callstack_events.begin()](
-                        const orbit_client_data::CallstackEvent& callstack_event) -> bool {
-                      return callstack_event.thread_id() != first_callstack_event.thread_id();
-                    });
     app_->InspectCallstackEvents(
         // This copies the content of the absl::flat_hash_set into a std::vector. We consider this
         // fine in order to keep OrbitApp::InspectCallstackEvents as simple as it is now.
-        {selected_callstack_events.begin(), selected_callstack_events.end()},
-        origin_is_multiple_threads);
+        std::vector<orbit_client_data::CallstackEvent>{selected_callstack_events.begin(),
+                                                       selected_callstack_events.end()});
   } else if (action->text() == kActionSelectCallstacks) {
     absl::flat_hash_set<orbit_client_data::CallstackEvent> selected_callstack_events =
         GetCallstackEventsUnderSelection(selected_tree_indices);
     ORBIT_CHECK(!selected_callstack_events.empty());
-    bool origin_is_multiple_threads =
-        std::any_of(selected_callstack_events.begin(), selected_callstack_events.end(),
-                    [first_callstack_event = *selected_callstack_events.begin()](
-                        const orbit_client_data::CallstackEvent& callstack_event) -> bool {
-                      return callstack_event.thread_id() != first_callstack_event.thread_id();
-                    });
     app_->SelectCallstackEvents(
         // This copies the content of the absl::flat_hash_set into a std::vector. We consider this
         // fine in order to keep OrbitApp::SelectCallstackEvents as simple as it is now.
-        {selected_callstack_events.begin(), selected_callstack_events.end()},
-        origin_is_multiple_threads);
+        std::vector<orbit_client_data::CallstackEvent>{selected_callstack_events.begin(),
+                                                       selected_callstack_events.end()});
   } else if (action->text() == kActionCopySelection) {
     app_->SetClipboard(BuildStringFromIndices(
         ui_->callTreeTreeView, ui_->callTreeTreeView->selectionModel()->selectedIndexes()));
@@ -807,7 +797,7 @@ void CallTreeWidget::OnSearchLineEditTextEdited(const QString& /*text*/) {
   search_typing_finished_timer_->start(kSearchTypingFinishedTimerTimeoutMs);
 }
 
-void CallTreeWidget::OnSearchTypingFinishedTimerTimout() {
+void CallTreeWidget::OnSearchTypingFinishedTimerTimeout() {
   if (search_proxy_model_ == nullptr) {
     return;
   }
@@ -907,7 +897,7 @@ void CallTreeWidget::ProgressBarItemDelegate::paint(QPainter* painter,
   }
 
   bool highlight = index.data(CallTreeViewItemModel::kMatchesCustomFilterRole).toBool();
-  if (option.state & QStyle::State_Selected) {
+  if ((option.state & QStyle::State_Selected) != 0u) {
     painter->fillRect(option.rect, option.palette.highlight());
     // Don't highlight the progress bar text when the row is selected, for consistency with the
     // other columns.

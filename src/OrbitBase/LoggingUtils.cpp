@@ -6,8 +6,12 @@
 
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
+#include <absl/time/clock.h>
 #include <absl/time/time.h>
+#include <absl/types/span.h>
 
+#include <string>
+#include <string_view>
 #include <system_error>
 
 #include "OrbitBase/Logging.h"
@@ -53,12 +57,13 @@ std::vector<std::filesystem::path> ListFilesRecursivelyIgnoreErrors(
   return files_in_dir;
 }
 
-ErrorMessageOr<absl::Time> ParseLogFileTimestamp(const std::string& log_file_name) {
+ErrorMessageOr<absl::Time> ParseLogFileTimestamp(std::string_view log_file_name) {
   if (log_file_name.size() < kTimestampStartPos + kTimestampStringLength) {
     return ErrorMessage(
         absl::StrFormat("Unable to extract time information from log file: %s", log_file_name));
   }
-  std::string timestamp_string = log_file_name.substr(kTimestampStartPos, kTimestampStringLength);
+  std::string_view timestamp_string =
+      log_file_name.substr(kTimestampStartPos, kTimestampStringLength);
   absl::Time log_file_timestamp;
   std::string parse_time_error;
   if (!absl::ParseTime(kLogFileNameTimeFormat, timestamp_string, absl::UTCTimeZone(),
@@ -71,7 +76,7 @@ ErrorMessageOr<absl::Time> ParseLogFileTimestamp(const std::string& log_file_nam
 }
 
 std::vector<std::filesystem::path> FindOldLogFiles(
-    const std::vector<std::filesystem::path>& file_paths) {
+    absl::Span<const std::filesystem::path> file_paths) {
   std::vector<std::filesystem::path> old_files;
   absl::Time expiration_time = absl::Now() - kLogFileLifetime;
   for (const std::filesystem::path& log_file_path : file_paths) {
@@ -88,7 +93,7 @@ std::vector<std::filesystem::path> FindOldLogFiles(
   return old_files;
 }
 
-ErrorMessageOr<void> RemoveFiles(const std::vector<std::filesystem::path>& file_paths) {
+ErrorMessageOr<void> RemoveFiles(absl::Span<const std::filesystem::path> file_paths) {
   std::string error_message;
   for (const auto& file_path : file_paths) {
     std::error_code file_remove_error;

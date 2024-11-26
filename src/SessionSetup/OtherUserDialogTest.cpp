@@ -2,11 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <QApplication>
 #include <QCheckBox>
+#include <QCoreApplication>
+#include <QMetaObject>
 #include <QSettings>
+#include <Qt>
+#include <memory>
 
 #include "SessionSetup/OtherUserDialog.h"
 #include "TestUtils/TestUtils.h"
@@ -18,7 +22,7 @@ constexpr const char* kRememberKey = "OtherUserDialog.RememberKey";
 
 namespace orbit_session_setup {
 
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasValue;
 
 TEST(OtherUserDialog, ExecAccept) {
@@ -47,7 +51,7 @@ TEST(OtherUserDialog, ExecReject) {
       &dialog, [&]() { dialog.reject(); }, Qt::QueuedConnection);
 
   auto result = dialog.Exec();
-  EXPECT_THAT(result, HasError("user rejected"));
+  EXPECT_THAT(result, HasErrorWithMessage("user rejected"));
 }
 
 TEST(OtherUserDialog, Remember) {
@@ -61,7 +65,7 @@ TEST(OtherUserDialog, Remember) {
     QMetaObject::invokeMethod(
         &dialog,
         [&]() {
-          QCheckBox* check_box = dialog.findChild<QCheckBox*>();
+          auto* check_box = dialog.findChild<QCheckBox*>();
           ASSERT_TRUE(check_box != nullptr);
           check_box->setChecked(true);
           dialog.accept();

@@ -4,14 +4,18 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 #include <sys/mman.h>
+#include <sys/types.h>
 
-#include <algorithm>
+#include <filesystem>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
-#include <vector>
 
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
 #include "LibunwindstackMaps.h"
 #include "MockTracerListener.h"
 #include "PerfEvent.h"
@@ -33,7 +37,7 @@ class UprobesUnwindingVisitorMmapTest : public ::testing::Test {
     ON_CALL(maps_, Get).WillByDefault([this]() { return real_maps_->Get(); });
     ON_CALL(maps_, AddAndSort)
         .WillByDefault([this](uint64_t start, uint64_t end, uint64_t offset, uint64_t flags,
-                              const std::string& name) {
+                              std::string_view name) {
           return real_maps_->AddAndSort(start, end, offset, flags, name);
         });
   }

@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -58,7 +59,7 @@ class ProcessManager {
                                                         uint64_t size) = 0;
 
   virtual ErrorMessageOr<orbit_base::NotFoundOr<std::filesystem::path>> FindDebugInfoFile(
-      const std::string& module_path,
+      std::string_view module_path,
       absl::Span<const std::string> additional_search_directories) = 0;
 
   // Note that this method waits for the worker thread to stop, which could

@@ -5,10 +5,15 @@
 #include "Trampoline.h"
 
 #include <absl/base/casts.h>
+#include <absl/hash/hash.h>
+#include <absl/meta/type_traits.h>
 #include <absl/strings/numbers.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
+#include <absl/types/span.h>
+#include <capstone/capstone.h>
+#include <capstone/x86.h>
 #include <cpuid.h>
 #include <unistd.h>
 
@@ -17,6 +22,8 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 #include "AccessTraceesMemory.h"
 #include "AllocateInTracee.h"
@@ -67,10 +74,10 @@ constexpr uint64_t kOffsetOfFunctionIdInCallToEntryPayload = 178;
   uint32_t ebx = 0;
   uint32_t ecx = 0;
   uint32_t edx = 0;
-  return __get_cpuid(0x01, &eax, &ebx, &ecx, &edx) && (ecx & bit_AVX);
+  return (__get_cpuid(0x01, &eax, &ebx, &ecx, &edx) != 0) && ((ecx & bit_AVX) != 0u);
 }
 
-[[nodiscard]] std::string BytesAsString(const std::vector<uint8_t>& code) {
+[[nodiscard]] std::string BytesAsString(absl::Span<const uint8_t> code) {
   std::string result;
   for (const auto& c : code) {
     result.append(absl::StrFormat("%0.2x ", c));
@@ -89,7 +96,7 @@ constexpr uint64_t kOffsetOfFunctionIdInCallToEntryPayload = 178;
 // However analysing existing code shows that many of the problematic jumps are in small functions
 // that are written in assembly. These are detected by the function below.
 bool CheckForRelativeJumpIntoFirstFiveBytes(uint64_t function_address,
-                                            const std::vector<uint8_t>& function,
+                                            absl::Span<const uint8_t> function,
                                             csh capstone_handle) {
   cs_insn* instruction = cs_malloc(capstone_handle);
   ORBIT_FAIL_IF(instruction == nullptr, "Failed to allocate memory for capstone disassembler.");
@@ -483,7 +490,7 @@ void AppendRestoreCode(MachineCode& trampoline) {
 // one are included (function_address will contain a valid instruction - the jump into the
 // trampoline - when we are done).
 [[nodiscard]] ErrorMessageOr<uint64_t> AppendRelocatedPrologueCode(
-    uint64_t function_address, const std::vector<uint8_t>& function, uint64_t trampoline_address,
+    uint64_t function_address, absl::Span<const uint8_t> function, uint64_t trampoline_address,
     csh capstone_handle, absl::flat_hash_map<uint64_t, uint64_t>& global_relocation_map,
     MachineCode& trampoline) {
   cs_insn* instruction = cs_malloc(capstone_handle);
@@ -523,10 +530,12 @@ void AppendRestoreCode(MachineCode& trampoline) {
 
   // Relocate addresses encoded in the trampoline.
   for (size_t pos : relocateable_addresses) {
-    const uint64_t address_in_trampoline = *absl::bit_cast<uint64_t*>(trampoline_code.data() + pos);
+    uint64_t address_in_trampoline{};
+    std::memcpy(&address_in_trampoline, trampoline_code.data() + pos,
+                sizeof(address_in_trampoline));
     auto it = relocation_map.find(address_in_trampoline);
     if (it != relocation_map.end()) {
-      *absl::bit_cast<uint64_t*>(trampoline_code.data() + pos) = it->second;
+      std::memcpy(trampoline_code.data() + pos, &it->second, sizeof(it->second));
     }
   }
 
@@ -852,7 +861,7 @@ bool DoAddressRangesOverlap(const AddressRange& a, const AddressRange& b) {
   return !(b.end <= a.start || b.start >= a.end);
 }
 
-std::optional<size_t> LowestIntersectingAddressRange(const std::vector<AddressRange>& ranges_sorted,
+std::optional<size_t> LowestIntersectingAddressRange(absl::Span<const AddressRange> ranges_sorted,
                                                      const AddressRange& range) {
   for (size_t i = 0; i < ranges_sorted.size(); i++) {
     if (DoAddressRangesOverlap(ranges_sorted[i], range)) {
@@ -862,8 +871,8 @@ std::optional<size_t> LowestIntersectingAddressRange(const std::vector<AddressRa
   return std::nullopt;
 }
 
-std::optional<size_t> HighestIntersectingAddressRange(
-    const std::vector<AddressRange>& ranges_sorted, const AddressRange& range) {
+std::optional<size_t> HighestIntersectingAddressRange(absl::Span<const AddressRange> ranges_sorted,
+                                                      const AddressRange& range) {
   for (int i = ranges_sorted.size() - 1; i >= 0; i--) {
     if (DoAddressRangesOverlap(ranges_sorted[i], range)) {
       return i;
@@ -911,7 +920,7 @@ ErrorMessageOr<std::vector<AddressRange>> GetUnavailableAddressRanges(pid_t pid)
 }
 
 ErrorMessageOr<AddressRange> FindAddressRangeForTrampoline(
-    const std::vector<AddressRange>& unavailable_ranges, const AddressRange& code_range,
+    absl::Span<const AddressRange> unavailable_ranges, const AddressRange& code_range,
     uint64_t size) {
   constexpr uint64_t kMax32BitOffset = INT32_MAX;
   constexpr uint64_t kMax64BitAddress = UINT64_MAX;
@@ -995,9 +1004,8 @@ ErrorMessageOr<std::unique_ptr<MemoryInTracee>> AllocateMemoryForTrampolines(
 }
 
 ErrorMessageOr<int32_t> AddressDifferenceAsInt32(uint64_t a, uint64_t b) {
-  constexpr uint64_t kAbsMaxInt32AsUint64 =
-      static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
-  constexpr uint64_t kAbsMinInt32AsUint64 =
+  constexpr auto kAbsMaxInt32AsUint64 = static_cast<uint64_t>(std::numeric_limits<int32_t>::max());
+  constexpr auto kAbsMinInt32AsUint64 =
       static_cast<uint64_t>(-static_cast<int64_t>(std::numeric_limits<int32_t>::min()));
   if ((a > b) && (a - b > kAbsMaxInt32AsUint64)) {
     return ErrorMessage("Difference is larger than +2GB.");
@@ -1142,7 +1150,7 @@ ErrorMessageOr<RelocatedInstruction> RelocateInstruction(cs_insn* instruction, u
 
 uint64_t GetMaxTrampolineSize() {
   // The maximum size of a trampoline is constant. So the calculation can be cached on first call.
-  static const uint64_t trampoline_size = []() -> uint64_t {
+  static const uint64_t kTrampolineSize = []() -> uint64_t {
     MachineCode unused_code;
     AppendBackupCode(unused_code);
     AppendCallToEntryPayload(/*entry_payload_function_address=*/0,
@@ -1158,11 +1166,11 @@ uint64_t GetMaxTrampolineSize() {
     return static_cast<uint64_t>(((unused_code.GetResultAsVector().size() + 31) / 32) * 32);
   }();
 
-  return trampoline_size;
+  return kTrampolineSize;
 }
 
 ErrorMessageOr<uint64_t> CreateTrampoline(pid_t pid, uint64_t function_address,
-                                          const std::vector<uint8_t>& function,
+                                          absl::Span<const uint8_t> function,
                                           uint64_t trampoline_address,
                                           uint64_t entry_payload_function_address,
                                           uint64_t return_trampoline_address, csh capstone_handle,
@@ -1201,13 +1209,13 @@ ErrorMessageOr<uint64_t> CreateTrampoline(pid_t pid, uint64_t function_address,
 
 uint64_t GetReturnTrampolineSize() {
   // The size is constant. So the calculation can be cached on first call.
-  static const uint64_t return_trampoline_size = []() -> uint64_t {
+  static const uint64_t kReturnTrampolineSize = []() -> uint64_t {
     MachineCode unused_code;
     AppendCallToExitPayloadAndJumpToReturnAddress(/*exit_payload_function_address=*/0, unused_code);
     return static_cast<uint64_t>(((unused_code.GetResultAsVector().size() + 31) / 32) * 32);
   }();
 
-  return return_trampoline_size;
+  return kReturnTrampolineSize;
 }
 
 ErrorMessageOr<void> CreateReturnTrampoline(pid_t pid, uint64_t exit_payload_function_address,

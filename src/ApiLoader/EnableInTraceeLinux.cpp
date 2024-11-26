@@ -4,17 +4,25 @@
 
 // clang-format off
 #include "ApiLoader/EnableInTracee.h"
+#include "GrpcProtos/capture.pb.h"
+#include "OrbitBase/Result.h"
 // clang-format on
 
 #include <absl/base/casts.h>
-#include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/match.h>
+#include <dlfcn.h>
+#include <stdint.h>
+#include <sys/types.h>
 
-#include <functional>
+#include <filesystem>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 #include "ApiUtils/GetFunctionTableAddressPrefix.h"
 #include "ModuleUtils/ReadLinuxModules.h"
-#include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
 #include "OrbitBase/ExecutablePath.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadUtils.h"
@@ -32,10 +40,11 @@ using orbit_user_space_instrumentation::AnyThreadIsInStrictSeccompMode;
 using orbit_user_space_instrumentation::AttachAndStopNewThreadsOfProcess;
 using orbit_user_space_instrumentation::AttachAndStopProcess;
 using orbit_user_space_instrumentation::DetachAndContinueProcess;
-using orbit_user_space_instrumentation::DlopenInTracee;
+using orbit_user_space_instrumentation::DlmopenInTracee;
 using orbit_user_space_instrumentation::DlsymInTracee;
 using orbit_user_space_instrumentation::ExecuteInProcess;
 using orbit_user_space_instrumentation::ExecuteInProcessWithMicrosoftCallingConvention;
+using orbit_user_space_instrumentation::LinkerNamespace;
 
 namespace {
 
@@ -81,7 +90,8 @@ ErrorMessageOr<void> SetApiEnabledInTracee(const CaptureOptions& capture_options
   OUTCOME_TRY(auto&& liborbit_path, GetLibOrbitPath());
   ORBIT_LOG("Injecting library \"%s\" into process %d", liborbit_path, pid);
   OUTCOME_TRY(auto&& modules, orbit_module_utils::ReadModules(pid));
-  OUTCOME_TRY(auto&& handle, DlopenInTracee(pid, modules, liborbit_path, RTLD_NOW));
+  OUTCOME_TRY(auto&& handle, DlmopenInTracee(pid, modules, liborbit_path, RTLD_NOW,
+                                             LinkerNamespace::kUseInitialNamespace));
   ORBIT_LOG("Resolving function pointers in injected library");
   constexpr const char* kSetEnabledFunction = "orbit_api_set_enabled";
   OUTCOME_TRY(auto&& orbit_api_set_enabled_function,

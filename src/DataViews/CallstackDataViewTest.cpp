@@ -2,26 +2,43 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "ClientData/CallstackInfo.h"
 #include "ClientData/CallstackType.h"
 #include "ClientData/CaptureData.h"
+#include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
+#include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifierProvider.h"
+#include "ClientData/ModuleManager.h"
 #include "ClientData/ProcessData.h"
 #include "DataViewTestUtils.h"
 #include "DataViews/CallstackDataView.h"
 #include "DataViews/DataView.h"
-#include "DisplayFormats/DisplayFormats.h"
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
+#include "GrpcProtos/symbol.pb.h"
 #include "MockAppInterface.h"
-#include "SymbolProvider/ModuleIdentifier.h"
+#include "OrbitBase/Logging.h"
 
 using orbit_client_data::CallstackInfo;
 using orbit_client_data::CallstackType;
@@ -91,7 +108,8 @@ std::string GetExpectedDisplayAddress(uint64_t address) {
 }
 
 std::unique_ptr<CaptureData> GenerateTestCaptureData(
-    orbit_client_data::ModuleManager* module_manager) {
+    orbit_client_data::ModuleManager* module_manager,
+    const orbit_client_data::ModuleIdentifierProvider& module_identifier_provider) {
   std::vector<ModuleInfo> modules;
 
   for (size_t i = 0; i < kNumModules; i++) {
@@ -117,8 +135,8 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
       module_symbols.mutable_symbol_infos()->Add(std::move(symbol_info));
 
       orbit_client_data::ModuleData* module_data =
-          module_manager->GetMutableModuleByModuleIdentifier(
-              orbit_symbol_provider::ModuleIdentifier{kModulePaths[i], kModuleBuildIds[i]});
+          module_manager->GetMutableModuleByModulePathAndBuildId(
+              {.module_path = kModulePaths[i], .build_id = kModuleBuildIds[i]});
       switch (kModuleSymbolCompleteness[i]) {
         case ModuleData::SymbolCompleteness::kNoSymbols:
           ORBIT_UNREACHABLE();
@@ -133,14 +151,14 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
   }
 
   constexpr int32_t kProcessId = 42;
-  const std::string kExecutablePath = "/path/to/text.exe";
+  const std::string executable_path = "/path/to/text.exe";
   orbit_grpc_protos::CaptureStarted capture_started{};
   capture_started.set_process_id(kProcessId);
-  capture_started.set_executable_path(kExecutablePath);
+  capture_started.set_executable_path(executable_path);
 
-  auto capture_data =
-      std::make_unique<CaptureData>(capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
-                                    CaptureData::DataSource::kLiveCapture);
+  auto capture_data = std::make_unique<CaptureData>(
+      capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
+      CaptureData::DataSource::kLiveCapture, &module_identifier_provider);
   ProcessData* process = capture_data->mutable_process();
   process->UpdateModuleInfos(modules);
 
@@ -150,7 +168,8 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
 class CallstackDataViewTest : public testing::Test {
  public:
   explicit CallstackDataViewTest()
-      : view_{&app_}, capture_data_(GenerateTestCaptureData(&module_manager_)) {
+      : view_{&app_},
+        capture_data_(GenerateTestCaptureData(&module_manager_, module_identifier_provider_)) {
     EXPECT_CALL(app_, GetModuleManager()).WillRepeatedly(Return(&module_manager_));
     EXPECT_CALL(app_, GetMutableModuleManager()).WillRepeatedly(Return(&module_manager_));
   }
@@ -158,7 +177,7 @@ class CallstackDataViewTest : public testing::Test {
   void SetCallstackFromFrames(std::vector<uint64_t> callstack_frames) {
     orbit_client_data::CallstackInfo callstack_info{std::move(callstack_frames),
                                                     CallstackType::kComplete};
-    view_.SetCallstack(std::move(callstack_info));
+    view_.SetCallstack(callstack_info);
   }
 
   std::string GetModulePathByAddressFromCaptureData(uint64_t frame_address) {
@@ -176,7 +195,8 @@ class CallstackDataViewTest : public testing::Test {
  protected:
   MockAppInterface app_;
   CallstackDataView view_;
-  orbit_client_data::ModuleManager module_manager_;
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider_;
+  orbit_client_data::ModuleManager module_manager_{&module_identifier_provider_};
   std::unique_ptr<CaptureData> capture_data_;
 };
 
@@ -271,7 +291,7 @@ TEST_F(CallstackDataViewTest, ColumnValuesAreCorrect) {
 }
 
 TEST_F(CallstackDataViewTest, ColumnSelectedShowsRightResults) {
-  bool function_selected;
+  bool function_selected = false;
   EXPECT_CALL(app_, HasCaptureData).WillRepeatedly(testing::Return(true));
   EXPECT_CALL(app_, GetCaptureData).WillRepeatedly(testing::ReturnRef(*capture_data_));
   EXPECT_CALL(app_, IsFunctionSelected(testing::A<const orbit_client_data::FunctionInfo&>()))
@@ -303,7 +323,7 @@ TEST_F(CallstackDataViewTest, ColumnSelectedShowsRightResults) {
 }
 
 TEST_F(CallstackDataViewTest, ContextMenuEntriesArePresentCorrectly) {
-  const std::vector<uint64_t> kCallstackFrameAddresses{
+  const std::vector<uint64_t> callstack_frame_addresses{
       // Corresponding CallstackDataViewFrame: frame.module             frame.function
       0x3140,  //                                module 0 (loaded)        function 0 (selected)
       0x9260,  //                                module 1 (loaded)        function 1 (not selected)
@@ -311,10 +331,10 @@ TEST_F(CallstackDataViewTest, ContextMenuEntriesArePresentCorrectly) {
       0x5250,  //                                module 3 (loaded)        nullptr
       0x2200,  //                                module 4 (not loaded)    nullptr
   };
-  const std::vector<bool> kFrameModuleNotNull{true, true, false, true, true};
-  const std::vector<bool> kFrameFunctionNotNull{true, true, false, false, false};
+  static const std::vector<bool> kFrameModuleNotNull{true, true, false, true, true};
+  static const std::vector<bool> kFrameFunctionNotNull{true, true, false, false, false};
 
-  bool capture_connected;
+  bool capture_connected = false;
   std::vector<bool> functions_selected{true, false, true, true, false};
 
   auto get_index_from_function_info = [&](const FunctionInfo& function) -> std::optional<size_t> {
@@ -334,7 +354,7 @@ TEST_F(CallstackDataViewTest, ContextMenuEntriesArePresentCorrectly) {
         return functions_selected.at(index.value());
       });
 
-  auto verify_context_menu_action_availability = [&](std::vector<int> selected_indices) {
+  auto verify_context_menu_action_availability = [&](absl::Span<const int> selected_indices) {
     FlattenContextMenu context_menu = FlattenContextMenuWithGroupingAndCheckOrder(
         view_.GetContextMenuWithGrouping(0, selected_indices));
 
@@ -377,7 +397,7 @@ TEST_F(CallstackDataViewTest, ContextMenuEntriesArePresentCorrectly) {
     CheckSingleAction(context_menu, kMenuActionUnselect, unselect);
   };
 
-  SetCallstackFromFrames(kCallstackFrameAddresses);
+  SetCallstackFromFrames(callstack_frame_addresses);
 
   capture_connected = false;
   verify_context_menu_action_availability({0});

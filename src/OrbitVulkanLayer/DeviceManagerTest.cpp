@@ -4,6 +4,9 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <vulkan/vulkan_core.h>
+
+#include <memory>
 
 #include "DeviceManager.h"
 
@@ -37,7 +40,7 @@ TEST(DeviceManager, DevicePropertiesCannotBeQueriedForUntrackedDevices) {
 
 VkPhysicalDeviceProperties physical_device_properties = {
     .apiVersion = 1, .driverVersion = 2, .limits = {.timestampPeriod = 3.14f}};
-static void MockGetPhysicalDeviceProperties(VkPhysicalDevice,
+static void MockGetPhysicalDeviceProperties(VkPhysicalDevice /*unused*/,
                                             VkPhysicalDeviceProperties* out_properties) {
   *out_properties = physical_device_properties;
 }

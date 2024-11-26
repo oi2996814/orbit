@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "FilterPanelWidget.h"
+#include "OrbitQt/FilterPanelWidget.h"
 
 #include <QFontMetrics>
 #include <QFrame>
+#include <QLabel>
+#include <QLineEdit>
 #include <QWidget>
 
 #include "ui_FilterPanelWidget.h"

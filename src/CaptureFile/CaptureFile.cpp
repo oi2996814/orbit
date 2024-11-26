@@ -4,11 +4,19 @@
 
 #include "CaptureFile/CaptureFile.h"
 
+#include <absl/strings/str_format.h>
+#include <absl/types/span.h>
 #include <google/protobuf/io/coded_stream.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 
-#include <cstdint>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <limits>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "CaptureFile/CaptureFileSection.h"
 #include "CaptureFile/ProtoSectionInputStream.h"
@@ -20,11 +28,17 @@
 #include "OrbitBase/SafeStrerror.h"
 #include "ProtoSectionInputStreamImpl.h"
 
+#ifdef __linux
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace orbit_capture_file {
 
 namespace {
 
-using orbit_base::unique_fd;
+using orbit_base::UniqueFd;
 
 constexpr uint64_t kMaxNumberOfSections = std::numeric_limits<uint16_t>::max();
 
@@ -77,7 +91,7 @@ class CaptureFileImpl : public CaptureFile {
   ErrorMessageOr<void> ReadHeader();
   ErrorMessageOr<void> ReadSectionList();
   ErrorMessageOr<void> CalculateCaptureSectionSize();
-  ErrorMessageOr<void> WriteSectionList(const std::vector<CaptureFileSection>& section_list,
+  ErrorMessageOr<void> WriteSectionList(absl::Span<const CaptureFileSection> section_list,
                                         uint64_t offset);
   [[nodiscard]] bool IsThereSectionWithOffsetAfterSectionList() const;
   // Calculates where the current content of the file ends. This is the position where new data can
@@ -93,7 +107,7 @@ class CaptureFileImpl : public CaptureFile {
   ErrorMessageOr<bool> ContainsValidUserDataSection() const;
 
   std::filesystem::path file_path_;
-  unique_fd fd_;
+  UniqueFd fd_;
   CaptureFileHeader header_{};
 
   // This is used for boundary checks so that we do not end up
@@ -109,7 +123,7 @@ class CaptureFileImpl : public CaptureFile {
   std::vector<CaptureFileSection> section_list_;
 };
 
-ErrorMessageOr<uint64_t> GetEndOfFileOffset(const unique_fd& fd) {
+ErrorMessageOr<uint64_t> GetEndOfFileOffset(const UniqueFd& fd) {
 #if defined(_WIN32)
   int64_t end_of_file = _lseeki64(fd.get(), 0, SEEK_END);
 #else
@@ -432,7 +446,7 @@ ErrorMessageOr<void> orbit_capture_file::CaptureFileImpl::ExtendSection(uint64_t
 }
 
 ErrorMessageOr<void> CaptureFileImpl::WriteSectionList(
-    const std::vector<CaptureFileSection>& section_list, uint64_t offset) {
+    absl::Span<const CaptureFileSection> section_list, uint64_t offset) {
   uint64_t number_of_sections = section_list.size();
   // first write new section list at new offset
   OUTCOME_TRY(

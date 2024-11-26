@@ -6,9 +6,19 @@
 #define ORBIT_VULKAN_LAYER_VULKAN_LAYER_PRODUCER_IMPL_H_
 
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+#include <absl/synchronization/mutex.h>
 #include <google/protobuf/arena.h>
+#include <grpcpp/channel.h>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "CaptureEventProducer/LockFreeBufferCaptureEventProducer.h"
+#include "GrpcProtos/capture.pb.h"
 #include "VulkanLayerProducer.h"
 
 namespace orbit_vulkan_layer {
@@ -85,15 +95,15 @@ class VulkanLayerProducerImpl : public VulkanLayerProducer {
     VulkanLayerProducerImpl* outer_;
   };
 
- private:
-  static uint64_t ComputeStringKey(const std::string& str) { return std::hash<std::string>{}(str); }
+  static uint64_t ComputeStringKey(std::string_view str) {
+    return std::hash<std::string_view>{}(str);
+  }
 
   void ClearStringInternPool() {
     absl::MutexLock lock{&string_keys_sent_mutex_};
     string_keys_sent_.clear();
   }
 
- private:
   LockFreeBufferVulkanLayerProducer lock_free_producer_{this};
 
   absl::flat_hash_set<uint64_t> string_keys_sent_;

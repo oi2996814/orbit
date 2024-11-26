@@ -2,19 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <GteVector.h>
+#include <absl/container/flat_hash_map.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "CoreMath.h"
-#include "Geometry.h"
-#include "OpenGlBatcher.h"
-#include "PickingManager.h"
-#include "PickingManagerTest.h"
+#include "Containers/BlockChain.h"
+#include "OrbitGl/BatchRenderGroup.h"
+#include "OrbitGl/Batcher.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/OpenGlBatcher.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/PickingManagerTest.h"
 
 namespace orbit_gl {
 
@@ -29,7 +37,7 @@ class FakeOpenGlBatcher : public OpenGlBatcher {
   }
 
   // Auxiliary methods to simplify the addition of lines, boxes and triangles.
-  void AddLineHelper(Vec2 from, Vec2 to, float z, const Color& color,
+  void AddLineHelper(const Vec2& from, const Vec2& to, float z, const Color& color,
                      std::unique_ptr<PickingUserData> user_data = nullptr) {
     Color picking_color = PickingId::ToColor(PickingType::kLine, GetNumElements(), GetBatcherId());
     return AddLine(from, to, z, color, picking_color, std::move(user_data));
@@ -52,8 +60,8 @@ class FakeOpenGlBatcher : public OpenGlBatcher {
   // Simulate drawing by simple appending all colors to internal
   // buffers. Only a single color per element will be appended
   // (start point for line, first vertex for triangle and box)
-  void DrawLayer(float layer, bool picking = false) const override {
-    auto& buffer = primitive_buffers_by_layer_.at(layer);
+  void DrawRenderGroup(const BatchRenderGroupId& group, bool picking = false) override {
+    auto& buffer = primitive_buffers_by_group_.at(group);
     if (picking) {
       for (auto it = buffer.line_buffer.picking_colors_.begin();
            it != buffer.line_buffer.picking_colors_.end();) {
@@ -99,8 +107,9 @@ class FakeOpenGlBatcher : public OpenGlBatcher {
     }
   }
 
-  const orbit_gl_internal::PrimitiveBuffers& GetInternalBuffers(float layer) const {
-    return primitive_buffers_by_layer_.at(layer);
+  const orbit_gl_internal::PrimitiveBuffers& GetInternalBuffers(
+      const BatchRenderGroupId& group) const {
+    return primitive_buffers_by_group_.at(group);
   }
 
  private:
@@ -113,8 +122,8 @@ void ExpectDraw(FakeOpenGlBatcher& batcher, uint32_t line_count, uint32_t triang
                 uint32_t box_count) {
   batcher.ResetMockDrawCounts();
 
-  for (auto layer : batcher.GetLayers()) {
-    batcher.DrawLayer(layer);
+  for (const auto& group : batcher.GetNonEmptyRenderGroups()) {
+    batcher.DrawRenderGroup(group);
   }
   EXPECT_EQ(batcher.GetDrawnLineColors().size(), line_count);
   EXPECT_EQ(batcher.GetDrawnTriangleColors().size(), triangle_count);
@@ -171,8 +180,8 @@ TEST(OpenGlBatcher, PickingSimpleElements) {
   batcher.AddBoxHelper(MakeBox(Vec2(0, 0), Vec2(1, 1)), 0, Color(255, 0, 0, 255),
                        std::move(box_user_data));
 
-  for (auto layer : batcher.GetLayers()) {
-    batcher.DrawLayer(layer, true);
+  for (const auto& group : batcher.GetNonEmptyRenderGroups()) {
+    batcher.DrawRenderGroup(group, true);
   }
 
   ExpectCustomDataEq(batcher, batcher.GetDrawnLineColors()[0], line_custom_data);
@@ -202,8 +211,8 @@ TEST(OpenGlBatcher, MultipleDrawCalls) {
   batcher.AddBoxHelper(MakeBox(Vec2(0, 0), Vec2(1, 1)), 0, Color(255, 0, 0, 255),
                        std::move(box_user_data));
 
-  for (auto layer : batcher.GetLayers()) {
-    batcher.DrawLayer(layer, true);
+  for (const auto& group : batcher.GetNonEmptyRenderGroups()) {
+    batcher.DrawRenderGroup(group, true);
   }
 
   auto line_color = batcher.GetDrawnLineColors()[0];
@@ -227,7 +236,7 @@ struct Line3D {
   Vec3 end_point;
 };
 
-void LineEq(const Line3D lhs, const Line& rhs) {
+void LineEq(const Line3D& lhs, const Line& rhs) {
   EXPECT_EQ(lhs.start_point[0], rhs.start_point[0]);
   EXPECT_EQ(lhs.start_point[1], rhs.start_point[1]);
 
@@ -245,8 +254,8 @@ TEST(OpenGlBatcher, TranslationsAreAutomaticallyAdded) {
   const Line3D transformed_expectation{original_expectation.start_point + transform,
                                        original_expectation.end_point + transform};
 
-  const auto first_from_layer = [& batcher = std::as_const(batcher)](float z) {
-    return *batcher.GetInternalBuffers(z).line_buffer.lines_.begin();
+  const auto first_from_layer = [&batcher = std::as_const(batcher)](float z) {
+    return *batcher.GetInternalBuffers(BatchRenderGroupId(z)).line_buffer.lines_.begin();
   };
 
   const auto add_line_assert_eq = [&batcher, &first_from_layer](const Line3D& expectation) {
@@ -269,6 +278,55 @@ TEST(OpenGlBatcher, TranslationsAreAutomaticallyAdded) {
   batcher.PopTranslation();
   add_line_assert_eq(original_expectation);
   ASSERT_DEATH(batcher.PopTranslation(), "Check failed");
+}
+
+TEST(OpenGlBatcher, StatisticsAreReportedCorrectly) {
+  FakeOpenGlBatcher batcher(BatcherId::kUi);
+
+  const size_t kExpectedBoxBlockSize =
+      orbit_gl_internal::BoxBuffer::NUM_BOXES_PER_BLOCK * (sizeof(Quad) + 8 * sizeof(Color));
+  const size_t kExpectedLineBlockSize =
+      orbit_gl_internal::LineBuffer::NUM_LINES_PER_BLOCK * (sizeof(Line) + 4 * sizeof(Color));
+  const size_t kExpectedTriangleBlockSize =
+      orbit_gl_internal::TriangleBuffer::NUM_TRIANGLES_PER_BLOCK *
+      (sizeof(Triangle) + 6 * sizeof(Color));
+
+  Batcher::Statistics expected_statistics;
+  EXPECT_EQ(expected_statistics, batcher.GetStatistics());
+  batcher.AddBoxHelper(MakeBox(Vec2(0, 0), Vec2(1, 1)), 0, Color(255, 0, 0, 255));
+
+  // This should have added a block in the box blockchain for the box geometry, picking color, and
+  // regular color However, the block chain directly allocates the first block for all types of
+  // geometry, so we also expect the lines and triangle blocks to exist.
+  expected_statistics.reserved_memory = kExpectedBoxBlockSize;
+  expected_statistics.draw_calls = 1;
+  expected_statistics.stored_layers = 1;
+  expected_statistics.stored_vertices = 4;
+  EXPECT_EQ(expected_statistics, batcher.GetStatistics());
+
+  batcher.AddLineHelper(Vec2(0, 0), Vec2(1, 0), 0, Color(255, 255, 255, 255));
+  batcher.AddTriangleHelper(Triangle(Vec2(0, 0), Vec2(0, 1), Vec2(1, 0)), 0, Color(0, 255, 0, 255));
+
+  // Adding a line and a triangle should only use the already existing blocks
+  expected_statistics.reserved_memory += kExpectedLineBlockSize + kExpectedTriangleBlockSize;
+  expected_statistics.draw_calls += 2;
+  expected_statistics.stored_vertices += 2 + 3;
+  EXPECT_EQ(expected_statistics, batcher.GetStatistics());
+
+  // Adding more boxes should eventually require a second block
+  for (int i = 0; i < orbit_gl_internal::BoxBuffer::NUM_BOXES_PER_BLOCK; ++i) {
+    batcher.AddBoxHelper(MakeBox(Vec2(0, 0), Vec2(1, 1)), 0, Color(255, 0, 0, 255));
+  }
+  expected_statistics.draw_calls += 1;
+  expected_statistics.stored_vertices += orbit_gl_internal::BoxBuffer::NUM_BOXES_PER_BLOCK * 4;
+  expected_statistics.reserved_memory += kExpectedBoxBlockSize;
+  EXPECT_EQ(expected_statistics, batcher.GetStatistics());
+
+  // Reset does actually not clear the memory, but no vertices are counted
+  batcher.ResetElements();
+  expected_statistics.draw_calls = 0;
+  expected_statistics.stored_vertices = 0;
+  EXPECT_EQ(expected_statistics, batcher.GetStatistics());
 }
 
 }  // namespace orbit_gl

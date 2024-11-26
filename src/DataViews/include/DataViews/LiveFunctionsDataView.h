@@ -6,16 +6,26 @@
 #define DATA_VIEWS_LIVE_FUNCTIONS_DATA_VIEW_H_
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
+#include <absl/types/span.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
+#include "ClientData/CaptureData.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ScopeId.h"
+#include "ClientData/ScopeInfo.h"
+#include "ClientData/ScopeStatsCollection.h"
 #include "DataViews/AppInterface.h"
 #include "DataViews/CompareAscendingOrDescending.h"
 #include "DataViews/DataView.h"
@@ -23,6 +33,7 @@
 #include "GrpcProtos/capture.pb.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
+#include "OrbitBase/Typedef.h"
 
 namespace orbit_data_views {
 
@@ -38,24 +49,27 @@ class LiveFunctionsDataView : public DataView {
   // As we allow single selection on Live tab, this method returns either an empty vector or a
   // single-value vector.
   std::vector<int> GetVisibleSelectedIndices() override;
-  void UpdateHighlightedFunctionId(const std::vector<int>& rows);
+  void UpdateHighlightedFunctionId(absl::Span<const int> rows);
   void UpdateSelectedFunctionId();
 
-  void OnSelect(const std::vector<int>& rows) override;
+  void OnSelect(absl::Span<const int> rows) override;
   void OnDataChanged() override;
   void OnTimer() override;
-  void OnRefresh(const std::vector<int>& visible_selected_indices,
-                 const RefreshMode& mode) override;
+  void OnRefresh(absl::Span<const int> visible_selected_indices, const RefreshMode& mode) override;
   [[nodiscard]] bool ResetOnRefresh() const override { return false; }
   std::optional<int> GetRowFromScopeId(ScopeId scope_id);
 
-  void OnIteratorRequested(const std::vector<int>& selection) override;
-  void OnJumpToRequested(const std::string& action, const std::vector<int>& selection) override;
+  void OnIteratorRequested(absl::Span<const int> selection) override;
+  void OnJumpToRequested(std::string_view action, absl::Span<const int> selection) override;
   // Export all events (including the function name, thread name and id, start timestamp, end
   // timestamp, and duration) associated with the selected rows in to a CSV file.
-  void OnExportEventsToCsvRequested(const std::vector<int>& selection) override;
+  void OnExportEventsToCsvRequested(absl::Span<const int> selection) override;
 
-  void UpdateHistogramWithScopeIds(const std::vector<ScopeId>& scope_ids);
+  void UpdateHistogramWithScopeIds(absl::Span<const ScopeId> scope_ids);
+
+  void SetScopeStatsCollection(
+      std::shared_ptr<const orbit_client_data::ScopeStatsCollectionInterface>
+          scope_stats_collection);
 
   std::string GetToolTip(int /*row*/, int column) override;
 
@@ -68,13 +82,10 @@ class LiveFunctionsDataView : public DataView {
 
  protected:
   [[nodiscard]] ActionStatus GetActionStatus(std::string_view action, int clicked_index,
-                                             const std::vector<int>& selected_indices) override;
+                                             absl::Span<const int> selected_indices) override;
   void DoFilter() override;
   void DoSort() override;
   [[nodiscard]] ScopeId GetScopeId(uint32_t row) const;
-  [[nodiscard]] std::optional<orbit_client_data::FunctionInfo>
-  CreateFunctionInfoFromInstrumentedFunction(
-      const orbit_grpc_protos::InstrumentedFunction& instrumented_function);
 
   // Maps scope_ids corresponding to dynamically instrumented functions to FunctionInfo instances
   absl::flat_hash_map<ScopeId, orbit_client_data::FunctionInfo> scope_id_to_function_info_{};
@@ -103,10 +114,10 @@ class LiveFunctionsDataView : public DataView {
   // pointer to the corresponding FunctionInfo is returned. `nullptr` is returned otherwise.
   [[nodiscard]] const orbit_client_data::FunctionInfo* GetFunctionInfoFromRow(int row) override;
 
-  [[nodiscard]] ErrorMessageOr<void> WriteEventsToCsv(const std::vector<int>& selection,
-                                                      const std::string& file_path) const;
+  [[nodiscard]] ErrorMessageOr<void> WriteEventsToCsv(absl::Span<const int> selection,
+                                                      std::string_view file_path) const;
 
-  void UpdateHistogramWithIndices(const std::vector<int>& visible_selected_indices);
+  void UpdateHistogramWithIndices(absl::Span<const int> visible_selected_indices);
 
   template <typename ValueGetterType>
   [[nodiscard]] std::function<bool(ScopeId, ScopeId)> MakeSorter(ValueGetterType getter,
@@ -123,7 +134,7 @@ class LiveFunctionsDataView : public DataView {
                                                                          ValueType default_value) {
     return MakeSorter(
         [this, getter, default_value](ScopeId id) {
-          auto info = app_->GetCaptureData().GetFunctionInfoByScopeId(id);
+          const auto* info = app_->GetCaptureData().GetFunctionInfoByScopeId(id);
           return info == nullptr ? default_value : getter(*info);
         },
         ascending);
@@ -139,6 +150,9 @@ class LiveFunctionsDataView : public DataView {
   [[nodiscard]] std::vector<ScopeId> FetchMissingScopeIds() const;
 
   [[nodiscard]] const orbit_client_data::ScopeInfo& GetScopeInfo(ScopeId scope_id) const;
+
+  std::shared_ptr<const orbit_client_data::ScopeStatsCollectionInterface> scope_stats_collection_ =
+      std::make_shared<orbit_client_data::ScopeStatsCollection>();
 };
 
 }  // namespace orbit_data_views

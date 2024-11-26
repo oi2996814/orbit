@@ -2,34 +2,41 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ThreadTrack.h"
+#include "OrbitGl/ThreadTrack.h"
 
+#include <GteVector.h>
 #include <absl/strings/str_format.h>
-#include <absl/synchronization/mutex.h>
-#include <absl/time/time.h>
 
 #include <algorithm>
-#include <atomic>
-#include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <string_view>
+#include <utility>
 
 #include "ApiInterface/Orbit.h"
-#include "App.h"
 #include "ClientData/CaptureData.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
 #include "ClientData/ScopeId.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "GlUtils.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadConstants.h"
-#include "PrimitiveAssembler.h"
-#include "TextRenderer.h"
-#include "ThreadColor.h"
-#include "TimeGraphLayout.h"
-#include "TimerTrack.h"
-#include "Viewport.h"
+#include "OrbitBase/Typedef.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/TextRenderer.h"
+#include "OrbitGl/ThreadColor.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/TimerTrack.h"
+#include "OrbitGl/Track.h"
+#include "OrbitGl/TrackHeader.h"
+#include "OrbitGl/Viewport.h"
 
 using orbit_client_data::FunctionInfo;
 using orbit_client_data::ScopeId;
@@ -65,7 +72,8 @@ std::string ThreadTrack::GetName() const {
   auto thread_id = GetThreadId();
   if (thread_id == orbit_base::kAllThreadsOfAllProcessesTid) {
     return "All tracepoint events";
-  } else if (thread_id == orbit_base::kAllProcessThreadsTid) {
+  }
+  if (thread_id == orbit_base::kAllProcessThreadsTid) {
     return "All Threads";
   }
   return capture_data_->GetThreadName(thread_id);
@@ -77,7 +85,8 @@ std::string ThreadTrack::GetLabel() const {
   auto name = GetName();
   if (thread_id == orbit_base::kAllThreadsOfAllProcessesTid) {
     return name;
-  } else if (thread_id == orbit_base::kAllProcessThreadsTid) {
+  }
+  if (thread_id == orbit_base::kAllProcessThreadsTid) {
     std::string process_name = capture_data_->process_name();
     return process_name.append(kAllThreads);
   }
@@ -89,7 +98,8 @@ int ThreadTrack::GetNumberOfPrioritizedTrailingCharacters() const {
   auto thread_id = GetThreadId();
   if (GetThreadId() == orbit_base::kAllThreadsOfAllProcessesTid) {
     return 0;
-  } else if (GetThreadId() == orbit_base::kAllProcessThreadsTid) {
+  }
+  if (GetThreadId() == orbit_base::kAllProcessThreadsTid) {
     // Example: proc... all_threads)
     return kAllThreads.size() - 1;
   }
@@ -171,8 +181,7 @@ std::string ThreadTrack::GetBoxTooltip(const PrimitiveAssembler& primitive_assem
 
 bool ThreadTrack::IsTimerActive(const TimerInfo& timer_info) const {
   if (!app_->HasCaptureData()) return TimerTrack::IsTimerActive(timer_info);
-  const std::optional<ScopeId> scope_id = app_->GetCaptureData().ProvideScopeId(timer_info);
-  return scope_id.has_value() ? app_->IsScopeVisible(scope_id.value()) : false;
+  return app_->IsTimerActive(timer_info);
 }
 
 bool ThreadTrack::IsTrackSelected() const {
@@ -207,8 +216,7 @@ float ThreadTrack::GetDefaultBoxHeight() const {
 }
 
 Color ThreadTrack::GetTimerColor(const TimerInfo& timer_info, const internal::DrawData& draw_data) {
-  const std::optional<ScopeId> scope_id =
-      app_->HasCaptureData() ? app_->GetCaptureData().ProvideScopeId(timer_info) : std::nullopt;
+  const std::optional<ScopeId> scope_id = app_->ProvideScopeId(timer_info);
   const uint64_t group_id = timer_info.group_id();
   const bool is_selected = &timer_info == draw_data.selected_timer;
   const bool is_scope_id_highlighted =
@@ -221,16 +229,16 @@ Color ThreadTrack::GetTimerColor(const TimerInfo& timer_info, const internal::Dr
 
 Color ThreadTrack::GetTimerColor(const TimerInfo& timer_info, bool is_selected, bool is_highlighted,
                                  const internal::DrawData& /*draw_data*/) const {
-  const Color kInactiveColor(100, 100, 100, 255);
-  const Color kSelectionColor(0, 128, 255, 255);
+  const Color inactive_color(100, 100, 100, 255);
+  const Color selection_color(0, 128, 255, 255);
+  if (!IsTimerActive(timer_info)) {
+    return inactive_color;
+  }
   if (is_highlighted) {
     return TimerTrack::kHighlightColor;
   }
   if (is_selected) {
-    return kSelectionColor;
-  }
-  if (!IsTimerActive(timer_info)) {
-    return kInactiveColor;
+    return selection_color;
   }
 
   std::optional<Color> user_color = GetUserColor(timer_info);
@@ -263,9 +271,9 @@ void ThreadTrack::UpdatePositionOfSubtracks() {
   const float event_track_height = layout_->GetEventTrackHeightFromTid(GetThreadId());
   const float space_between_subtracks = layout_->GetSpaceBetweenThreadPanes();
 
-  const Vec2 pos = GetPos();
-  float current_y =
-      header_->GetPos()[1] + header_->GetHeight() + layout_->GetTrackContentTopMargin();
+  Vec2 pos = GetPos();
+  pos[0] += header_->GetWidth();
+  float current_y = GetPos()[1] + layout_->GetTrackContentTopMargin();
 
   thread_state_bar_->SetPos(pos[0], current_y);
   if (thread_state_bar_->ShouldBeRendered()) {
@@ -322,9 +330,10 @@ float ThreadTrack::GetHeight() const {
   bool gap_between_tracks_and_timers =
       (!thread_state_bar_->IsEmpty() || !event_bar_->IsEmpty() || !tracepoint_bar_->IsEmpty()) &&
       (depth > 0);
-  return GetHeightAboveTimers() +
-         (gap_between_tracks_and_timers ? layout_->GetSpaceBetweenThreadPanes() : 0) +
-         layout_->GetTextBoxHeight() * depth + layout_->GetTrackContentBottomMargin();
+  float height = GetHeightAboveTimers() +
+                 (gap_between_tracks_and_timers ? layout_->GetSpaceBetweenThreadPanes() : 0) +
+                 layout_->GetTextBoxHeight() * depth + layout_->GetTrackContentBottomMargin();
+  return std::max(height, layout_->GetThreadTrackMinimumHeight());
 }
 
 float ThreadTrack::GetHeightAboveTimers() const {
@@ -333,7 +342,7 @@ float ThreadTrack::GetHeightAboveTimers() const {
   const float tracepoint_track_height = layout_->GetEventTrackHeightFromTid(GetThreadId());
   const float space_between_subtracks = layout_->GetSpaceBetweenThreadPanes();
 
-  float header_height = header_->GetHeight() + layout_->GetTrackContentTopMargin();
+  float header_height = layout_->GetTrackContentTopMargin();
   int track_count = 0;
   if (!thread_state_bar_->IsEmpty()) {
     header_height += thread_state_track_height;
@@ -367,20 +376,6 @@ void ThreadTrack::OnTimer(const TimerInfo& timer_info) {
   thread_track_data_provider_->AddTimer(timer_info);
 }
 
-[[nodiscard]] static std::pair<float, float> GetBoxPosXAndWidth(
-    const internal::DrawData& draw_data, const orbit_gl::TimelineInfoInterface* timeline_info,
-    const TimerInfo& timer_info) {
-  double start_us = timeline_info->GetUsFromTick(timer_info.start());
-  double end_us = timeline_info->GetUsFromTick(timer_info.end());
-  double elapsed_us = end_us - start_us;
-  double normalized_start = start_us * draw_data.inv_time_window;
-  double normalized_length = elapsed_us * draw_data.inv_time_window;
-  float world_timer_width = static_cast<float>(normalized_length * draw_data.track_width);
-  float world_timer_x =
-      static_cast<float>(draw_data.track_start_x + normalized_start * draw_data.track_width);
-  return {world_timer_x, world_timer_width};
-}
-
 // We minimize overdraw when drawing lines for small events by discarding events that would just
 // draw over an already drawn pixel line. When zoomed in enough that all events are drawn as boxes,
 // this has no effect. When zoomed  out, many events will be discarded quickly.
@@ -395,8 +390,9 @@ void ThreadTrack::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
   visible_timer_count_ = 0;
 
   const internal::DrawData draw_data =
-      GetDrawData(min_tick, max_tick, GetPos()[0], GetWidth(), &primitive_assembler, timeline_info_,
-                  viewport_, IsCollapsed(), app_->selected_timer(), app_->GetScopeIdToHighlight(),
+      GetDrawData(min_tick, max_tick, GetPos()[0] + header_->GetWidth(),
+                  GetWidth() - header_->GetWidth(), &primitive_assembler, timeline_info_, viewport_,
+                  IsCollapsed(), app_->selected_timer(), app_->GetScopeIdToHighlight(),
                   app_->GetGroupIdToHighlight(), app_->GetHistogramSelectionRange());
 
   uint64_t resolution_in_pixels = draw_data.viewport->WorldToScreen({draw_data.track_width, 0})[0];
@@ -412,24 +408,19 @@ void ThreadTrack::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
           CreatePickingUserData(primitive_assembler, *timer_info);
 
       auto box_height = GetDefaultBoxHeight();
-      const auto [pos_x, size_x] = GetBoxPosXAndWidth(draw_data, timeline_info_, *timer_info);
+      const auto [pos_x, size_x] =
+          timeline_info_->GetBoxPosXAndWidthFromTicks(timer_info->start(), timer_info->end());
       const Vec2 pos = {pos_x, world_timer_y};
       const Vec2 size = {size_x, box_height};
 
-      auto timer_duration = timer_info->end() - timer_info->start();
-      if (timer_duration > draw_data.ns_per_pixel) {
-        if (!IsCollapsed() && BoxHasRoomForText(text_renderer, size[0])) {
-          DrawTimesliceText(text_renderer, *timer_info, draw_data.track_start_x, pos, size);
-        }
-        primitive_assembler.AddShadedBox(pos, size, draw_data.z, color, std::move(user_data));
-        if (ShouldHaveBorder(timer_info, draw_data.histogram_selection_range, size[0])) {
-          primitive_assembler.AddQuadBorder(
-              MakeBox(pos, size), GlCanvas::kZValueBoxBorder, TimerTrack::kBoxBorderColor,
-              CreatePickingUserData(primitive_assembler, *timer_info));
-        }
-      } else {
-        primitive_assembler.AddVerticalLine(pos, box_height, draw_data.z, color,
-                                            std::move(user_data));
+      if (!IsCollapsed() && BoxHasRoomForText(text_renderer, size[0])) {
+        DrawTimesliceText(text_renderer, *timer_info, draw_data.track_start_x, pos, size);
+      }
+      primitive_assembler.AddShadedBox(pos, size, draw_data.z, color, std::move(user_data));
+      if (ShouldHaveBorder(timer_info, draw_data.histogram_selection_range, size[0])) {
+        primitive_assembler.AddQuadBorder(MakeBox(pos, size), GlCanvas::kZValueBoxBorder,
+                                          TimerTrack::kBoxBorderColor,
+                                          CreatePickingUserData(primitive_assembler, *timer_info));
       }
     }
   }

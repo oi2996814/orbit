@@ -2,18 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/hash/hash.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
-#include <stdint.h>
 
-#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "CaptureClient/CaptureEventProcessor.h"
-#include "CaptureClient/CaptureListener.h"
 #include "ClientData/CallstackEvent.h"
+#include "ClientData/CallstackInfo.h"
+#include "ClientData/CallstackType.h"
+#include "ClientData/CgroupAndProcessMemoryInfo.h"
+#include "ClientData/LinuxAddressInfo.h"
+#include "ClientData/PageFaultsInfo.h"
+#include "ClientData/SystemMemoryInfo.h"
+#include "ClientData/ThreadStateSliceInfo.h"
+#include "ClientData/TracepointEventInfo.h"
+#include "ClientData/TracepointInfo.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "GrpcProtos/capture.pb.h"
 #include "GrpcProtos/tracepoint.pb.h"
@@ -23,7 +35,10 @@ namespace orbit_capture_client {
 
 using orbit_client_data::CallstackEvent;
 using orbit_client_data::CallstackInfo;
+using orbit_client_data::CgroupAndProcessMemoryInfo;
 using orbit_client_data::LinuxAddressInfo;
+using orbit_client_data::PageFaultsInfo;
+using orbit_client_data::SystemMemoryInfo;
 using orbit_client_data::ThreadStateSliceInfo;
 using orbit_client_data::TracepointEventInfo;
 
@@ -64,7 +79,9 @@ using orbit_grpc_protos::WarningEvent;
 using orbit_grpc_protos::WarningInstrumentingWithUserSpaceInstrumentationEvent;
 
 using ::testing::_;
+using ::testing::AllOf;
 using ::testing::DoAll;
+using ::testing::Field;
 using ::testing::Return;
 using ::testing::SaveArg;
 
@@ -486,9 +503,9 @@ TEST(CaptureEventProcessor, CanHandleGpuJobs) {
   ClientCaptureEvent event;
   GpuJob* gpu_job = CreateGpuJob(&event, kTimelineKey, 10, 20, 30, 40);
 
-  uint64_t actual_sw_queue_key;
-  uint64_t actual_hw_queue_key;
-  uint64_t actual_hw_execution_key;
+  uint64_t actual_sw_queue_key{};
+  uint64_t actual_hw_queue_key{};
+  uint64_t actual_hw_execution_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, "sw queue"))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_sw_queue_key));
@@ -571,89 +588,54 @@ TEST(CaptureEventProcessor, CanHandleMemoryUsageEvent) {
   // `MemoryUsageEvent`.
   memory_usage_event->set_timestamp_ns(110);
 
-  uint64_t actual_cgroup_name_key;
+  uint64_t actual_cgroup_name_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, cgroup_memory_usage->cgroup_name()))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_cgroup_name_key));
 
-  TimerInfo system_timer;
-  TimerInfo cgroup_and_process_timer;
-  TimerInfo page_faults_timer;
-  EXPECT_CALL(listener, OnTimer)
-      .Times(3)
-      .WillOnce(SaveArg<0>(&system_timer))
-      .WillOnce(SaveArg<0>(&cgroup_and_process_timer))
-      .WillOnce(SaveArg<0>(&page_faults_timer));
+  SystemMemoryInfo system_memory_info{};
+  EXPECT_CALL(listener, OnSystemMemoryInfo).Times(1).WillOnce(SaveArg<0>(&system_memory_info));
+
+  CgroupAndProcessMemoryInfo cgroup_and_process_memory_info{};
+  EXPECT_CALL(listener, OnCgroupAndProcessMemoryInfo)
+      .Times(1)
+      .WillOnce(SaveArg<0>(&cgroup_and_process_memory_info));
+
+  PageFaultsInfo page_faults_info{};
+  EXPECT_CALL(listener, OnPageFaultsInfo).Times(1).WillOnce(SaveArg<0>(&page_faults_info));
 
   event_processor->ProcessEvent(event);
 
-  EXPECT_EQ(system_timer.start(), memory_usage_event->timestamp_ns());
-  EXPECT_EQ(system_timer.end(), memory_usage_event->timestamp_ns());
-  EXPECT_EQ(system_timer.type(), TimerInfo::kSystemMemoryUsage);
-  EXPECT_EQ(system_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kTotalKb)),
-            system_memory_usage->total_kb());
-  EXPECT_EQ(system_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kFreeKb)),
-            system_memory_usage->free_kb());
-  EXPECT_EQ(system_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kAvailableKb)),
-            system_memory_usage->available_kb());
-  EXPECT_EQ(system_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kBuffersKb)),
-            system_memory_usage->buffers_kb());
-  EXPECT_EQ(system_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kCachedKb)),
-            system_memory_usage->cached_kb());
+  EXPECT_THAT(system_memory_info,
+              AllOf(Field(&SystemMemoryInfo::timestamp_ns, memory_usage_event->timestamp_ns()),
+                    Field(&SystemMemoryInfo::total_kb, system_memory_usage->total_kb()),
+                    Field(&SystemMemoryInfo::free_kb, system_memory_usage->free_kb()),
+                    Field(&SystemMemoryInfo::available_kb, system_memory_usage->available_kb()),
+                    Field(&SystemMemoryInfo::buffers_kb, system_memory_usage->buffers_kb()),
+                    Field(&SystemMemoryInfo::cached_kb, system_memory_usage->cached_kb())));
 
-  EXPECT_EQ(cgroup_and_process_timer.start(), memory_usage_event->timestamp_ns());
-  EXPECT_EQ(cgroup_and_process_timer.end(), memory_usage_event->timestamp_ns());
-  EXPECT_EQ(cgroup_and_process_timer.type(), TimerInfo::kCGroupAndProcessMemoryUsage);
-  EXPECT_EQ(cgroup_and_process_timer.process_id(), process_memory_usage->pid());
-  EXPECT_EQ(cgroup_and_process_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::CGroupAndProcessMemoryUsageEncodingIndex::kCGroupNameHash)),
-            actual_cgroup_name_key);
-  EXPECT_EQ(
-      cgroup_and_process_timer.registers(static_cast<size_t>(
-          CaptureEventProcessor::CGroupAndProcessMemoryUsageEncodingIndex::kCGroupLimitBytes)),
-      cgroup_memory_usage->limit_bytes());
-  EXPECT_EQ(cgroup_and_process_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::CGroupAndProcessMemoryUsageEncodingIndex::kCGroupRssBytes)),
-            cgroup_memory_usage->rss_bytes());
-  EXPECT_EQ(
-      cgroup_and_process_timer.registers(static_cast<size_t>(
-          CaptureEventProcessor::CGroupAndProcessMemoryUsageEncodingIndex::kCGroupMappedFileBytes)),
-      cgroup_memory_usage->mapped_file_bytes());
-  EXPECT_EQ(
-      cgroup_and_process_timer.registers(static_cast<size_t>(
-          CaptureEventProcessor::CGroupAndProcessMemoryUsageEncodingIndex::kProcessRssAnonKb)),
-      process_memory_usage->rss_anon_kb());
+  EXPECT_THAT(
+      cgroup_and_process_memory_info,
+      AllOf(Field(&CgroupAndProcessMemoryInfo::timestamp_ns, memory_usage_event->timestamp_ns()),
+            Field(&CgroupAndProcessMemoryInfo::cgroup_name_hash, actual_cgroup_name_key),
+            Field(&CgroupAndProcessMemoryInfo::cgroup_limit_bytes,
+                  cgroup_memory_usage->limit_bytes()),
+            Field(&CgroupAndProcessMemoryInfo::cgroup_rss_bytes, cgroup_memory_usage->rss_bytes()),
+            Field(&CgroupAndProcessMemoryInfo::cgroup_mapped_file_bytes,
+                  cgroup_memory_usage->mapped_file_bytes()),
+            Field(&CgroupAndProcessMemoryInfo::process_rss_anon_kb,
+                  process_memory_usage->rss_anon_kb())));
 
-  EXPECT_EQ(page_faults_timer.start(), memory_usage_event->timestamp_ns());
-  EXPECT_EQ(page_faults_timer.end(), memory_usage_event->timestamp_ns());
-  EXPECT_EQ(page_faults_timer.type(), TimerInfo::kPageFaults);
-  EXPECT_EQ(page_faults_timer.process_id(), process_memory_usage->pid());
-  EXPECT_EQ(page_faults_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::PageFaultsEncodingIndex::kCGroupNameHash)),
-            actual_cgroup_name_key);
-  EXPECT_EQ(page_faults_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::PageFaultsEncodingIndex::kSystemMajorPageFaults)),
-            system_memory_usage->pgmajfault());
-  EXPECT_EQ(page_faults_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::PageFaultsEncodingIndex::kSystemPageFaults)),
-            system_memory_usage->pgfault());
-  EXPECT_EQ(page_faults_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::PageFaultsEncodingIndex::kCGroupMajorPageFaults)),
-            cgroup_memory_usage->pgmajfault());
-  EXPECT_EQ(page_faults_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::PageFaultsEncodingIndex::kCGroupPageFaults)),
-            cgroup_memory_usage->pgfault());
-  EXPECT_EQ(page_faults_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::PageFaultsEncodingIndex::kProcessMajorPageFaults)),
-            process_memory_usage->majflt());
-  EXPECT_EQ(page_faults_timer.registers(static_cast<size_t>(
-                CaptureEventProcessor::PageFaultsEncodingIndex::kProcessMinorPageFaults)),
-            process_memory_usage->minflt());
+  EXPECT_THAT(
+      page_faults_info,
+      AllOf(Field(&PageFaultsInfo::timestamp_ns, memory_usage_event->timestamp_ns()),
+            Field(&PageFaultsInfo::system_page_faults, system_memory_usage->pgfault()),
+            Field(&PageFaultsInfo::system_major_page_faults, system_memory_usage->pgmajfault()),
+            Field(&PageFaultsInfo::cgroup_name_hash, actual_cgroup_name_key),
+            Field(&PageFaultsInfo::cgroup_page_faults, cgroup_memory_usage->pgfault()),
+            Field(&PageFaultsInfo::cgroup_major_page_faults, cgroup_memory_usage->pgmajfault()),
+            Field(&PageFaultsInfo::process_minor_page_faults, process_memory_usage->minflt()),
+            Field(&PageFaultsInfo::process_major_page_faults, process_memory_usage->majflt())));
 }
 
 GpuQueueSubmissionMetaInfo* CreateGpuQueueSubmissionMetaInfo(GpuQueueSubmission* submission,
@@ -769,12 +751,12 @@ TEST(CaptureEventProcessor, CanHandleGpuSubmissionAfterGpuJob) {
   testing::Mock::VerifyAndClearExpectations(&listener);
 
   EXPECT_CALL(listener, OnKeyAndString(_, "timeline")).Times(0);
-  uint64_t actual_marker_key;
+  uint64_t actual_marker_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, "marker"))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_marker_key));
 
-  uint64_t actual_command_buffer_key;
+  uint64_t actual_command_buffer_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, "command buffer"))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_command_buffer_key));
@@ -838,7 +820,7 @@ TEST(CaptureEventProcessor, CanHandleGpuSubmissionReceivedBeforeGpuJob) {
 
   EXPECT_CALL(listener, OnKeyAndString(_, "timeline")).Times(0);
 
-  uint64_t actual_command_buffer_key;
+  uint64_t actual_command_buffer_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, "command buffer"))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_command_buffer_key));
@@ -916,7 +898,7 @@ TEST(CaptureEventProcessor, CanHandleGpuDebugMarkersSpreadAcrossSubmissions) {
 
   testing::Mock::VerifyAndClearExpectations(&listener);
 
-  uint64_t actual_command_buffer_key;
+  uint64_t actual_command_buffer_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, "command buffer"))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_command_buffer_key));
@@ -1001,7 +983,7 @@ TEST(CaptureEventProcessor, CanHandleGpuDebugMarkersWithNoBeginRecorded) {
       .WillOnce(SaveArg<0>(&command_buffer_timer_3))
       .WillOnce(SaveArg<0>(&debug_marker_timer));
 
-  uint64_t actual_command_buffer_key;
+  uint64_t actual_command_buffer_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, "command buffer"))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_command_buffer_key));
@@ -1066,7 +1048,7 @@ TEST(CaptureEventProcessor, CanHandleGpuDebugMarkersWithNoBeginJobRecorded) {
 
   event_processor->ProcessEvent(queue_submission_event_1);
 
-  uint64_t actual_command_buffer_key;
+  uint64_t actual_command_buffer_key{};
   EXPECT_CALL(listener, OnKeyAndString(_, "command buffer"))
       .Times(1)
       .WillOnce(SaveArg<0>(&actual_command_buffer_key));

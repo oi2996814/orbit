@@ -6,10 +6,14 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
+#include <ratio>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "OrbitBase/Typedef.h"
@@ -35,7 +39,7 @@ struct C {
 
 struct D {
   int value{};
-  explicit D(A&& a) : value(std::move(a.value)) {}
+  explicit D(A&& a) : value(a.value) {}
   D(const A& a) = delete;
 };
 
@@ -57,7 +61,7 @@ TEST(TypedefTest, DefaultConstructorInitializesPrimitives) {
 }
 
 TEST(TypedefTest, CanInstantiate) {
-  const int kConstInt = 1;
+  constexpr int kConstInt = 1;
   MyType<int> wrapper_of_const(kConstInt);
   EXPECT_EQ(*wrapper_of_const, kConstInt);
 
@@ -98,7 +102,7 @@ TEST(TypedefTest, CanInstantiate) {
 }
 
 TEST(TypedefTest, ImplicitConversionIsCorrect) {
-  const int kValue = 1;
+  constexpr int kValue = 1;
 
   {
     const MyType<B> wrapped_b(B{{kValue}});
@@ -146,7 +150,7 @@ TEST(TypedefTest, ImplicitConversionIsCorrect) {
       value_called_on = a->value;
     };
 
-    take_rvalue_ref(std::move(wrapped_b));
+    take_rvalue_ref(wrapped_b);
     EXPECT_TRUE(is_called);
     EXPECT_EQ(value_called_on, kValue);
   }
@@ -165,8 +169,8 @@ TEST(TypedefTest, ImplicitConversionIsCorrect) {
 }
 
 TEST(TypedefTest, AssignmentIsCorrect) {
-  const int kValue = 1;
-  const int kValueOther = 2;
+  constexpr int kValue = 1;
+  constexpr int kValueOther = 2;
   {
     MyType<A> wrapped_a(A{kValue});
     MyType<A> wrapped_a_other(A{kValueOther});
@@ -177,7 +181,7 @@ TEST(TypedefTest, AssignmentIsCorrect) {
   {
     MyType<A> wrapped_a(A{kValue});
     MyType<A> wrapped_a_other(A{kValueOther});
-    wrapped_a_other = std::move(wrapped_a);
+    wrapped_a_other = wrapped_a;
     EXPECT_EQ(wrapped_a_other->value, kValue);
   }
 
@@ -191,7 +195,7 @@ TEST(TypedefTest, AssignmentIsCorrect) {
   {
     MyType<B> wrapped_b(B{{kValue}});
     MyType<A> wrapped_a_other(A{kValueOther});
-    wrapped_a_other = std::move(wrapped_b);
+    wrapped_a_other = wrapped_b;
     EXPECT_EQ(wrapped_a_other->value, kValue);
   }
 
@@ -218,16 +222,16 @@ TEST(TypedefTest, AssignmentIsCorrect) {
 }
 
 TEST(TypedefTest, CallIsCorrect) {
-  const int kFirst = 1;
-  const int kSecond = 2;
-  const int kSum = kFirst + kSecond;
+  constexpr int kFirst = 1;
+  constexpr int kSecond = 2;
+  constexpr int kSum = kFirst + kSecond;
 
-  const MyType<int> kFirstWrapped(kFirst);
-  const MyType<int> kSecondWrapped(kSecond);
+  const MyType<int> first_wrapped(kFirst);
+  const MyType<int> second_wrapped(kSecond);
 
   {
     auto add = [](int i, int j) { return i + j; };
-    const MyType<int> sum_wrapped = LiftAndApply(add, kFirstWrapped, kSecondWrapped);
+    const MyType<int> sum_wrapped = LiftAndApply(add, first_wrapped, second_wrapped);
     EXPECT_EQ(*sum_wrapped, kSum);
   }
 
@@ -259,7 +263,7 @@ TEST(TypedefTest, CallIsCorrect) {
     auto add = [](const int& i, int&& j) { return i + j; };
 
     MyType<int> second(kSecond);
-    const MyType<int> sum_wrapped = LiftAndApply(add, kFirstWrapped, std::move(second));
+    const MyType<int> sum_wrapped = LiftAndApply(add, std::move(first_wrapped), std::move(second));
     EXPECT_EQ(*sum_wrapped, kSum);
   }
 
@@ -273,12 +277,12 @@ TEST(TypedefTest, CallIsCorrect) {
 
   {
     auto add = [](const int& i, const int& j) { return i + j; };
-    const MyType<int> sum_wrapped = LiftAndApply(add, kFirstWrapped, kSecondWrapped);
+    const MyType<int> sum_wrapped = LiftAndApply(add, first_wrapped, second_wrapped);
     EXPECT_EQ(*sum_wrapped, kSum);
   }
 
   {
-    const MyType<int> sum_wrapped = LiftAndApply(Sum, kFirstWrapped, kSecondWrapped);
+    const MyType<int> sum_wrapped = LiftAndApply(Sum, first_wrapped, second_wrapped);
     EXPECT_EQ(*sum_wrapped, kSum);
   }
 
@@ -289,7 +293,7 @@ TEST(TypedefTest, CallIsCorrect) {
       was_called = true;
       was_called_with = i;
     };
-    const MyType<void> void_wrapped = LiftAndApply(returns_void, kFirstWrapped);
+    const MyType<void> void_wrapped = LiftAndApply(returns_void, first_wrapped);
     std::ignore = void_wrapped;
     EXPECT_TRUE(was_called);
     EXPECT_EQ(was_called_with, kFirst);
@@ -340,9 +344,9 @@ constexpr int kAValue = 1;
 constexpr int kBValue = 2;
 
 TEST(Typedef, WrapperWithArithmeticsHasTimesScalar) {
-  constexpr WrapperWithArithmetics<int> a(kAValue);
-  constexpr WrapperWithArithmetics<int> result = Times(a, kBValue);
-  EXPECT_EQ(*result, kAValue * kBValue);
+  constexpr WrapperWithArithmetics<int> kA(kAValue);
+  constexpr WrapperWithArithmetics<int> kResult = Times(kA, kBValue);
+  EXPECT_EQ(*kResult, kAValue * kBValue);
 }
 
 TEST(Typedef, WrapperWithArithmeticsHasPlus) {
@@ -354,12 +358,12 @@ TEST(Typedef, WrapperWithArithmeticsHasPlus) {
 TEST(Typedef, WrapperWithArithmeticsHasPlusAndMinusAndPromotes) {
   constexpr int kInt = 1;
   constexpr float kFloat = 0.5;
-  constexpr WrapperWithArithmetics<int> a(kInt);
-  constexpr WrapperWithArithmetics<float> b(kFloat);
-  constexpr WrapperWithArithmetics<float> sum = Add(a, b);
-  constexpr WrapperWithArithmetics<float> diff = Sub(a, b);
-  EXPECT_EQ(*sum, kInt + kFloat);
-  EXPECT_EQ(*diff, kInt - kFloat);
+  constexpr WrapperWithArithmetics<int> kA(kInt);
+  constexpr WrapperWithArithmetics<float> kB(kFloat);
+  constexpr WrapperWithArithmetics<float> kSum = Add(kA, kB);
+  constexpr WrapperWithArithmetics<float> kDiff = Sub(kA, kB);
+  EXPECT_EQ(*kSum, kInt + kFloat);
+  EXPECT_EQ(*kDiff, kInt - kFloat);
 }
 
 TEST(Typedef, WrapperWithArithmeticsHasPlusAndConvertsArgument) {

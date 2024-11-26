@@ -2,12 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <GteVector.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 
-#include "CoreMath.h"
-#include "MockBatcher.h"
-#include "PickingManagerTest.h"
-#include "PrimitiveAssembler.h"
+#include <algorithm>
+#include <array>
+#include <memory>
+
+#include "OrbitGl/BatchRenderGroup.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/MockBatcher.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/PickingManagerTest.h"
+#include "OrbitGl/PrimitiveAssembler.h"
 
 namespace orbit_gl {
 
@@ -26,17 +36,18 @@ const Vec2 kArrowHeadSize{4, 2};
 class PrimitiveAssemblerTester : public PrimitiveAssembler {
  public:
   explicit PrimitiveAssemblerTester(PickingManager* picking_manager = nullptr)
-      : PrimitiveAssembler(&mock_batcher_, picking_manager) {}
+      : PrimitiveAssembler(&mock_batcher_, &state_manager_, picking_manager) {}
   [[nodiscard]] uint32_t GetNumLines() const { return mock_batcher_.GetNumLines(); }
   [[nodiscard]] uint32_t GetNumTriangles() const { return mock_batcher_.GetNumTriangles(); }
   [[nodiscard]] uint32_t GetNumBoxes() const { return mock_batcher_.GetNumBoxes(); }
   [[nodiscard]] uint32_t GetNumElements() const { return mock_batcher_.GetNumElements(); }
-  [[nodiscard]] bool IsEverythingInsideRectangle(Vec2 pos, Vec2 size) const {
+  [[nodiscard]] bool IsEverythingInsideRectangle(const Vec2& pos, const Vec2& size) const {
     return mock_batcher_.IsEverythingInsideRectangle(pos, size);
   }
 
  private:
   MockBatcher mock_batcher_;
+  BatchRenderGroupStateManager state_manager_;
 };
 
 }  // namespace
@@ -69,7 +80,7 @@ TEST(PrimitiveAssembler, BasicAdditions) {
   constexpr uint32_t kNumBoxes = 3;
 
   // Lines
-  float kLineSize = 5.;
+  constexpr float kLineSize = 5.;
   primitive_assembler_tester.AddLine(kTopLeft, kBottomLeft, 0, kFakeColor);
   primitive_assembler_tester.AddLine(kTopLeft, kBottomLeft, 0, kFakeColor, pickable);
   primitive_assembler_tester.AddVerticalLine(kTopLeft, kLineSize, 0, kFakeColor);
@@ -77,16 +88,16 @@ TEST(PrimitiveAssembler, BasicAdditions) {
   EXPECT_EQ(primitive_assembler_tester.GetNumLines(), kNumLines);
 
   // Triangles
-  Triangle kFakeTriangle{kTopLeft, kTopRight, kBottomRight};
-  primitive_assembler_tester.AddTriangle(kFakeTriangle, 0, kFakeColor);
-  primitive_assembler_tester.AddTriangle(kFakeTriangle, 0, kFakeColor, pickable);
+  const Triangle fake_triangle{kTopLeft, kTopRight, kBottomRight};
+  primitive_assembler_tester.AddTriangle(fake_triangle, 0, kFakeColor);
+  primitive_assembler_tester.AddTriangle(fake_triangle, 0, kFakeColor, pickable);
   EXPECT_EQ(primitive_assembler_tester.GetNumTriangles(), kNumTriangles);
 
   // Boxes
-  Quad kFakeBox{std::array<Vec2, 4>{kTopLeft, kTopRight, kBottomRight, kBottomLeft}};
-  primitive_assembler_tester.AddBox(kFakeBox, 0, {kFakeColor, kFakeColor, kFakeColor, kFakeColor});
-  primitive_assembler_tester.AddBox(kFakeBox, 0, kFakeColor);
-  primitive_assembler_tester.AddBox(kFakeBox, 0, kFakeColor, pickable);
+  const Quad fake_box{std::array<Vec2, 4>{kTopLeft, kTopRight, kBottomRight, kBottomLeft}};
+  primitive_assembler_tester.AddBox(fake_box, 0, {kFakeColor, kFakeColor, kFakeColor, kFakeColor});
+  primitive_assembler_tester.AddBox(fake_box, 0, kFakeColor);
+  primitive_assembler_tester.AddBox(fake_box, 0, kFakeColor, pickable);
   EXPECT_EQ(primitive_assembler_tester.GetNumBoxes(), kNumBoxes);
   EXPECT_EQ(primitive_assembler_tester.GetNumElements(), kNumLines + kNumTriangles + kNumBoxes);
   EXPECT_TRUE(primitive_assembler_tester.IsEverythingInsideRectangle(kTopLeft, kBoxSize));
@@ -126,9 +137,9 @@ TEST(PrimitiveAssembler, ComplexShapes) {
 
   // TODO(b/227744958) This should probably be removed and AddBox should be used instead
   // AddShadedTrapezium -> 2 Triangles
-  Vec2 kTopCentred = {(kTopLeft[0] + kTopRight[0]) / 2.f, kTopLeft[1]};
+  const Vec2 top_centred = {(kTopLeft[0] + kTopRight[0]) / 2.f, kTopLeft[1]};
   primitive_assembler_tester.AddShadedTrapezium(
-      Quad{{kTopLeft, kTopCentred, kBottomRight, kBottomLeft}}, 0, kFakeColor,
+      Quad{{kTopLeft, top_centred, kBottomRight, kBottomLeft}}, 0, kFakeColor,
       std::make_unique<PickingUserData>());
   EXPECT_EQ(primitive_assembler_tester.GetNumTriangles(), 2);
   EXPECT_EQ(primitive_assembler_tester.GetNumElements(), 2);

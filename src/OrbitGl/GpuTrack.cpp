@@ -2,20 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "GpuTrack.h"
+#include "OrbitGl/GpuTrack.h"
 
+#include <GteVector.h>
 #include <absl/strings/str_format.h>
-#include <absl/time/time.h>
 
-#include <algorithm>
 #include <memory>
 
-#include "App.h"
 #include "ClientData/CaptureData.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "OrbitBase/Logging.h"
-#include "TimeGraphLayout.h"
-#include "Viewport.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/Viewport.h"
+#include "StringManager/StringManager.h"
 
 using orbit_client_protos::TimerInfo;
 
@@ -50,9 +51,10 @@ GpuTrack::GpuTrack(CaptureViewElement* parent, const orbit_gl::TimelineInfoInter
                    OrbitApp* app, const orbit_client_data::ModuleManager* module_manager,
                    const orbit_client_data::CaptureData* capture_data,
                    orbit_client_data::TimerData* submission_timer_data,
-                   orbit_client_data::TimerData* marker_timer_data)
+                   orbit_client_data::TimerData* marker_timer_data,
+                   orbit_string_manager::StringManager* string_manager)
     : Track(parent, timeline_info, viewport, layout, module_manager, capture_data),
-      string_manager_{app->GetStringManager()},
+      string_manager_{string_manager},
       submission_track_{std::make_shared<GpuSubmissionTrack>(this, timeline_info, viewport, layout,
                                                              timeline_hash, app, module_manager,
                                                              capture_data, submission_timer_data)},
@@ -93,7 +95,7 @@ void GpuTrack::UpdatePositionOfSubtracks() {
   submission_track_->SetHeadless(false);
   submission_track_->SetIndentationLevel(indentation_level_ + 1);
 
-  float current_y = pos[1] + layout_->GetTrackTabHeight();
+  float current_y = pos[1];
   if (submission_track_->ShouldBeRendered()) {
     current_y += layout_->GetSpaceBetweenSubtracks();
   }
@@ -109,14 +111,16 @@ float GpuTrack::GetHeight() const {
   if (IsCollapsed()) {
     return submission_track_->GetHeight();
   }
-  float height = layout_->GetTrackTabHeight();
+  float height = 0;
   if (submission_track_->ShouldBeRendered()) {
-    height += submission_track_->GetHeight();
-    height += layout_->GetSpaceBetweenSubtracks();
+    float additional_height = submission_track_->GetHeight() + layout_->GetSpaceBetweenSubtracks();
+    // TODO: Track hierarchy refactor, remove hack below.
+    height += std::max(additional_height, 2.f * layout_->GetThreadTrackMinimumHeight());
   }
   if (marker_track_->ShouldBeRendered()) {
-    height += marker_track_->GetHeight();
-    height += layout_->GetSpaceBetweenSubtracks();
+    float additional_height = marker_track_->GetHeight() + layout_->GetSpaceBetweenSubtracks();
+    // TODO: Track hierarchy refactor, remove hack below.
+    height += std::max(additional_height, 2.f * layout_->GetThreadTrackMinimumHeight());
   }
   return height;
 }

@@ -2,17 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <absl/algorithm/container.h>
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <memory>
+#include <vector>
 
 #include "ClientData/CallstackData.h"
+#include "ClientData/CallstackInfo.h"
+#include "ClientData/CallstackType.h"
 #include "MizarBase/ThreadId.h"
 #include "MizarData/GetCallstackSamplingIntervals.h"
 #include "OrbitBase/Append.h"
+#include "OrbitBase/Typedef.h"
 
 namespace orbit_mizar_data {
 
@@ -37,7 +46,7 @@ const orbit_client_data::CallstackInfo kCallstackInfo({},
                                                       orbit_client_data::CallstackType::kComplete);
 
 [[nodiscard]] static std::vector<uint64_t> GetExpectedIntervals(
-    const std::vector<uint64_t>& timestamps) {
+    absl::Span<const uint64_t> timestamps) {
   std::vector<uint64_t> intervals;
   for (size_t i = 1; i < timestamps.size(); ++i) {
     intervals.push_back(timestamps[i] - timestamps[i - 1]);
@@ -51,7 +60,7 @@ class GetCallstackSamplingIntervalsTest : public ::testing::Test {
     callstack_data_->AddUniqueCallstack(kCallstackSampleId, kCallstackInfo);
   }
 
-  void PopulateCallstackData(const std::vector<uint64_t>& timestamps, TID tid) const {
+  void PopulateCallstackData(absl::Span<const uint64_t> timestamps, TID tid) const {
     for (const uint64_t timestamp : timestamps) {
       callstack_data_->AddCallstackEvent({timestamp, kCallstackSampleId, *tid});
     }
