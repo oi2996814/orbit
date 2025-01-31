@@ -2,36 +2,42 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "TrackManager.h"
+#include "OrbitGl/TrackManager.h"
 
 #include <GteVector.h>
 #include <absl/container/flat_hash_map.h>
-#include <absl/flags/declare.h>
 #include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/match.h>
-#include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 #include <algorithm>
-#include <cstdint>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <limits>
 #include <optional>
-#include <string_view>
 #include <tuple>
 #include <utility>
 
-#include "App.h"
 #include "ClientData/CallstackData.h"
 #include "ClientData/CaptureData.h"
+#include "ClientData/ThreadTrackDataProvider.h"
 #include "ClientFlags/ClientFlags.h"
 #include "OrbitBase/Append.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Sort.h"
 #include "OrbitBase/ThreadConstants.h"
-#include "TimeGraphLayout.h"
-#include "TrackContainer.h"
-#include "Viewport.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/ThreadTrack.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/TrackContainer.h"
+#include "OrbitGl/Viewport.h"
+#include "StringManager/StringManager.h"
 
 using orbit_client_data::CallstackData;
 using orbit_client_protos::TimerInfo;
@@ -41,8 +47,10 @@ namespace orbit_gl {
 TrackManager::TrackManager(TrackContainer* track_container, TimelineInfoInterface* timeline_info,
                            Viewport* viewport, TimeGraphLayout* layout, OrbitApp* app,
                            const orbit_client_data::ModuleManager* module_manager,
-                           orbit_client_data::CaptureData* capture_data)
-    : viewport_(viewport),
+                           orbit_client_data::CaptureData* capture_data,
+                           std::thread::id main_thread_id)
+    : main_thread_id_(main_thread_id),
+      viewport_(viewport),
       layout_(layout),
       module_manager_(module_manager),
       capture_data_{capture_data},
@@ -56,20 +64,22 @@ TrackManager::TrackManager(TrackContainer* track_container, TimelineInfoInterfac
 }
 
 std::vector<Track*> TrackManager::GetAllTracks() const {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::ReaderMutexLock lock(&mutex_);
+  return GetAllTracksInternal();
+}
+
+std::vector<Track*> TrackManager::GetAllTracksInternal() const {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   std::vector<Track*> tracks;
   for (const auto& track : all_tracks_) {
     tracks.push_back(track.get());
   }
 
-  for (const auto& [unused_id, track] : frame_tracks_) {
-    tracks.push_back(track.get());
-  }
   return tracks;
 }
 
 std::vector<FrameTrack*> TrackManager::GetFrameTracks() const {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::ReaderMutexLock lock(&mutex_);
   std::vector<FrameTrack*> tracks;
   for (const auto& [unused_id, track] : frame_tracks_) {
     tracks.push_back(track.get());
@@ -78,7 +88,8 @@ std::vector<FrameTrack*> TrackManager::GetFrameTracks() const {
 }
 
 void TrackManager::SortTracks() {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
+  absl::WriterMutexLock lock(&mutex_);
   // Gather all tracks regardless of the process in sorted order
   std::vector<Track*> all_processes_sorted_tracks;
 
@@ -119,7 +130,7 @@ void TrackManager::SortTracks() {
   if (absl::GetFlag(FLAGS_enable_tracepoint_feature)) {
     if (app_ != nullptr && app_->HasCaptureData()) {
       ThreadTrack* tracepoints_track =
-          GetOrCreateThreadTrack(orbit_base::kAllThreadsOfAllProcessesTid);
+          GetOrCreateThreadTrackInternal(orbit_base::kAllThreadsOfAllProcessesTid);
       if (!tracepoints_track->IsEmpty()) {
         all_processes_sorted_tracks.push_back(tracepoints_track);
       }
@@ -128,7 +139,7 @@ void TrackManager::SortTracks() {
 
   // Process track.
   if (app_ != nullptr && app_->HasCaptureData()) {
-    ThreadTrack* process_track = GetOrCreateThreadTrack(orbit_base::kAllProcessThreadsTid);
+    ThreadTrack* process_track = GetOrCreateThreadTrackInternal(orbit_base::kAllProcessThreadsTid);
     if (!process_track->IsEmpty()) {
       all_processes_sorted_tracks.push_back(process_track);
     }
@@ -173,12 +184,13 @@ void TrackManager::SortTracks() {
   visible_track_list_needs_update_ = true;
 }
 
-void TrackManager::SetFilter(const std::string& filter) {
+void TrackManager::SetFilter(std::string_view filter) {
   filter_ = absl::AsciiStrToLower(filter);
   visible_track_list_needs_update_ = true;
 }
 
 void TrackManager::UpdateVisibleTrackList() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   ORBIT_CHECK(visible_track_list_needs_update_);
 
   visible_track_list_needs_update_ = false;
@@ -213,6 +225,7 @@ void TrackManager::UpdateVisibleTrackList() {
 }
 
 void TrackManager::DeletePendingTracks() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   for (auto& track : deleted_tracks_) {
     sorted_tracks_.erase(std::remove(sorted_tracks_.begin(), sorted_tracks_.end(), track.get()),
                          sorted_tracks_.end());
@@ -221,9 +234,34 @@ void TrackManager::DeletePendingTracks() {
   deleted_tracks_.clear();
 }
 
+void TrackManager::InsertPendingFrameTracks() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
+  absl::WriterMutexLock lock(&mutex_);
+  // We are inserting the new frame tracks just after the last Frame Track with lower function_id
+  // (and also after the Scheduler one).
+  for (const auto& frame_track : pending_frame_tracks_) {
+    auto last_frame_or_scheduler_track_pos =
+        find_if(sorted_tracks_.rbegin(), sorted_tracks_.rend(), [frame_track](Track* track) {
+          return (track->GetType() == Track::Type::kFrameTrack &&
+                  frame_track->GetFunctionId() >
+                      static_cast<FrameTrack*>(track)->GetFunctionId()) ||
+                 track->GetType() == Track::Type::kSchedulerTrack;
+        });
+    if (last_frame_or_scheduler_track_pos != sorted_tracks_.rend()) {
+      sorted_tracks_.insert(last_frame_or_scheduler_track_pos.base(), frame_track.get());
+    } else {
+      sorted_tracks_.insert(sorted_tracks_.begin(), frame_track.get());
+    }
+  }
+
+  pending_frame_tracks_.clear();
+}
+
 std::vector<ThreadTrack*> TrackManager::GetSortedThreadTracks() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   std::vector<ThreadTrack*> sorted_tracks;
-  absl::flat_hash_map<ThreadTrack*, uint32_t> num_events_by_track;
+  absl::flat_hash_map<ThreadTrack*, std::tuple<size_t, uint32_t>>
+      num_timers_and_num_events_by_track;
   const CallstackData& callstack_data = capture_data_->GetCallstackData();
 
   for (auto& [tid, track] : thread_tracks_) {
@@ -231,15 +269,16 @@ std::vector<ThreadTrack*> TrackManager::GetSortedThreadTracks() {
       continue;  // "kAllProcessThreadsTid" is handled separately.
     }
     sorted_tracks.push_back(track.get());
-    num_events_by_track[track.get()] = callstack_data.GetCallstackEventsOfTidCount(tid);
+    num_timers_and_num_events_by_track[track.get()] = std::make_tuple(
+        track->GetNumberOfTimers(), callstack_data.GetCallstackEventsOfTidCount(tid));
   }
 
   // Tracks with instrumented timers appear first, ordered by descending order of timers.
   // The remaining tracks appear after, ordered by descending order of callstack events.
   orbit_base::sort(
       sorted_tracks.begin(), sorted_tracks.end(),
-      [&num_events_by_track](ThreadTrack* track) {
-        return std::make_tuple(track->GetNumberOfTimers(), num_events_by_track[track]);
+      [&num_timers_and_num_events_by_track](ThreadTrack* track) {
+        return num_timers_and_num_events_by_track.at(track);
       },
       std::greater<>{});
 
@@ -248,6 +287,7 @@ std::vector<ThreadTrack*> TrackManager::GetSortedThreadTracks() {
 
 // TODO(b/214280810): Move it to TrackContainer, as well as everything related with Ordered Tracks.
 void TrackManager::UpdateMovingTrackPositionInVisibleTracks() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   // This updates the position of the currently moving track in both the sorted_tracks_
   // and the visible_tracks_ array. The moving track is inserted after the first track
   // with a value of top + height smaller than the current mouse position.
@@ -303,6 +343,7 @@ void TrackManager::UpdateMovingTrackPositionInVisibleTracks() {
 }
 
 int TrackManager::FindMovingTrackIndex() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   // Returns the position of the moving track, or -1 if there is none.
   for (auto track_it = visible_tracks_.begin(); track_it != visible_tracks_.end(); ++track_it) {
     if ((*track_it)->IsMoving()) {
@@ -313,7 +354,9 @@ int TrackManager::FindMovingTrackIndex() {
 }
 
 void TrackManager::UpdateTrackListForRendering() {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   DeletePendingTracks();
+  InsertPendingFrameTracks();
 
   // Reorder threads if sorting isn't valid or once per second when capturing.
   if (sorting_invalidated_ ||
@@ -336,24 +379,15 @@ void TrackManager::AddTrack(const std::shared_ptr<Track>& track) {
 }
 
 void TrackManager::AddFrameTrack(const std::shared_ptr<FrameTrack>& frame_track) {
-  // We are inserting the new frame track just after the last Frame Track with lower function_id
-  // (and also after the Scheduler one).
-  auto last_frame_or_scheduler_track_pos =
-      find_if(sorted_tracks_.rbegin(), sorted_tracks_.rend(), [frame_track](Track* track) {
-        return (track->GetType() == Track::Type::kFrameTrack &&
-                frame_track->GetFunctionId() > static_cast<FrameTrack*>(track)->GetFunctionId()) ||
-               track->GetType() == Track::Type::kSchedulerTrack;
-      });
-  if (last_frame_or_scheduler_track_pos != sorted_tracks_.rend()) {
-    sorted_tracks_.insert(last_frame_or_scheduler_track_pos.base(), frame_track.get());
-  } else {
-    sorted_tracks_.insert(sorted_tracks_.begin(), frame_track.get());
-  }
+  all_tracks_.push_back(frame_track);
+  // Tracks should be inserted into the visible tracks during UpdateLayout().
+  pending_frame_tracks_.push_back(frame_track);
   visible_track_list_needs_update_ = true;
 }
 
 void TrackManager::RemoveFrameTrack(uint64_t function_id) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
+  absl::WriterMutexLock lock(&mutex_);
   deleted_tracks_.push_back(frame_tracks_[function_id]);
   frame_tracks_.erase(function_id);
 
@@ -361,6 +395,7 @@ void TrackManager::RemoveFrameTrack(uint64_t function_id) {
 }
 
 void TrackManager::SetTrackTypeVisibility(Track::Type type, bool value) {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   track_type_visibility_[type] = value;
   if (track_container_ != nullptr) {
     track_container_->RequestUpdate();
@@ -369,15 +404,18 @@ void TrackManager::SetTrackTypeVisibility(Track::Type type, bool value) {
 }
 
 bool TrackManager::GetTrackTypeVisibility(Track::Type type) const {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   return track_type_visibility_.at(type);
 }
 
 const absl::flat_hash_map<Track::Type, bool> TrackManager::GetAllTrackTypesVisibility() const {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   return track_type_visibility_;
 }
 
 void TrackManager::RestoreAllTrackTypesVisibility(
     const absl::flat_hash_map<Track::Type, bool>& values) {
+  ORBIT_CHECK(std::this_thread::get_id() == main_thread_id_);
   track_type_visibility_ = values;
   if (track_container_ != nullptr) {
     track_container_->RequestUpdate();
@@ -424,12 +462,6 @@ Track* TrackManager::GetOrCreateTrackFromTimerInfo(const TimerInfo& timer_info) 
       return GetOrCreateGpuTrack(timer_info.timeline_hash());
     case TimerInfo::kApiScopeAsync:
       return GetOrCreateAsyncTrack(timer_info.api_scope_name());
-    case TimerInfo::kSystemMemoryUsage:
-      return GetSystemMemoryTrack();
-    case TimerInfo::kCGroupAndProcessMemoryUsage:
-      return GetCGroupAndProcessMemoryTrack();
-    case TimerInfo::kPageFaults:
-      return GetPageFaultsTrack();
     case orbit_client_protos::TimerInfo_Type_TimerInfo_Type_INT_MIN_SENTINEL_DO_NOT_USE_:
     case orbit_client_protos::TimerInfo_Type_TimerInfo_Type_INT_MAX_SENTINEL_DO_NOT_USE_:
       ORBIT_UNREACHABLE();
@@ -438,7 +470,7 @@ Track* TrackManager::GetOrCreateTrackFromTimerInfo(const TimerInfo& timer_info) 
 }
 
 SchedulerTrack* TrackManager::GetOrCreateSchedulerTrack() {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::WriterMutexLock lock(&mutex_);
   if (scheduler_track_ == nullptr) {
     auto [unused, timer_data] = capture_data_->CreateTimerData();
     scheduler_track_ =
@@ -450,7 +482,11 @@ SchedulerTrack* TrackManager::GetOrCreateSchedulerTrack() {
 }
 
 ThreadTrack* TrackManager::GetOrCreateThreadTrack(uint32_t tid) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::WriterMutexLock lock(&mutex_);
+  return GetOrCreateThreadTrackInternal(tid);
+}
+
+ThreadTrack* TrackManager::GetOrCreateThreadTrackInternal(uint32_t tid) {
   std::shared_ptr<ThreadTrack> track = thread_tracks_[tid];
   if (track == nullptr) {
     auto* thread_track_data_provider = capture_data_->GetThreadTrackDataProvider();
@@ -465,7 +501,7 @@ ThreadTrack* TrackManager::GetOrCreateThreadTrack(uint32_t tid) {
 }
 
 std::optional<ThreadTrack*> TrackManager::GetThreadTrack(uint32_t tid) const {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::ReaderMutexLock lock(&mutex_);
   if (!thread_tracks_.contains(tid)) {
     return std::nullopt;
   }
@@ -474,50 +510,52 @@ std::optional<ThreadTrack*> TrackManager::GetThreadTrack(uint32_t tid) const {
 }
 
 GpuTrack* TrackManager::GetOrCreateGpuTrack(uint64_t timeline_hash) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::WriterMutexLock lock(&mutex_);
   std::string timeline =
       app_->GetStringManager()->Get(timeline_hash).value_or(std::to_string(timeline_hash));
   std::shared_ptr<GpuTrack> track = gpu_tracks_[timeline];
   if (track == nullptr) {
     auto [unused1, submission_timer_data] = capture_data_->CreateTimerData();
     auto [unused2, marker_timer_data] = capture_data_->CreateTimerData();
-    track = std::make_shared<GpuTrack>(track_container_, timeline_info_, viewport_, layout_,
-                                       timeline_hash, app_, module_manager_, capture_data_,
-                                       submission_timer_data, marker_timer_data);
+    track = std::make_shared<GpuTrack>(
+        track_container_, timeline_info_, viewport_, layout_, timeline_hash, app_, module_manager_,
+        capture_data_, submission_timer_data, marker_timer_data, app_->GetStringManager());
     gpu_tracks_[timeline] = track;
     AddTrack(track);
   }
   return track.get();
 }
 
-VariableTrack* TrackManager::GetOrCreateVariableTrack(const std::string& name) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-  std::shared_ptr<VariableTrack> track = variable_tracks_[name];
-  if (track == nullptr) {
-    track = std::make_shared<VariableTrack>(track_container_, timeline_info_, viewport_, layout_,
-                                            name, module_manager_, capture_data_);
-    variable_tracks_[name] = track;
-    AddTrack(track);
-  }
+VariableTrack* TrackManager::GetOrCreateVariableTrack(std::string_view name) {
+  absl::WriterMutexLock lock(&mutex_);
+
+  auto existing_track = variable_tracks_.find(name);
+  if (existing_track != variable_tracks_.end()) return existing_track->second.get();
+
+  auto track = std::make_shared<VariableTrack>(track_container_, timeline_info_, viewport_, layout_,
+                                               std::string{name}, module_manager_, capture_data_);
+  variable_tracks_.emplace(name, track);
+  AddTrack(track);
   return track.get();
 }
 
-AsyncTrack* TrackManager::GetOrCreateAsyncTrack(const std::string& name) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-  std::shared_ptr<AsyncTrack> track = async_tracks_[name];
-  if (track == nullptr) {
-    auto [unused, timer_data] = capture_data_->CreateTimerData();
-    track = std::make_shared<AsyncTrack>(track_container_, timeline_info_, viewport_, layout_, name,
-                                         app_, module_manager_, capture_data_, timer_data);
-    async_tracks_[name] = track;
-    AddTrack(track);
-  }
+AsyncTrack* TrackManager::GetOrCreateAsyncTrack(std::string_view name) {
+  absl::WriterMutexLock lock(&mutex_);
 
+  auto existing_track = async_tracks_.find(name);
+  if (existing_track != async_tracks_.end()) return existing_track->second.get();
+
+  auto [unused, timer_data] = capture_data_->CreateTimerData();
+  auto track = std::make_shared<AsyncTrack>(track_container_, timeline_info_, viewport_, layout_,
+                                            std::string{name}, app_, module_manager_, capture_data_,
+                                            timer_data);
+  async_tracks_.emplace(name, track);
+  AddTrack(track);
   return track.get();
 }
 
 FrameTrack* TrackManager::GetOrCreateFrameTrack(uint64_t function_id) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::WriterMutexLock lock(&mutex_);
   if (auto track_it = frame_tracks_.find(function_id); track_it != frame_tracks_.end()) {
     return track_it->second.get();
   }
@@ -529,58 +567,72 @@ FrameTrack* TrackManager::GetOrCreateFrameTrack(uint64_t function_id) {
                                             function_id, *function, app_, module_manager_,
                                             capture_data_, timer_data);
 
-  // Normally we would call AddTrack(track) here, but frame tracks are removable by users
-  // and therefore cannot be simply thrown into the flat vector of tracks. Also, we don't want to
-  // trigger a sorting in all the tracks.
   frame_tracks_.try_emplace(function_id, track);
+  // Normally we would call AddTrack(track) here, but frame tracks can be inserted and removed after
+  // the capture ends, so we don't want to invalidate the sorting of the remaining tracks.
   AddFrameTrack(track);
 
   return track.get();
 }
 
+SystemMemoryTrack* TrackManager::GetSystemMemoryTrack() const {
+  absl::ReaderMutexLock lock(&mutex_);
+  return system_memory_track_.get();
+}
+
+CGroupAndProcessMemoryTrack* TrackManager::GetCGroupAndProcessMemoryTrack() const {
+  absl::ReaderMutexLock lock(&mutex_);
+  return cgroup_and_process_memory_track_.get();
+}
+
+PageFaultsTrack* TrackManager::GetPageFaultsTrack() const {
+  absl::ReaderMutexLock lock(&mutex_);
+  return page_faults_track_.get();
+}
+
 SystemMemoryTrack* TrackManager::CreateAndGetSystemMemoryTrack() {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::WriterMutexLock lock(&mutex_);
   if (system_memory_track_ == nullptr) {
     system_memory_track_ = std::make_shared<SystemMemoryTrack>(
         track_container_, timeline_info_, viewport_, layout_, module_manager_, capture_data_);
     AddTrack(system_memory_track_);
   }
 
-  return GetSystemMemoryTrack();
+  return system_memory_track_.get();
 }
 
 CGroupAndProcessMemoryTrack* TrackManager::CreateAndGetCGroupAndProcessMemoryTrack(
-    const std::string& cgroup_name) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::string_view cgroup_name) {
+  absl::WriterMutexLock lock(&mutex_);
   if (cgroup_and_process_memory_track_ == nullptr) {
     cgroup_and_process_memory_track_ = std::make_shared<CGroupAndProcessMemoryTrack>(
-        track_container_, timeline_info_, viewport_, layout_, cgroup_name, module_manager_,
-        capture_data_);
+        track_container_, timeline_info_, viewport_, layout_, std::string{cgroup_name},
+        module_manager_, capture_data_);
     AddTrack(cgroup_and_process_memory_track_);
   }
 
-  return GetCGroupAndProcessMemoryTrack();
+  return cgroup_and_process_memory_track_.get();
 }
 
-PageFaultsTrack* TrackManager::CreateAndGetPageFaultsTrack(const std::string& cgroup_name,
+PageFaultsTrack* TrackManager::CreateAndGetPageFaultsTrack(std::string_view cgroup_name,
                                                            uint64_t memory_sampling_period_ms) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  absl::WriterMutexLock lock(&mutex_);
   if (page_faults_track_ == nullptr) {
     page_faults_track_ = std::make_shared<PageFaultsTrack>(
-        track_container_, timeline_info_, viewport_, layout_, cgroup_name,
+        track_container_, timeline_info_, viewport_, layout_, std::string{cgroup_name},
         memory_sampling_period_ms, module_manager_, capture_data_);
     AddTrack(page_faults_track_);
   }
-  return GetPageFaultsTrack();
+  return page_faults_track_.get();
 }
 
 // TODO(b/177200020): Move to TrackContainer after assuring to have only one thread in the UI.
 std::pair<uint64_t, uint64_t> TrackManager::GetTracksMinMaxTimestamps() const {
+  absl::ReaderMutexLock lock(&mutex_);
   uint64_t min_time = std::numeric_limits<uint64_t>::max();
   uint64_t max_time = std::numeric_limits<uint64_t>::min();
 
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-  for (auto& track : GetAllTracks()) {
+  for (auto& track : GetAllTracksInternal()) {
     if (!track->IsEmpty()) {
       min_time = std::min(min_time, track->GetMinTime());
       max_time = std::max(max_time, track->GetMaxTime());

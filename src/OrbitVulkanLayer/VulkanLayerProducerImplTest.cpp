@@ -3,12 +3,27 @@
 // found in the LICENSE file.
 
 #include <absl/synchronization/mutex.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
+#include <grpcpp/grpcpp.h>
+#include <grpcpp/support/channel_arguments.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #include "FakeProducerSideService/FakeProducerSideService.h"
+#include "GrpcProtos/capture.pb.h"
+#include "VulkanLayerProducer.h"
 #include "VulkanLayerProducerImpl.h"
 
 namespace orbit_vulkan_layer {
@@ -190,7 +205,7 @@ TEST_F(VulkanLayerProducerImplTest, EnqueueCaptureEvent) {
   std::atomic<uint64_t> capture_events_received_count = 0;
   ON_CALL(*fake_service_, OnCaptureEventsReceived)
       .WillByDefault([&capture_events_received_count](
-                         const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+                         absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
         capture_events_received_count += events.size();
       });
   EXPECT_CALL(*fake_service_, OnCaptureEventsReceived).Times(::testing::Between(1, 3));
@@ -233,9 +248,8 @@ TEST_F(VulkanLayerProducerImplTest, EnqueueCaptureEvent) {
   EXPECT_FALSE(producer_->EnqueueCaptureEvent(orbit_grpc_protos::ProducerCaptureEvent()));
 }
 
-static void ExpectInternedStrings(
-    const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& actual_events,
-    const std::vector<std::pair<std::string, uint64_t>>& expected_interns) {
+void ExpectInternedStrings(absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> actual_events,
+                           absl::Span<const std::pair<std::string, uint64_t> > expected_interns) {
   ASSERT_EQ(actual_events.size(), expected_interns.size());
   for (size_t i = 0; i < actual_events.size(); ++i) {
     ASSERT_EQ(actual_events[i].event_case(),
@@ -260,7 +274,7 @@ TEST_F(VulkanLayerProducerImplTest, InternStringIfNecessaryAndGetKey) {
   EXPECT_CALL(*fake_service_, OnCaptureEventsReceived)
       .Times(::testing::Between(1, 2))
       .WillRepeatedly([&events_received, &events_received_mutex](
-                          const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+                          absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
         absl::MutexLock lock{&events_received_mutex};
         events_received.insert(events_received.end(), events.begin(), events.end());
       });
@@ -328,7 +342,7 @@ TEST_F(VulkanLayerProducerImplTest, DontSendInternTwice) {
   EXPECT_CALL(*fake_service_, OnCaptureEventsReceived)
       .Times(1)
       .WillRepeatedly([&events_received, &events_received_mutex](
-                          const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+                          absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
         absl::MutexLock lock{&events_received_mutex};
         events_received.insert(events_received.end(), events.begin(), events.end());
       });
@@ -376,7 +390,7 @@ TEST_F(VulkanLayerProducerImplTest, ReInternInNewCapture) {
   EXPECT_CALL(*fake_service_, OnCaptureEventsReceived)
       .Times(::testing::Between(1, 2))
       .WillRepeatedly([&events_received, &events_received_mutex](
-                          const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+                          absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
         absl::MutexLock lock{&events_received_mutex};
         events_received.insert(events_received.end(), events.begin(), events.end());
       });
@@ -429,7 +443,7 @@ TEST_F(VulkanLayerProducerImplTest, ReInternInNewCapture) {
   EXPECT_CALL(*fake_service_, OnCaptureEventsReceived)
       .Times(::testing::Between(1, 2))
       .WillRepeatedly([&events_received, &events_received_mutex](
-                          const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+                          absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
         absl::MutexLock lock{&events_received_mutex};
         events_received.insert(events_received.end(), events.begin(), events.end());
       });
@@ -517,7 +531,7 @@ TEST_F(VulkanLayerProducerImplTest, InternOnlyWhenCapturing) {
   EXPECT_CALL(*fake_service_, OnCaptureEventsReceived)
       .Times(::testing::Between(1, 2))
       .WillRepeatedly([&events_received, &events_received_mutex](
-                          const std::vector<orbit_grpc_protos::ProducerCaptureEvent>& events) {
+                          absl::Span<const orbit_grpc_protos::ProducerCaptureEvent> events) {
         absl::MutexLock lock{&events_received_mutex};
         events_received.insert(events_received.end(), events.begin(), events.end());
       });

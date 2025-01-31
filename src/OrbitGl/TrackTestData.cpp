@@ -2,12 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "TrackTestData.h"
+#include "OrbitGl/TrackTestData.h"
+
+#include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+
+#include <optional>
+#include <string>
+#include <utility>
 
 #include "ClientData/CallstackEvent.h"
 #include "ClientData/CallstackInfo.h"
 #include "ClientData/CallstackType.h"
 #include "ClientData/LinuxAddressInfo.h"
+#include "ClientData/ModuleIdentifierProvider.h"
 #include "GrpcProtos/capture.pb.h"
 
 using orbit_client_data::CallstackType;
@@ -21,9 +29,10 @@ std::unique_ptr<CaptureData> TrackTestData::GenerateTestCaptureData() {
   orbit_grpc_protos::InstrumentedFunction* func =
       capture_started.mutable_capture_options()->mutable_instrumented_functions()->Add();
   func->set_function_id(kFunctionId);
-  auto capture_data =
-      std::make_unique<CaptureData>(capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
-                                    CaptureData::DataSource::kLiveCapture);
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider;
+  auto capture_data = std::make_unique<CaptureData>(
+      capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
+      CaptureData::DataSource::kLiveCapture, &module_identifier_provider);
 
   // AddressInfo
   LinuxAddressInfo address_info{kInstructionAbsoluteAddress,

@@ -5,14 +5,19 @@
 #ifndef CLIENT_DATA_CAPTURE_DATA_H_
 #define CLIENT_DATA_CAPTURE_DATA_H_
 
+#include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <absl/synchronization/mutex.h>
+#include <absl/time/clock.h>
+#include <absl/time/time.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,9 +30,11 @@
 #include "ClientData/CallstackInfo.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/LinuxAddressInfo.h"
+#include "ClientData/ModuleIdentifierProvider.h"
 #include "ClientData/ModuleManager.h"
 #include "ClientData/PostProcessedSamplingData.h"
 #include "ClientData/ProcessData.h"
+#include "ClientData/ScopeId.h"
 #include "ClientData/ScopeIdProvider.h"
 #include "ClientData/ScopeInfo.h"
 #include "ClientData/ScopeStats.h"
@@ -36,8 +43,11 @@
 #include "ClientData/ThreadTrackDataProvider.h"
 #include "ClientData/TimerData.h"
 #include "ClientData/TimerDataManager.h"
+#include "ClientData/TimerTrackDataIdManager.h"
 #include "ClientData/TimestampIntervalSet.h"
 #include "ClientData/TracepointData.h"
+#include "ClientData/TracepointEventInfo.h"
+#include "ClientData/TracepointInfo.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "GrpcProtos/capture.pb.h"
 #include "GrpcProtos/process.pb.h"
@@ -52,7 +62,8 @@ class CaptureData {
   explicit CaptureData(orbit_grpc_protos::CaptureStarted capture_started,
                        std::optional<std::filesystem::path> file_path,
                        absl::flat_hash_set<uint64_t> frame_track_function_ids,
-                       DataSource data_source);
+                       DataSource data_source,
+                       const ModuleIdentifierProvider* module_identifier_provider);
 
   // We cannot copy the unique_ptr, so we cannot copy this object.
   CaptureData(const CaptureData& other) = delete;
@@ -118,13 +129,18 @@ class CaptureData {
 
   void AddThreadStateSlice(ThreadStateSliceInfo state_slice) {
     absl::MutexLock lock{&thread_state_slices_mutex_};
-    thread_state_slices_[state_slice.tid()].emplace_back(std::move(state_slice));
+    thread_state_slices_[state_slice.tid()].emplace_back(state_slice);
   }
 
   // Allows the caller to iterate `action` over all the thread state slices of the specified thread
   // in the time range while holding for the whole time the internal mutex, acquired only once.
   void ForEachThreadStateSliceIntersectingTimeRange(
       uint32_t thread_id, uint64_t min_timestamp, uint64_t max_timestamp,
+      const std::function<void(const ThreadStateSliceInfo&)>& action) const;
+
+  // Similar to the previous one, but does not iterate over more than one slice per pixel.
+  void ForEachThreadStateSliceIntersectingTimeRangeDiscretized(
+      uint32_t thread_id, uint64_t min_timestamp, uint64_t max_timestamp, uint32_t resolution,
       const std::function<void(const ThreadStateSliceInfo&)>& action) const;
 
   [[nodiscard]] const ScopeStats& GetScopeStatsOrDefault(ScopeId scope_id) const;
@@ -158,7 +174,7 @@ class CaptureData {
   }
 
   void AddCallstackEvent(orbit_client_data::CallstackEvent callstack_event) {
-    callstack_data_.AddCallstackEvent(std::move(callstack_event));
+    callstack_data_.AddCallstackEvent(callstack_event);
   }
 
   void FilterBrokenCallstacks();
@@ -249,7 +265,12 @@ class CaptureData {
   [[nodiscard]] std::vector<const TimerInfo*> GetAllScopeTimers(
       absl::flat_hash_set<ScopeType> types,
       uint64_t min_tick = std::numeric_limits<uint64_t>::min(),
-      uint64_t max_tick = std::numeric_limits<uint64_t>::max()) const;
+      uint64_t max_tick = std::numeric_limits<uint64_t>::max(), bool exclusive = false) const;
+
+  [[nodiscard]] std::vector<const TimerInfo*> GetAllScopeTimersByTids(
+      const std::vector<uint32_t>& thread_ids, absl::flat_hash_set<ScopeType> types,
+      uint64_t min_tick = std::numeric_limits<uint64_t>::min(),
+      uint64_t max_tick = std::numeric_limits<uint64_t>::max(), bool exclusive = false) const;
 
   [[nodiscard]] std::vector<const TimerInfo*> GetTimersForScope(
       ScopeId scope_id, uint64_t min_tick = std::numeric_limits<uint64_t>::min(),
@@ -262,13 +283,17 @@ class CaptureData {
   [[nodiscard]] std::optional<ThreadStateSliceInfo> FindThreadStateSliceInfoFromTimestamp(
       int64_t thread_id, uint64_t timestamp) const;
 
+  [[nodiscard]] std::unique_ptr<const ScopeStatsCollection> CreateScopeStatsCollection(
+      uint32_t thread_id, uint64_t min_tick, uint64_t max_tick) const;
+  [[nodiscard]] std::shared_ptr<const ScopeStatsCollection> GetAllScopeStatsCollection() const;
+
  private:
   orbit_grpc_protos::CaptureStarted capture_started_;
 
   orbit_client_data::ProcessData process_;
   // TODO(b/249262736): Replace this map in favor of ScopeIdProvider's scope_id_to_function_info_.
   absl::flat_hash_map<uint64_t, orbit_grpc_protos::InstrumentedFunction> instrumented_functions_;
-  uint64_t memory_warning_threshold_kb_;
+  uint64_t memory_warning_threshold_kb_ = 0;
 
   CallstackData callstack_data_;
   std::optional<PostProcessedSamplingData> post_processed_sampling_data_;

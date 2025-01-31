@@ -2,15 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <google/protobuf/io/coded_stream.h>
 #include <google/protobuf/io/zero_copy_stream_impl_lite.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
+#include <string.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "CaptureFile/BufferOutputStream.h"
 #include "CaptureFile/CaptureFileOutputStream.h"
 #include "CaptureFileConstants.h"
+#include "GrpcProtos/capture.pb.h"
 #include "OrbitBase/ReadFileToString.h"
-#include "OrbitBase/TemporaryFile.h"
+#include "OrbitBase/Result.h"
+#include "TestUtils/TemporaryDirectory.h"
 
 namespace orbit_capture_file {
 
@@ -20,12 +32,12 @@ static constexpr const char* kNotAnAnswerString = "Some odd number, not the answ
 static constexpr uint64_t kAnswerKey = 42;
 static constexpr uint64_t kNotAnAnswerKey = 43;
 
-static orbit_grpc_protos::ClientCaptureEvent CreateInternedStringCaptureEvent(
-    uint64_t key, const std::string& str) {
+static orbit_grpc_protos::ClientCaptureEvent CreateInternedStringCaptureEvent(uint64_t key,
+                                                                              std::string str) {
   orbit_grpc_protos::ClientCaptureEvent event;
   orbit_grpc_protos::InternedString* interned_string = event.mutable_interned_string();
   interned_string->set_key(key);
-  interned_string->set_intern(str);
+  interned_string->set_intern(std::move(str));
   return event;
 }
 
@@ -44,7 +56,7 @@ TEST(CaptureFileOutputStream, Smoke) {
     ASSERT_FALSE(close_result.has_error()) << close_result.error().message();
   };
 
-  auto check_output_stream_content = [&](const std::string& stream_content) {
+  auto check_output_stream_content = [&](std::string_view stream_content) {
     ASSERT_GT(stream_content.size(), 24);
     ASSERT_EQ(stream_content.substr(0, 4), kFileSignature);
     uint64_t capture_section_offset = 0;
@@ -79,12 +91,13 @@ TEST(CaptureFileOutputStream, Smoke) {
 
   // Test the case of outputting capture file content to a file
   {
-    auto temporary_file_or_error = orbit_base::TemporaryFile::Create();
-    ASSERT_TRUE(temporary_file_or_error.has_value()) << temporary_file_or_error.error().message();
-    orbit_base::TemporaryFile temporary_file = std::move(temporary_file_or_error.value());
-    temporary_file.CloseAndRemove();
+    auto temporary_dir_or_error = orbit_test_utils::TemporaryDirectory::Create();
+    ASSERT_TRUE(temporary_dir_or_error.has_value()) << temporary_dir_or_error.error().message();
+    orbit_test_utils::TemporaryDirectory temporary_directory =
+        std::move(temporary_dir_or_error.value());
 
-    std::string temp_file_name = temporary_file.file_path().string();
+    std::string temp_file_name =
+        (temporary_directory.GetDirectoryPath() / "capture.orbit").string();
     auto output_stream_or_error = CaptureFileOutputStream::Create(temp_file_name);
     ASSERT_TRUE(output_stream_or_error.has_value()) << output_stream_or_error.error().message();
 
@@ -131,12 +144,11 @@ TEST(CaptureFileOutputStream, WriteAfterClose) {
 
   // Test the case of outputting capture file content to a file
   {
-    auto temporary_file_or_error = orbit_base::TemporaryFile::Create();
-    ASSERT_TRUE(temporary_file_or_error.has_value()) << temporary_file_or_error.error().message();
-    orbit_base::TemporaryFile temporary_file = std::move(temporary_file_or_error.value());
-    temporary_file.CloseAndRemove();
+    auto temporary_dir_or_error = orbit_test_utils::TemporaryDirectory::Create();
+    ASSERT_TRUE(temporary_dir_or_error.has_value()) << temporary_dir_or_error.error().message();
+    orbit_test_utils::TemporaryDirectory temporary_dir = std::move(temporary_dir_or_error.value());
 
-    std::string temp_file_name = temporary_file.file_path().string();
+    std::string temp_file_name = (temporary_dir.GetDirectoryPath() / "capture.orbit").string();
     auto output_stream_or_error = CaptureFileOutputStream::Create(temp_file_name);
     ASSERT_TRUE(output_stream_or_error.has_value()) << output_stream_or_error.error().message();
     std::unique_ptr<CaptureFileOutputStream> output_stream =

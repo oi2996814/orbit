@@ -5,13 +5,19 @@
 #ifndef LINUX_TRACING_LINUX_TRACING_UTILS_H_
 #define LINUX_TRACING_LINUX_TRACING_UTILS_H_
 
+#include <absl/types/span.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #include <ctime>
+#include <map>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
 #include "ModuleUtils/ReadLinuxMaps.h"
 
 namespace orbit_linux_tracing {
@@ -23,9 +29,9 @@ std::optional<char> GetThreadState(pid_t tid);
 
 int GetNumCores();
 
-std::optional<std::string> ExtractCpusetFromCgroup(const std::string& cgroup_content);
+std::optional<std::string> ExtractCpusetFromCgroup(std::string_view cgroup_content);
 
-std::vector<int> ParseCpusetCpus(const std::string& cpuset_cpus_content);
+std::vector<int> ParseCpusetCpus(std::string_view cpuset_cpus_content);
 
 std::vector<int> GetCpusetCpus(pid_t pid);
 
@@ -70,9 +76,9 @@ inline size_t GetPageSize() {
 // Returns an std::map (so that the order by function id is preserved) from function id to a message
 // describing the issue for that function.
 [[nodiscard]] std::map<uint64_t, std::string> FindFunctionsThatUprobesCannotInstrumentWithMessages(
-    const std::vector<orbit_module_utils::LinuxMemoryMapping>& maps,
-    const std::vector<orbit_grpc_protos::ModuleInfo>& modules,
-    const std::vector<orbit_grpc_protos::InstrumentedFunction>& functions);
+    absl::Span<const orbit_module_utils::LinuxMemoryMapping> maps,
+    absl::Span<const orbit_grpc_protos::ModuleInfo> modules,
+    absl::Span<const orbit_grpc_protos::InstrumentedFunction> functions);
 
 }  // namespace orbit_linux_tracing
 

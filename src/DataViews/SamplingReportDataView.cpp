@@ -5,32 +5,40 @@
 #include "DataViews/SamplingReportDataView.h"
 
 #include <absl/container/flat_hash_set.h>
-#include <absl/flags/declare.h>
-#include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
+#include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
+#include <absl/strings/str_join.h>
 #include <absl/strings/str_split.h>
+#include <absl/types/span.h>
 #include <stddef.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <iterator>
-#include <memory>
+#include <limits>
 #include <utility>
 #include <vector>
 
+#include "ApiInterface/Orbit.h"
+#include "ClientData/CallstackData.h"
+#include "ClientData/CallstackEvent.h"
+#include "ClientData/CallstackInfo.h"
 #include "ClientData/CallstackType.h"
 #include "ClientData/CaptureData.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleInMemory.h"
+#include "ClientData/ModuleManager.h"
 #include "ClientData/ProcessData.h"
+#include "DataViews/CallstackDataView.h"
 #include "DataViews/CompareAscendingOrDescending.h"
 #include "DataViews/DataViewType.h"
 #include "DataViews/FunctionsDataView.h"
-#include "OrbitBase/Append.h"
+#include "OrbitBase/File.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
 #include "OrbitBase/ThreadConstants.h"
@@ -40,11 +48,11 @@
 using orbit_client_data::CaptureData;
 using orbit_client_data::FunctionInfo;
 using orbit_client_data::ModuleData;
+using orbit_client_data::ModuleIdentifier;
 using orbit_client_data::ModuleManager;
 using orbit_client_data::ProcessData;
 using orbit_client_data::SampledFunction;
 using orbit_client_data::ThreadID;
-using orbit_symbol_provider::ModuleIdentifier;
 
 namespace orbit_data_views {
 
@@ -52,7 +60,7 @@ SamplingReportDataView::SamplingReportDataView(AppInterface* app)
     : DataView(DataViewType::kSampling, app) {}
 
 const std::vector<DataView::Column>& SamplingReportDataView::GetColumns() {
-  static const std::vector<Column> columns = [] {
+  static const std::vector<Column> kColumns = [] {
     std::vector<Column> columns;
     columns.resize(kNumColumns);
     columns[kColumnSelected] = {"Hooked", .0f, SortingOrder::kDescending};
@@ -64,7 +72,7 @@ const std::vector<DataView::Column>& SamplingReportDataView::GetColumns() {
     columns[kColumnUnwindErrors] = {"Unwind errors, %", .0f, SortingOrder::kDescending};
     return columns;
   }();
-  return columns;
+  return kColumns;
 }
 
 [[nodiscard]] std::string SamplingReportDataView::BuildPercentageString(float percentage) const {
@@ -222,7 +230,7 @@ std::optional<ModuleIdentifier> SamplingReportDataView::GetModuleIdentifierFromR
 }
 
 DataView::ActionStatus SamplingReportDataView::GetActionStatus(
-    std::string_view action, int clicked_index, const std::vector<int>& selected_indices) {
+    std::string_view action, int clicked_index, absl::Span<const int> selected_indices) {
   if (action == kMenuActionLoadSymbols) {
     for (int index : selected_indices) {
       const ModuleData* module = GetModuleDataFromRow(index);
@@ -276,7 +284,7 @@ ModuleData* SamplingReportDataView::GetModuleDataFromRow(int row) const {
 }
 
 void SamplingReportDataView::UpdateSelectedIndicesAndFunctionIds(
-    const std::vector<int>& selected_indices) {
+    absl::Span<const int> selected_indices) {
   selected_indices_.clear();
   selected_function_ids_.clear();
   for (int row : selected_indices) {
@@ -295,7 +303,7 @@ void SamplingReportDataView::RestoreSelectedIndicesAfterFunctionsChanged() {
 }
 
 void SamplingReportDataView::UpdateVisibleSelectedAddressesAndTid(
-    const std::vector<int>& visible_selected_indices) {
+    absl::Span<const int> visible_selected_indices) {
   absl::flat_hash_set<uint64_t> addresses;
   for (int index : visible_selected_indices) {
     addresses.insert(GetSampledFunction(index).absolute_address);
@@ -303,12 +311,12 @@ void SamplingReportDataView::UpdateVisibleSelectedAddressesAndTid(
   sampling_report_->OnSelectAddresses(addresses, tid_);
 }
 
-void SamplingReportDataView::OnSelect(const std::vector<int>& indices) {
+void SamplingReportDataView::OnSelect(absl::Span<const int> indices) {
   UpdateSelectedIndicesAndFunctionIds(indices);
   UpdateVisibleSelectedAddressesAndTid(indices);
 }
 
-void SamplingReportDataView::OnRefresh(const std::vector<int>& visible_selected_indices,
+void SamplingReportDataView::OnRefresh(absl::Span<const int> visible_selected_indices,
                                        const RefreshMode& mode) {
   if (mode != RefreshMode::kOnFilter && mode != RefreshMode::kOnSort) return;
   UpdateVisibleSelectedAddressesAndTid(visible_selected_indices);
@@ -320,8 +328,8 @@ void SamplingReportDataView::LinkDataView(DataView* data_view) {
   sampling_report_->SetCallstackDataView(static_cast<CallstackDataView*>(data_view));
 }
 
-void SamplingReportDataView::SetSampledFunctions(const std::vector<SampledFunction>& functions) {
-  functions_ = functions;
+void SamplingReportDataView::SetSampledFunctions(absl::Span<const SampledFunction> functions) {
+  functions_.assign(functions.begin(), functions.end());
   RestoreSelectedIndicesAfterFunctionsChanged();
 
   size_t num_functions = functions_.size();
@@ -454,7 +462,7 @@ SampledFunction& SamplingReportDataView::GetSampledFunction(unsigned int row) {
   return functions_[indices_[row]];
 }
 
-ErrorMessageOr<void> SamplingReportDataView::WriteStackEventsToCsv(const std::string& file_path) {
+ErrorMessageOr<void> SamplingReportDataView::WriteStackEventsToCsv(std::string_view file_path) {
   OUTCOME_TRY(auto fd, orbit_base::OpenFileForWriting(file_path));
 
   static const std::vector<std::string> kNames{"Thread", "Timestamp (ns)", "Names leaf/foo/main",
@@ -508,7 +516,7 @@ ErrorMessageOr<void> SamplingReportDataView::WriteStackEventsToCsv(const std::st
 
 // The argument `selection` is ignored as the selected functions are more conveniently obtained as
 // `sampling_report_->GetSelectedCallstackIds()`
-void SamplingReportDataView::OnExportEventsToCsvRequested(const std::vector<int>& /*selection*/) {
+void SamplingReportDataView::OnExportEventsToCsvRequested(absl::Span<const int> /*selection*/) {
   std::string file_path = app_->GetSaveFile(".csv");
   if (file_path.empty()) return;
 

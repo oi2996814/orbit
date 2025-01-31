@@ -2,17 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <GteVector.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <random>
 
-#include "GlCanvas.h"
-#include "MockBatcher.h"
-#include "MockTextRenderer.h"
-#include "MockTimelineInfo.h"
-#include "TimelineUi.h"
-#include "Viewport.h"
+#include "OrbitGl/BatchRenderGroup.h"
+#include "OrbitGl/CaptureViewElement.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/MockBatcher.h"
+#include "OrbitGl/MockTextRenderer.h"
+#include "OrbitGl/MockTimelineInfo.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/StaticTimeGraphLayout.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/TimelineTicks.h"
+#include "OrbitGl/TimelineUi.h"
+#include "OrbitGl/Viewport.h"
 
 namespace orbit_gl {
 
@@ -25,7 +38,7 @@ class TimelineUiTest : public TimelineUi {
   explicit TimelineUiTest(MockTimelineInfo* mock_timeline_info, Viewport* viewport,
                           TimeGraphLayout* layout)
       : TimelineUi(nullptr /*parent*/, mock_timeline_info, viewport, layout),
-        primitive_assembler_(&mock_batcher_),
+        primitive_assembler_(&mock_batcher_, &state_manager_),
         viewport_(viewport),
         mock_timeline_info_(mock_timeline_info) {
     viewport->SetWorldSize(viewport->GetWorldWidth(), TimelineUi::GetHeight());
@@ -92,15 +105,15 @@ class TimelineUiTest : public TimelineUi {
                                                          GlCanvas::kZValueTimeBarLabel));
 
     // The label is the only thing that can be out of the expected space for the timeline.
-    const char* kOneMonthLabel = "730:00:00.000000000";
-    const float kMaxLabelWidth =
+    constexpr const char* kOneMonthLabel = "730:00:00.000000000";
+    const float max_label_width =
         mock_text_renderer_.GetStringWidth(kOneMonthLabel, layout_->GetFontSize());
-    const Vec2 kExpectedMinPos{GetPos()[0] - kMaxLabelWidth, GetPos()[1]};
-    const Vec2 kExpectedMaxPos{GetPos() + Vec2{GetSize()[0] + kMaxLabelWidth, GetSize()[1]}};
-    EXPECT_TRUE(mock_text_renderer_.IsTextInsideRectangle(kExpectedMinPos,
-                                                          kExpectedMaxPos - kExpectedMinPos));
-    EXPECT_TRUE(mock_batcher_.IsEverythingInsideRectangle(kExpectedMinPos,
-                                                          kExpectedMaxPos - kExpectedMinPos));
+    const Vec2 expected_min_pos{GetPos()[0] - max_label_width, GetPos()[1]};
+    const Vec2 expected_max_pos{GetPos() + Vec2{GetSize()[0] + max_label_width, GetSize()[1]}};
+    EXPECT_TRUE(mock_text_renderer_.IsTextInsideRectangle(expected_min_pos,
+                                                          expected_max_pos - expected_min_pos));
+    EXPECT_TRUE(mock_batcher_.IsEverythingInsideRectangle(expected_min_pos,
+                                                          expected_max_pos - expected_min_pos));
   }
 
   void TestDraw(uint64_t min_tick, uint64_t max_tick, std::optional<uint64_t> mouse_tick) {
@@ -113,11 +126,11 @@ class TimelineUiTest : public TimelineUi {
     Draw(primitive_assembler_, mock_text_renderer_, context);
 
     // One box and one label, both at kZValueTimeBarMouseLabel position.
-    const int kNumMouseLabels = mouse_tick.has_value() ? 1 : 0;
+    const int num_mouse_labels = mouse_tick.has_value() ? 1 : 0;
 
-    EXPECT_EQ(mock_batcher_.GetNumBoxes(), kNumMouseLabels);
-    EXPECT_EQ(mock_batcher_.GetNumElements(), kNumMouseLabels);
-    EXPECT_EQ(mock_text_renderer_.GetNumAddTextCalls(), kNumMouseLabels);
+    EXPECT_EQ(mock_batcher_.GetNumBoxes(), num_mouse_labels);
+    EXPECT_EQ(mock_batcher_.GetNumElements(), num_mouse_labels);
+    EXPECT_EQ(mock_text_renderer_.GetNumAddTextCalls(), num_mouse_labels);
 
     EXPECT_TRUE(mock_text_renderer_.IsTextBetweenZLayers(GlCanvas::kZValueTimeBarMouseLabel,
                                                          GlCanvas::kZValueTimeBarMouseLabel));
@@ -131,13 +144,14 @@ class TimelineUiTest : public TimelineUi {
   PrimitiveAssembler primitive_assembler_;
   Viewport* viewport_;
   MockTimelineInfo* mock_timeline_info_;
+  BatchRenderGroupStateManager state_manager_;
 };
 
 static void TestUpdatePrimitivesWithSeveralRanges(int world_width) {
   MockTimelineInfo mock_timeline_info;
   mock_timeline_info.SetWorldWidth(world_width);
 
-  TimeGraphLayout layout;
+  StaticTimeGraphLayout layout;
   Viewport viewport(world_width, 0);
   TimelineUiTest timeline_ui_test(&mock_timeline_info, &viewport, &layout);
   timeline_ui_test.TestUpdatePrimitives(0, 100);
@@ -170,12 +184,12 @@ TEST(TimelineUi, Draw) {
   MockTimelineInfo mock_timeline_info;
   mock_timeline_info.SetWorldWidth(width);
 
-  TimeGraphLayout layout;
+  StaticTimeGraphLayout layout;
   Viewport viewport(width, 0);
   TimelineUiTest timeline_ui_test(&mock_timeline_info, &viewport, &layout);
 
-  const uint64_t kMinTick = 0;
-  const uint64_t kMaxTick = 1000;
+  constexpr uint64_t kMinTick = 0;
+  constexpr uint64_t kMaxTick = 1000;
 
   // Testing different positions of the mouse in the screen. It is expected that mouse_tick is
   // between than min_tick and max_tick or either nullopt.
@@ -196,7 +210,7 @@ TEST(TimelineUi, OnMouseWheel) {
   MockTimelineInfo mock_timeline_info;
   mock_timeline_info.SetWorldWidth(width);
 
-  TimeGraphLayout layout;
+  StaticTimeGraphLayout layout;
   Viewport viewport(width, 0);
   TimelineUiTest timeline_ui_test(&mock_timeline_info, &viewport, &layout);
   const Vec2 pos_inside_timeline = timeline_ui_test.GetPos();

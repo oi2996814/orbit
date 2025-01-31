@@ -2,12 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/types/span.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 
+#include <algorithm>
 #include <list>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "CaptureStats.h"
-#include "SchedulingStats.h"
+#include "ClientProtos/capture_data.pb.h"
+#include "OrbitBase/Result.h"
+#include "OrbitGl/CaptureStats.h"
+#include "OrbitGl/SchedulingStats.h"
 
 TEST(CaptureStats, NullCaptureWindow) {
   CaptureStats capture_stats;

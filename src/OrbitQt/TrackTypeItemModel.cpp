@@ -2,7 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "TrackTypeItemModel.h"
+#include "OrbitQt/TrackTypeItemModel.h"
+
+#include <QAbstractItemModel>
+#include <algorithm>
+
+#include "OrbitBase/Logging.h"
 
 namespace orbit_qt {
 
@@ -24,7 +29,7 @@ QVariant TrackTypeItemModel::data(const QModelIndex& idx, int role) const {
   ORBIT_CHECK(idx.column() >= 0 && idx.column() < static_cast<int>(Column::kEnd));
 
   Track::Type track_type = known_track_types_.at(idx.row());
-  Column col = static_cast<Column>(idx.column());
+  auto col = static_cast<Column>(idx.column());
 
   switch (role) {
     case kTrackTypeRole:
@@ -41,7 +46,7 @@ QVariant TrackTypeItemModel::data(const QModelIndex& idx, int role) const {
       break;
   }
 
-  return QVariant();
+  return {};
 }
 
 bool TrackTypeItemModel::setData(const QModelIndex& idx, const QVariant& value, int role) {
@@ -51,7 +56,7 @@ bool TrackTypeItemModel::setData(const QModelIndex& idx, const QVariant& value, 
   ORBIT_CHECK(idx.column() >= 0 && idx.column() < static_cast<int>(Column::kEnd));
 
   Track::Type track_type = known_track_types_.at(idx.row());
-  Column col = static_cast<Column>(idx.column());
+  auto col = static_cast<Column>(idx.column());
 
   switch (role) {
     case Qt::CheckStateRole:
@@ -116,7 +121,7 @@ void TrackTypeItemModel::SetTrackManager(orbit_gl::TrackManager* track_manager) 
   endInsertRows();
 }
 
-QString TrackTypeItemModel::GetTrackTypeDisplayName(Track::Type track_type) const {
+QString TrackTypeItemModel::GetTrackTypeDisplayName(Track::Type track_type) {
   switch (track_type) {
     case Track::Type::kSchedulerTrack:
       return "Scheduler";

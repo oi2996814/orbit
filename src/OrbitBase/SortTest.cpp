@@ -5,7 +5,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <functional>
 #include <iterator>
+#include <vector>
 
 #include "OrbitBase/Sort.h"
 
@@ -19,7 +22,7 @@ struct Struct {
   }
 };
 
-constexpr auto projection = [](const Struct& s) -> int { return s.value; };
+constexpr auto kProjection = [](const Struct& s) -> int { return s.value; };
 }  // namespace
 
 namespace orbit_base {
@@ -42,7 +45,7 @@ static void ExpectSortIsCorrect(MySort my_sort, StdSort std_sort) {
 
 TEST(SortTest, SortIsCorrect) {
   ExpectSortIsCorrect(
-      [](auto& structs) { orbit_base::sort(std::begin(structs), std::end(structs), projection); },
+      [](auto& structs) { orbit_base::sort(std::begin(structs), std::end(structs), kProjection); },
       [](auto& structs) {
         std::sort(std::begin(structs), std::end(structs),
                   [](const auto& a, const auto& b) { return a.value < b.value; });
@@ -50,7 +53,7 @@ TEST(SortTest, SortIsCorrect) {
 
   ExpectSortIsCorrect(
       [](auto& structs) {
-        orbit_base::sort(std::begin(structs), std::end(structs), projection, std::greater<>{});
+        orbit_base::sort(std::begin(structs), std::end(structs), kProjection, std::greater<>{});
       },
       [](auto& structs) {
         std::sort(std::begin(structs), std::end(structs),
@@ -59,7 +62,7 @@ TEST(SortTest, SortIsCorrect) {
 
   ExpectSortIsCorrect(
       [](auto& structs) {
-        orbit_base::stable_sort(std::begin(structs), std::end(structs), projection);
+        orbit_base::stable_sort(std::begin(structs), std::end(structs), kProjection);
       },
       [](auto& structs) {
         std::stable_sort(std::begin(structs), std::end(structs),
@@ -68,7 +71,7 @@ TEST(SortTest, SortIsCorrect) {
 
   ExpectSortIsCorrect(
       [](auto& structs) {
-        orbit_base::stable_sort(std::begin(structs), std::end(structs), projection,
+        orbit_base::stable_sort(std::begin(structs), std::end(structs), kProjection,
                                 std::greater<>{});
       },
       [](auto& structs) {

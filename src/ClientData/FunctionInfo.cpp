@@ -5,12 +5,17 @@
 #include "ClientData/FunctionInfo.h"
 
 #include <absl/strings/match.h>
+#include <absl/strings/str_format.h>
 #include <absl/strings/str_join.h>
 #include <xxhash.h>
 
+#include <vector>
+
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifier.h"
 #include "ClientData/ProcessData.h"
 #include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
+#include "OrbitBase/Logging.h"
 
 namespace orbit_client_data {
 
@@ -23,9 +28,10 @@ uint64_t FunctionInfo::ComputeFileOffset(const ModuleData& module) const {
 }
 
 std::optional<uint64_t> FunctionInfo::GetAbsoluteAddress(const ProcessData& process,
-                                                         const ModuleData& module) const {
+                                                         const ModuleData& module,
+                                                         ModuleIdentifier module_identifier) const {
   std::vector<uint64_t> page_aligned_base_addresses =
-      process.GetModuleBaseAddresses(module.file_path(), module.build_id());
+      process.GetModuleBaseAddresses(module_identifier);
 
   if (page_aligned_base_addresses.empty()) {
     return std::nullopt;

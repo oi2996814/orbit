@@ -4,7 +4,9 @@
 
 #include <gtest/gtest.h>
 
-#include "ShortenStringWithEllipsis.h"
+#include <memory>
+
+#include "OrbitGl/ShortenStringWithEllipsis.h"
 
 namespace orbit_gl {
 

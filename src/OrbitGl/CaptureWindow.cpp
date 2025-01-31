@@ -2,47 +2,67 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "CaptureWindow.h"
+#include "OrbitGl/CaptureWindow.h"
 
-#include <absl/time/time.h>
-#include <glad/glad.h>
-#include <imgui.h>
-#include <string.h>
+#include <GteVector.h>
+#include <absl/container/btree_map.h>
+#include <absl/strings/str_format.h>
 
+#include <QColor>
+#include <QFont>
+#include <QFontDatabase>
+#include <QOpenGLFunctions>
+#include <QRect>
+#include <QString>
+#include <Qt>
 #include <algorithm>
-#include <array>
-#include <cstdint>
-#include <functional>
 #include <iterator>
+#include <limits>
 #include <optional>
-#include <ostream>
+#include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
-#include "App.h"
-#include "CaptureViewElement.h"
+#include "ApiInterface/Orbit.h"
+#include "CaptureClient/AppInterface.h"
 #include "ClientData/CallstackData.h"
 #include "ClientData/CaptureData.h"
+#include "ClientData/DataManager.h"
+#include "ClientData/ThreadStateSliceInfo.h"
 #include "ClientProtos/capture_data.pb.h"
-#include "CoreMath.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "Geometry.h"
-#include "GlUtils.h"
-#include "ImGuiOrbit.h"
-#include "Introspection/Introspection.h"
 #include "OrbitAccessibility/AccessibleInterface.h"
 #include "OrbitAccessibility/AccessibleWidgetBridge.h"
 #include "OrbitBase/Append.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Profiling.h"
+#include "OrbitBase/Result.h"
 #include "OrbitBase/ThreadConstants.h"
-#include "TextRenderer.h"
-#include "TimeGraphLayout.h"
+#include "OrbitGl/BatchRenderGroup.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/CaptureViewElement.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/OpenGlBatcher.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/QtTextRenderer.h"
+#include "OrbitGl/TextRenderer.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/TrackContainer.h"
+#include "OrbitGl/TrackManager.h"
+#include "OrbitGl/Viewport.h"
 
 using orbit_accessibility::AccessibleInterface;
 using orbit_accessibility::AccessibleWidgetBridge;
 
 using orbit_client_data::CaptureData;
+using orbit_client_data::TimeRange;
 using orbit_gl::Batcher;
 using orbit_gl::CaptureViewElement;
 using orbit_gl::ModifierKeys;
@@ -76,7 +96,12 @@ class AccessibleCaptureWindow : public AccessibleWidgetBridge {
 
 using orbit_client_protos::TimerInfo;
 
-CaptureWindow::CaptureWindow(OrbitApp* app) : GlCanvas(), app_{app}, capture_client_app_{app} {
+CaptureWindow::CaptureWindow(
+    OrbitApp* app, orbit_capture_client::CaptureControlInterface* capture_control_interface,
+    TimeGraphLayout* time_graph_layout)
+    : app_{app},
+      capture_client_app_{capture_control_interface},
+      time_graph_layout_{time_graph_layout} {
   draw_help_ = true;
 
   scoped_frame_times_[kTimingDraw] = std::make_unique<orbit_gl::SimpleTimings>(30);
@@ -101,15 +126,15 @@ void CaptureWindow::PreRender() {
     // the root element (time graph) of the tree.
     // During loading or capturing, only a single layouting loop is executed as we're
     // streaming in data from a seperate thread (for performance reasons)
-    const int kMaxLayoutLoops =
+    const int max_layout_loops =
         (app_ != nullptr && (app_->IsCapturing() || app_->IsLoadingCapture()))
             ? 1
-            : time_graph_->GetLayout().GetMaxLayoutingLoops();
+            : time_graph_layout_->GetMaxLayoutingLoops();
 
     // TODO (b/229222095) Log when the max loop count is exceeded
     do {
       time_graph_->UpdateLayout();
-    } while (++layout_loops < kMaxLayoutLoops && time_graph_->HasLayoutChanged());
+    } while (++layout_loops < max_layout_loops && time_graph_->HasLayoutChanged());
   }
 }
 
@@ -143,7 +168,8 @@ void CaptureWindow::MouseMoved(int x, int y, bool left, bool right, bool middle)
 
   // Update selection timestamps
   if (is_selecting_) {
-    select_stop_time_ = time_graph_->GetTickFromWorld(select_stop_pos_world_[0]);
+    select_stop_time_ = time_graph_->GetTickFromWorld(
+        time_graph_->ClampToTimelineUiElementWorldX(select_stop_pos_world_[0]));
   }
 }
 
@@ -224,8 +250,8 @@ void CaptureWindow::SelectTimer(const TimerInfo* timer_info) {
   ORBIT_CHECK(time_graph_ != nullptr);
   if (timer_info == nullptr) return;
 
-  app_->SelectTimer(timer_info);
   app_->set_selected_thread_id(timer_info->thread_id());
+  app_->SelectTimer(timer_info);
 
   if (double_clicking_) {
     // Zoom and center the text_box into the screen.
@@ -233,22 +259,23 @@ void CaptureWindow::SelectTimer(const TimerInfo* timer_info) {
   }
 }
 
-void CaptureWindow::PostRender() {
+void CaptureWindow::PostRender(QPainter* painter) {
   if (picking_mode_ != PickingMode::kNone) {
     RequestUpdatePrimitives();
   }
 
-  GlCanvas::PostRender();
+  GlCanvas::PostRender(painter);
 }
 
 void CaptureWindow::RightDown(int x, int y) {
   GlCanvas::RightDown(x, y);
   if (time_graph_ != nullptr) {
-    select_start_time_ = time_graph_->GetTickFromWorld(select_start_pos_world_[0]);
+    select_start_time_ = time_graph_->GetTickFromWorld(
+        time_graph_->ClampToTimelineUiElementWorldX(select_start_pos_world_[0]));
   }
 }
 
-bool CaptureWindow::RightUp() {
+void CaptureWindow::RightUp() {
   if (time_graph_ != nullptr && is_selecting_ &&
       (select_start_pos_world_[0] != select_stop_pos_world_[0]) && ControlPressed()) {
     float min_world = std::min(select_start_pos_world_[0], select_stop_pos_world_[0]);
@@ -272,19 +299,28 @@ bool CaptureWindow::RightUp() {
     }
   }
 
+  if (select_start_pos_world_[0] == select_stop_pos_world_[0]) {
+    app_->ClearTimeRangeSelection();
+  } else {
+    app_->OnTimeRangeSelection(TimeRange(std::min(select_start_time_, select_stop_time_),
+                                         std::max(select_start_time_, select_stop_time_)));
+  }
+
   if (time_graph_ != nullptr) {
     std::ignore = time_graph_->HandleMouseEvent(
         CaptureViewElement::MouseEvent{CaptureViewElement::MouseEventType::kRightUp,
                                        viewport_.ScreenToWorld(mouse_move_pos_screen_)});
   }
 
-  return GlCanvas::RightUp();
+  GlCanvas::RightUp();
 }
 
 void CaptureWindow::ZoomHorizontally(int delta, int mouse_x) {
   if (delta == 0) return;
   if (time_graph_ != nullptr) {
-    double mouse_ratio = static_cast<double>(mouse_x) / time_graph_->GetTimelineWidth();
+    float timeline_pos_x = time_graph_->GetTimelinePos()[0];
+    double mouse_ratio =
+        static_cast<double>(mouse_x - timeline_pos_x) / time_graph_->GetTimelineWidth();
     time_graph_->ZoomTime(delta, mouse_ratio);
   }
 }
@@ -331,9 +367,9 @@ void CaptureWindow::MouseWheelMovedHorizontally(int x, int y, int delta, bool ct
 
 void CaptureWindow::KeyPressed(unsigned int key_code, bool ctrl, bool shift, bool alt) {
   GlCanvas::KeyPressed(key_code, ctrl, shift, alt);
-  const float kPanRatioPerLeftAndRightArrowKeys = 0.1f;
-  const float kScrollingRatioPerUpAndDownArrowKeys = 0.05f;
-  const float kScrollingRatioPerPageUpAndDown = 0.9f;
+  constexpr float kPanRatioPerLeftAndRightArrowKeys = 0.1f;
+  constexpr float kScrollingRatioPerUpAndDownArrowKeys = 0.05f;
+  constexpr float kScrollingRatioPerPageUpAndDown = 0.9f;
 
   // TODO(b/234116147): Move this part to TimeGraph and manage events similarly to HandleMouseEvent.
   switch (key_code) {
@@ -461,10 +497,17 @@ std::unique_ptr<AccessibleInterface> CaptureWindow::CreateAccessibleInterface() 
   return std::make_unique<AccessibleCaptureWindow>(this);
 }
 
-void CaptureWindow::Draw() {
+void CaptureWindow::Draw(QPainter* painter) {
   ORBIT_SCOPE("CaptureWindow::Draw");
   uint64_t start_time_ns = orbit_base::CaptureTimestampNs();
-  bool time_graph_was_redrawn = time_graph_ != nullptr && time_graph_->IsRedrawNeeded();
+  bool update_primitives_was_needed =
+      time_graph_ != nullptr &&
+      time_graph_->GetRedrawTypeRequired() == TimeGraph::RedrawType::kUpdatePrimitives;
+
+  draw_as_if_picking_ = time_graph_layout_->GetDrawAsIfPicking();
+  if (draw_as_if_picking_) {
+    picking_mode_ = PickingMode::kClick;
+  }
 
   text_renderer_.Init();
 
@@ -489,19 +532,15 @@ void CaptureWindow::Draw() {
   }
 
   if (picking_mode_ == PickingMode::kNone) {
-    text_renderer_.RenderDebug(&primitive_assembler_);
-  }
-
-  if (picking_mode_ == PickingMode::kNone) {
     double update_duration_in_ms = (orbit_base::CaptureTimestampNs() - start_time_ns) / 1000000.0;
-    if (time_graph_was_redrawn) {
+    if (update_primitives_was_needed) {
       scoped_frame_times_[kTimingDrawAndUpdatePrimitives]->PushTimeMs(update_duration_in_ms);
     } else {
       scoped_frame_times_[kTimingDraw]->PushTimeMs(update_duration_in_ms);
     }
   }
 
-  RenderAllLayers();
+  RenderAllLayers(painter);
 
   if (picking_mode_ == PickingMode::kNone) {
     if (last_frame_start_time_ != 0) {
@@ -514,33 +553,61 @@ void CaptureWindow::Draw() {
   last_frame_start_time_ = orbit_base::CaptureTimestampNs();
 }
 
-void CaptureWindow::RenderAllLayers() {
-  std::vector<float> all_layers{};
-  if (time_graph_ != nullptr) {
-    all_layers = time_graph_->GetBatcher().GetLayers();
-    orbit_base::Append(all_layers, time_graph_->GetTextRenderer()->GetLayers());
-  }
-  orbit_base::Append(all_layers, ui_batcher_.GetLayers());
-  orbit_base::Append(all_layers, text_renderer_.GetLayers());
+void CaptureWindow::RenderAllLayers(QPainter* painter) {
+  std::vector<orbit_gl::BatchRenderGroupId> all_groups_sorted{};
 
-  // Sort and remove duplicates.
-  std::sort(all_layers.begin(), all_layers.end());
-  auto it = std::unique(all_layers.begin(), all_layers.end());
-  all_layers.resize(std::distance(all_layers.begin(), it));
-  if (all_layers.size() > GlCanvas::kMaxNumberRealZLayers) {
-    ORBIT_ERROR("Too many z-layers. The current number is %d", all_layers.size());
-  }
-
-  for (float layer : all_layers) {
+  {
+    ORBIT_SCOPE("Layer gathering and sorting");
     if (time_graph_ != nullptr) {
-      time_graph_->GetBatcher().DrawLayer(layer, picking_mode_ != PickingMode::kNone);
+      all_groups_sorted = time_graph_->GetBatcher().GetNonEmptyRenderGroups();
+      orbit_base::Append(all_groups_sorted, time_graph_->GetTextRenderer()->GetRenderGroups());
     }
-    ui_batcher_.DrawLayer(layer, picking_mode_ != PickingMode::kNone);
+    orbit_base::Append(all_groups_sorted, ui_batcher_.GetNonEmptyRenderGroups());
+    orbit_base::Append(all_groups_sorted, text_renderer_.GetRenderGroups());
+
+    // Sort and remove duplicates.
+    std::sort(all_groups_sorted.begin(), all_groups_sorted.end());
+    auto it = std::unique(all_groups_sorted.begin(), all_groups_sorted.end());
+    all_groups_sorted.erase(it, all_groups_sorted.end());
+  }
+
+  if (time_graph_layout_->GetRenderDebugLayers() && picking_mode_ == PickingMode::kNone) {
+    DrawLayerDebugInfo(all_groups_sorted, painter);
+    return;
+  }
+
+  for (const orbit_gl::BatchRenderGroupId& group : all_groups_sorted) {
+    orbit_gl::StencilConfig stencil = render_group_manager_.GetGroupState(group.name).stencil;
+    if (stencil.enabled) {
+      Vec2i stencil_screen_pos = viewport_.WorldToScreen(Vec2(stencil.pos[0], stencil.pos[1]));
+      Vec2i stencil_screen_size = viewport_.WorldToScreen(Vec2(stencil.size[0], stencil.size[1]));
+      painter->setClipRect(QRect(stencil_screen_pos[0], stencil_screen_pos[1],
+                                 stencil_screen_size[0], stencil_screen_size[1]));
+      painter->setClipping(true);
+    } else {
+      painter->setClipping(false);
+    }
+
+    if (time_graph_ != nullptr) {
+      time_graph_->GetBatcher().DrawRenderGroup(group, picking_mode_ != PickingMode::kNone);
+    }
+    ui_batcher_.DrawRenderGroup(group, picking_mode_ != PickingMode::kNone);
+
+    // The painter is in "native painting mode" all the time and we merely leave it for rendering
+    // the text here. Compare GlCanvas::Render - that's where we enter native painting.
+    CleanupGlState();
+    painter->endNativePainting();
 
     if (picking_mode_ == PickingMode::kNone) {
-      text_renderer_.RenderLayer(layer);
-      RenderText(layer);
+      text_renderer_.DrawRenderGroup(painter, render_group_manager_, group);
+      if (time_graph_ != nullptr) {
+        ORBIT_SCOPE("CaptureWindow: Text Rendering");
+        time_graph_->GetTextRenderer()->DrawRenderGroup(painter, render_group_manager_, group);
+      }
     }
+
+    painter->beginNativePainting();
+    PrepareGlState();
   }
 }
 
@@ -564,7 +631,8 @@ void CaptureWindow::set_draw_help(bool draw_help) {
 
 void CaptureWindow::CreateTimeGraph(CaptureData* capture_data) {
   time_graph_ =
-      std::make_unique<TimeGraph>(this, app_, &viewport_, capture_data, &GetPickingManager());
+      std::make_unique<TimeGraph>(this, app_, &viewport_, capture_data, &GetPickingManager(),
+                                  &render_group_manager_, time_graph_layout_);
 }
 
 Batcher& CaptureWindow::GetBatcherById(BatcherId batcher_id) {
@@ -586,74 +654,85 @@ void CaptureWindow::RequestUpdatePrimitives() {
 }
 
 [[nodiscard]] bool CaptureWindow::IsRedrawNeeded() const {
-  return GlCanvas::IsRedrawNeeded() || (time_graph_ != nullptr && time_graph_->IsRedrawNeeded());
+  return GlCanvas::IsRedrawNeeded() ||
+         (time_graph_ != nullptr &&
+          time_graph_->GetRedrawTypeRequired() != TimeGraph::RedrawType::kNone);
 }
 
-void CaptureWindow::RenderImGuiDebugUI() {
-  if (ImGui::CollapsingHeader("Layout Properties")) {
-    if (time_graph_ != nullptr && time_graph_->GetLayout().DrawProperties()) {
-      RequestUpdatePrimitives();
-    }
+std::string CaptureWindow::GetCaptureInfo() const {
+  std::string capture_info;
 
-    static bool draw_text_outline = false;
-    if (ImGui::Checkbox("Draw Text Outline", &draw_text_outline)) {
-      TextRenderer::SetDrawOutline(draw_text_outline);
-      RequestUpdatePrimitives();
+  const auto append_variable = [&capture_info](std::string_view name, const auto& value) {
+    if constexpr (std::is_floating_point_v<std::decay_t<decltype(value)>>) {
+      absl::StrAppendFormat(&capture_info, "%s: %f\n", name, value);
+    } else if constexpr (std::is_integral_v<std::decay_t<decltype(value)>>) {
+      absl::StrAppendFormat(&capture_info, "%s: %d\n", name, value);
+    } else {
+      static_assert(!std::is_same_v<decltype(value), decltype(value)>,
+                    "Value type is not supported.");
     }
-  }
+  };
 
-  if (ImGui::CollapsingHeader("Capture Info")) {
-    IMGUI_VAR_TO_TEXT(viewport_.GetScreenWidth());
-    IMGUI_VAR_TO_TEXT(viewport_.GetScreenHeight());
-    IMGUI_VAR_TO_TEXT(viewport_.GetWorldWidth());
-    IMGUI_VAR_TO_TEXT(viewport_.GetWorldHeight());
-    IMGUI_VAR_TO_TEXT(mouse_move_pos_screen_[0]);
-    IMGUI_VAR_TO_TEXT(mouse_move_pos_screen_[1]);
-    if (time_graph_ != nullptr) {
-      IMGUI_VAR_TO_TEXT(time_graph_->GetTrackContainer()->GetNumVisiblePrimitives());
-      IMGUI_VAR_TO_TEXT(time_graph_->GetTrackManager()->GetAllTracks().size());
-      IMGUI_VAR_TO_TEXT(time_graph_->GetMinTimeUs());
-      IMGUI_VAR_TO_TEXT(time_graph_->GetMaxTimeUs());
-      IMGUI_VAR_TO_TEXT(time_graph_->GetCaptureMin());
-      IMGUI_VAR_TO_TEXT(time_graph_->GetCaptureMax());
-      IMGUI_VAR_TO_TEXT(time_graph_->GetTimeWindowUs());
-      const CaptureData* capture_data = time_graph_->GetCaptureData();
-      if (capture_data != nullptr) {
-        IMGUI_VAR_TO_TEXT(capture_data->GetCallstackData().GetCallstackEventsCount());
-      }
-    }
-  }
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
+#define APPEND_VARIABLE(name) append_variable(#name, name)
 
-  if (ImGui::CollapsingHeader("Performance")) {
-    for (auto& item : scoped_frame_times_) {
-      IMGUI_VARN_TO_TEXT(item.second->GetAverageTimeMs(),
-                         (std::string("Avg time in ms: ") + item.first));
-      IMGUI_VARN_TO_TEXT(item.second->GetMinTimeMs(),
-                         (std::string("Min time in ms: ") + item.first));
-      IMGUI_VARN_TO_TEXT(item.second->GetMaxTimeMs(),
-                         (std::string("Max time in ms: ") + item.first));
+  APPEND_VARIABLE(viewport_.GetScreenWidth());
+  APPEND_VARIABLE(viewport_.GetScreenHeight());
+  APPEND_VARIABLE(viewport_.GetWorldWidth());
+  APPEND_VARIABLE(viewport_.GetWorldHeight());
+  APPEND_VARIABLE(mouse_move_pos_screen_[0]);
+  APPEND_VARIABLE(mouse_move_pos_screen_[1]);
+  if (time_graph_ != nullptr) {
+    APPEND_VARIABLE(time_graph_->GetTrackContainer()->GetNumVisiblePrimitives());
+    APPEND_VARIABLE(time_graph_->GetTrackManager()->GetAllTracks().size());
+    APPEND_VARIABLE(time_graph_->GetMinTimeUs());
+    APPEND_VARIABLE(time_graph_->GetMaxTimeUs());
+    APPEND_VARIABLE(time_graph_->GetCaptureMin());
+    APPEND_VARIABLE(time_graph_->GetCaptureMax());
+    APPEND_VARIABLE(time_graph_->GetTimeWindowUs());
+    const CaptureData* capture_data = time_graph_->GetCaptureData();
+    if (capture_data != nullptr) {
+      APPEND_VARIABLE(capture_data->GetCallstackData().GetCallstackEventsCount());
     }
   }
 
-  if (ImGui::CollapsingHeader("Selection Summary")) {
-    const std::string& selection_summary = selection_stats_.GetSummary();
-
-    if (ImGui::Button("Copy to clipboard")) {
-      app_->SetClipboard(selection_summary);
-    }
-
-    ImGui::TextUnformatted(selection_summary.c_str(),
-                           selection_summary.c_str() + selection_summary.size());
-  }
+#undef APPEND_VARIABLE
+  return capture_info;
 }
 
-void CaptureWindow::RenderText(float layer) {
-  ORBIT_SCOPE_FUNCTION;
-  if (time_graph_ == nullptr) return;
-  if (picking_mode_ == PickingMode::kNone) {
-    time_graph_->DrawText(layer);
-  }
+namespace {
+void AppendBatcherStatistics(std::string& output, const std::string& batcher_name,
+                             const Batcher::Statistics& statistics) {
+  absl::StrAppendFormat(&output, "%s batcher memory: %.2f MB\n", batcher_name,
+                        static_cast<float>(statistics.reserved_memory) / 1024 / 1024);
+  absl::StrAppendFormat(&output, "%s batcher stored vertices: %d\n", batcher_name,
+                        statistics.stored_vertices);
+  absl::StrAppendFormat(&output, "%s batcher stored layers: %d\n", batcher_name,
+                        statistics.stored_layers);
+  absl::StrAppendFormat(&output, "%s batcher draw calls: %d\n", batcher_name,
+                        statistics.draw_calls);
 }
+}  // namespace
+
+std::string CaptureWindow::GetPerformanceInfo() const {
+  std::string performance_info;
+  for (const auto& item : scoped_frame_times_) {
+    absl::StrAppendFormat(&performance_info, "Avg time for %s: %f ms\n", item.first,
+                          item.second->GetAverageTimeMs());
+    absl::StrAppendFormat(&performance_info, "Min time for %s: %f ms\n", item.first,
+                          item.second->GetMinTimeMs());
+    absl::StrAppendFormat(&performance_info, "Max time for %s: %f ms\n", item.first,
+                          item.second->GetMaxTimeMs());
+  }
+  if (time_graph_ != nullptr) {
+    AppendBatcherStatistics(performance_info, "TimeGraph",
+                            time_graph_->GetBatcher().GetStatistics());
+  }
+  AppendBatcherStatistics(performance_info, "UI", ui_batcher_.GetStatistics());
+  return performance_info;
+}
+
+std::string CaptureWindow::GetSelectionSummary() const { return selection_stats_.GetSummary(); }
 
 void CaptureWindow::RenderHelpUi() {
   constexpr int kOffset = 30;
@@ -661,62 +740,30 @@ void CaptureWindow::RenderHelpUi() {
 
   Vec2 text_bounding_box_pos;
   Vec2 text_bounding_box_size;
-  // TODO(b/180312795): Use TimeGraphLayout's font size again.
-  text_renderer_.AddText(GetHelpText(), world_pos[0], world_pos[1], GlCanvas::kZValueUi,
-                         {14, Color(255, 255, 255, 255), -1.f /*max_size*/}, &text_bounding_box_pos,
-                         &text_bounding_box_size);
+  text_renderer_.AddText(
+      GetHelpText().c_str(), world_pos[0], world_pos[1], GlCanvas::kZValueUi,
+      {time_graph_layout_->GetFontSize(), Color(255, 255, 255, 255), -1.f /*max_size*/},
+      &text_bounding_box_pos, &text_bounding_box_size);
 
-  const Color kBoxColor(50, 50, 50, 230);
-  const float kMargin = 15.f;
-  const float kRoundingRadius = 20.f;
+  const Color box_color(50, 50, 50, 243);
+  constexpr float kMargin = 15.f;
+  constexpr float kRoundingRadius = 20.f;
   primitive_assembler_.AddRoundedBox(text_bounding_box_pos, text_bounding_box_size,
-                                     GlCanvas::kZValueUi, kRoundingRadius, kBoxColor, kMargin);
+                                     GlCanvas::kZValueUi, kRoundingRadius, box_color, kMargin);
 }
 
-const char* CaptureWindow::GetHelpText() const {
-  const char* help_message =
-      "Start/Stop Capture: 'F5'\n\n"
-      "Pan: 'A','D' or \"Left Click + Drag\"\n\n"
-      "Scroll: Arrow Keys or Mouse Wheel\n\n"
-      "Timeline Zoom (10%): 'W', 'S' or \"Ctrl + Mouse Wheel\"\n\n"
-      "Zoom to Time Range: \"Ctrl + Right Click + Drag\"\n\n"
+std::string CaptureWindow::GetHelpText() const {
+  decltype(auto) help_message{
+      u8"Start/Stop Capture: F5\n\n"
+      "Pan:  \U0001F130 ,  \U0001F133  OR Left Click + Drag\n\n"
+      "Scroll:  ← ,  ↑ ,  → ,  ↓  OR Mouse Wheel\n\n"
+      "Timeline Zoom (10%):  \U0001F146 ,  \U0001F142  OR Ctrl + Mouse Wheel\n\n"
+      "Zoom to Time Range: Ctrl + Right Click + Drag\n\n"
       "Select: Left Click\n\n"
-      "Measure: \"Right Click + Drag\"\n\n"
-      "UI Scale (10%): \"Ctrl + '+'/'-' \"\n\n"
-      "Toggle Help: Ctrl + 'H'";
-  return help_message;
-}
-
-inline double GetIncrementMs(double milli_seconds) {
-  constexpr double kDay = 24 * 60 * 60 * 1000;
-  constexpr double kHour = 60 * 60 * 1000;
-  constexpr double kMinute = 60 * 1000;
-  constexpr double kSecond = 1000;
-  constexpr double kMilli = 1;
-  constexpr double kMicro = 0.001;
-  constexpr double kNano = 0.000001;
-
-  std::string res;
-
-  if (milli_seconds < kMicro) {
-    return kNano;
-  }
-  if (milli_seconds < kMilli) {
-    return kMicro;
-  }
-  if (milli_seconds < kSecond) {
-    return kMilli;
-  }
-  if (milli_seconds < kMinute) {
-    return kSecond;
-  }
-  if (milli_seconds < kHour) {
-    return kMinute;
-  }
-  if (milli_seconds < kDay) {
-    return kHour;
-  }
-  return kDay;
+      "Measure: Right Click + Drag\n\n"
+      "UI Scale (10%): Ctrl + '±'\n\n"
+      "Toggle Help: Ctrl +  \U0001F137"};
+  return std::string(std::begin(help_message), std::end(help_message));
 }
 
 void CaptureWindow::RenderSelectionOverlay() {
@@ -727,35 +774,92 @@ void CaptureWindow::RenderSelectionOverlay() {
   uint64_t min_time = std::min(select_start_time_, select_stop_time_);
   uint64_t max_time = std::max(select_start_time_, select_stop_time_);
 
-  float from_world = time_graph_->GetWorldFromTick(min_time);
-  float to_world = time_graph_->GetWorldFromTick(max_time);
-  float stop_pos_world = time_graph_->GetWorldFromTick(select_stop_time_);
+  float start_world = time_graph_->ClampToTimelineUiElementWorldX(
+      time_graph_->GetWorldFromUs(time_graph_->GetMinTimeUs()));
+  float end_world = time_graph_->ClampToTimelineUiElementWorldX(
+      time_graph_->GetWorldFromUs(time_graph_->GetMaxTimeUs()));
+  float select_start_world =
+      time_graph_->ClampToTimelineUiElementWorldX(time_graph_->GetWorldFromTick(min_time));
+  float select_end_world =
+      time_graph_->ClampToTimelineUiElementWorldX(time_graph_->GetWorldFromTick(max_time));
+  float stop_pos_world =
+      time_graph_->ClampToTimelineUiElementWorldX(time_graph_->GetWorldFromTick(select_stop_time_));
+  float initial_y_position = time_graph_layout_->GetTimeBarHeight();
+  float bar_height = viewport_.GetWorldHeight() - initial_y_position;
 
-  float size_x = to_world - from_world;
-  // TODO(http://b/226401787): Allow green selection overlay to be on top of the Timeline after
-  // modifying its design and how the overlay is drawn
-  float initial_y_position = time_graph_->GetLayout().GetTimeBarHeight();
-  Vec2 pos(from_world, initial_y_position);
-  Vec2 size(size_x, viewport_.GetWorldHeight() - initial_y_position);
+  // We are entirely within the selection and do not have to draw any overlay.
+  if (select_start_world < start_world && end_world < select_end_world) return;
 
-  std::string text = orbit_display_formats::GetDisplayTime(TicksToDuration(min_time, max_time));
-  const Color color(0, 128, 0, 128);
+  const Color overlay_color(0, 0, 0, 128);
+  const Color border_lines_color(255, 255, 255, 255);
 
-  Quad box = MakeBox(pos, size);
-  primitive_assembler_.AddBox(box, GlCanvas::kZValueOverlay, color);
+  if (start_world < select_start_world) {
+    Quad box = MakeBox(Vec2(start_world, initial_y_position),
+                       Vec2(select_start_world - start_world, bar_height));
+    primitive_assembler_.AddBox(box, GlCanvas::kZValueOverlay, overlay_color);
+    if (select_start_world < end_world) {
+      primitive_assembler_.AddVerticalLine(Vec2(select_start_world, initial_y_position), bar_height,
+                                           GlCanvas::kZValueOverlay, border_lines_color);
+    }
+  }
+  if (select_end_world < end_world) {
+    Quad box = MakeBox(Vec2(select_end_world, initial_y_position),
+                       Vec2(end_world - select_end_world, bar_height));
+    primitive_assembler_.AddBox(box, GlCanvas::kZValueOverlay, overlay_color);
+    if (start_world < select_end_world) {
+      primitive_assembler_.AddVerticalLine(Vec2(select_end_world, initial_y_position), bar_height,
+                                           GlCanvas::kZValueOverlay, border_lines_color);
+    }
+  }
 
   TextRenderer::HAlign alignment = select_stop_pos_world_[0] < select_start_pos_world_[0]
                                        ? TextRenderer::HAlign::Left
                                        : TextRenderer::HAlign::Right;
   TextRenderer::TextFormatting formatting;
-  formatting.font_size = time_graph_->GetLayout().GetFontSize();
+  formatting.font_size = time_graph_layout_->GetFontSize();
   formatting.color = Color(255, 255, 255, 255);
   formatting.halign = alignment;
-
+  std::string text = orbit_display_formats::GetDisplayTime(TicksToDuration(min_time, max_time));
   text_renderer_.AddText(text.c_str(), stop_pos_world, select_stop_pos_world_[1],
                          GlCanvas::kZValueOverlay, formatting);
+}
 
-  const unsigned char g = 100;
-  Color grey(g, g, g, 255);
-  primitive_assembler_.AddVerticalLine(pos, size[1], GlCanvas::kZValueOverlay, grey);
+void CaptureWindow::DrawLayerDebugInfo(
+    const std::vector<orbit_gl::BatchRenderGroupId>& sorted_groups, QPainter* painter) {
+  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+
+  for (const auto& group : sorted_groups) {
+    const orbit_gl::StencilConfig& stencil =
+        render_group_manager_.GetGroupState(group.name).stencil;
+    if (!stencil.enabled) continue;
+
+    PrepareGlState();
+    if (time_graph_ != nullptr) {
+      const Color color = time_graph_->GetColor(static_cast<uint32_t>(
+          std::hash<std::string>()(group.name) % std::numeric_limits<uint32_t>::max()));
+      glColor4f(static_cast<float>(color[0]) / 255.f, static_cast<float>(color[1]) / 255.f,
+                static_cast<float>(color[2]) / 255.f, 1.f);
+    } else {
+      glColor4f(1, 0, 0, 1);
+    }
+    glBegin(GL_POLYGON);
+    {
+      glVertex2f(stencil.pos[0], stencil.pos[1]);
+      glVertex2f(stencil.pos[0] + stencil.size[0], stencil.pos[1]);
+      glVertex2f(stencil.pos[0] + stencil.size[0], stencil.pos[1] + stencil.size[1]);
+      glVertex2f(stencil.pos[0], stencil.pos[1] + stencil.size[1]);
+    }
+    glEnd();
+    CleanupGlState();
+
+    painter->endNativePainting();
+    font.setPixelSize(14);
+    painter->setFont(font);
+    painter->setPen(QColor(255, 255, 255));
+    const Vec2i pos = viewport_.WorldToScreen(Vec2(stencil.pos[0], stencil.pos[1]));
+    const Vec2i size = viewport_.WorldToScreen(Vec2(stencil.size[0], stencil.size[1]));
+    painter->drawText(pos[0], pos[1], size[0], size[1], Qt::AlignLeft,
+                      QString::fromStdString(group.name));
+    painter->beginNativePainting();
+  }
 }

@@ -5,18 +5,37 @@
 #ifndef MIZAR_DATA_MIZAR_DATA_H_
 #define MIZAR_DATA_MIZAR_DATA_H_
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
+#include <absl/types/span.h>
+#include <stdint.h>
 
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "CaptureClient/AbstractCaptureListener.h"
+#include "ClientData/ApiStringEvent.h"
+#include "ClientData/ApiTrackValue.h"
 #include "ClientData/CaptureData.h"
+#include "ClientData/CgroupAndProcessMemoryInfo.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifierProvider.h"
 #include "ClientData/ModuleManager.h"
+#include "ClientData/PageFaultsInfo.h"
+#include "ClientData/ProcessData.h"
+#include "ClientData/ScopeId.h"
+#include "ClientData/SystemMemoryInfo.h"
+#include "ClientData/ThreadStateSliceInfo.h"
+#include "ClientData/TimerTrackDataIdManager.h"
 #include "ClientProtos/capture_data.pb.h"
+#include "GrpcProtos/capture.pb.h"
 #include "GrpcProtos/module.pb.h"
+#include "MizarBase/AbsoluteAddress.h"
+#include "MizarBase/FunctionSymbols.h"
 #include "MizarBase/Time.h"
 #include "MizarDataProvider.h"
 #include "OrbitPaths/Paths.h"
@@ -42,7 +61,7 @@ class MizarData : public orbit_capture_client::AbstractCaptureListener<MizarData
   MizarData(MizarData&& other) = default;
   MizarData& operator=(MizarData&& other) = delete;
 
-  virtual ~MizarData() = default;
+  ~MizarData() override = default;
 
   [[nodiscard]] const absl::flat_hash_map<PresentEvent::Source, std::vector<PresentEvent>>&
   source_to_present_events() const override {
@@ -78,13 +97,11 @@ class MizarData : public orbit_capture_client::AbstractCaptureListener<MizarData
 
   void OnTimer(const orbit_client_protos::TimerInfo& timer_info) override;
 
-  // Ignored, as we only load D, MS and sampling data.
-  void OnKeyAndString(uint64_t /*key*/, std::string /*str*/) override {}
-
   void OnModuleUpdate(uint64_t /*timestamp_ns*/,
                       orbit_grpc_protos::ModuleInfo module_info) override {
-    GetMutableCaptureData().mutable_process()->AddOrUpdateModuleInfo(module_info);
     UpdateModules({module_info});
+
+    GetMutableCaptureData().mutable_process()->AddOrUpdateModuleInfo(module_info);
   }
   void OnModulesSnapshot(uint64_t /*timestamp_ns*/,
                          std::vector<orbit_grpc_protos::ModuleInfo> module_infos) override {
@@ -93,10 +110,19 @@ class MizarData : public orbit_capture_client::AbstractCaptureListener<MizarData
   void OnPresentEvent(const PresentEvent& event) override {
     source_to_present_events_[event.source()].push_back(event);
   }
+
+  // The following events are ignored, as we only load D, MS and sampling data.
+  void OnCgroupAndProcessMemoryInfo(const orbit_client_data::CgroupAndProcessMemoryInfo&
+                                    /*cgroup_and_process_memory_info*/) override {}
+  void OnPageFaultsInfo(const orbit_client_data::PageFaultsInfo&
+                        /*page_faults_info*/) override {}
+  void OnSystemMemoryInfo(const orbit_client_data::SystemMemoryInfo&
+                          /*system_memory_info*/) override {}
+  void OnKeyAndString(uint64_t /*key*/, std::string /*str*/) override {}
   void OnThreadStateSlice(orbit_client_data::ThreadStateSliceInfo /*thread_state_slice*/) override {
   }
   void OnApiStringEvent(const orbit_client_data::ApiStringEvent& /*unused*/) override {}
-  void OnApiTrackValue(const orbit_client_data::ApiTrackValue&) override {}
+  void OnApiTrackValue(const orbit_client_data::ApiTrackValue& /*unused*/) override {}
   void OnWarningEvent(orbit_grpc_protos::WarningEvent /*warning_event*/) override {}
   void OnClockResolutionEvent(
       orbit_grpc_protos::ClockResolutionEvent /*clock_resolution_event*/) override {}
@@ -119,7 +145,7 @@ class MizarData : public orbit_capture_client::AbstractCaptureListener<MizarData
                                         /*out_of_order_events_discarded_event*/) override {}
 
  private:
-  void UpdateModules(const std::vector<orbit_grpc_protos::ModuleInfo>& module_infos);
+  void UpdateModules(absl::Span<const orbit_grpc_protos::ModuleInfo> module_infos);
 
   void LoadSymbolsForAllModules();
 
@@ -127,6 +153,7 @@ class MizarData : public orbit_capture_client::AbstractCaptureListener<MizarData
 
   [[nodiscard]] std::string GetModuleFilenameWithoutExtension(AbsoluteAddress address) const;
 
+  std::unique_ptr<orbit_client_data::ModuleIdentifierProvider> module_identifier_provider_;
   std::unique_ptr<orbit_client_data::ModuleManager> module_manager_;
   orbit_symbols::SymbolHelper symbol_helper_{orbit_paths::CreateOrGetCacheDirUnsafe()};
   absl::flat_hash_map<PresentEvent::Source, std::vector<PresentEvent>> source_to_present_events_;

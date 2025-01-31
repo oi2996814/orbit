@@ -4,24 +4,25 @@
 
 #include "DataViews/FunctionsDataView.h"
 
-#include <absl/flags/flag.h>
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
+#include <absl/types/span.h>
 #include <stddef.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
+#include <optional>
 
+#include "ApiInterface/Orbit.h"
 #include "ClientData/CaptureData.h"
 #include "ClientData/FunctionInfo.h"
-#include "ClientData/ModuleAndFunctionLookup.h"
 #include "DataViews/AppInterface.h"
 #include "DataViews/CompareAscendingOrDescending.h"
 #include "DataViews/DataViewType.h"
-#include "Introspection/Introspection.h"
-#include "OrbitBase/Append.h"
 #include "OrbitBase/Chunk.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/TaskGroup.h"
@@ -41,7 +42,7 @@ const std::string FunctionsDataView::kApiScopeAsyncTypeString = "MA";
 const std::string FunctionsDataView::kDynamicallyInstrumentedFunctionTypeString = "D";
 
 const std::vector<DataView::Column>& FunctionsDataView::GetColumns() {
-  static const std::vector<Column> columns = [] {
+  static const std::vector<Column> kColumns = [] {
     std::vector<Column> columns;
     columns.resize(kNumColumns);
     columns[kColumnSelected] = {"Hooked", .0f, SortingOrder::kDescending};
@@ -51,7 +52,7 @@ const std::vector<DataView::Column>& FunctionsDataView::GetColumns() {
     columns[kColumnAddressInModule] = {"Address in module", .0f, SortingOrder::kAscending};
     return columns;
   }();
-  return columns;
+  return kColumns;
 }
 
 bool FunctionsDataView::ShouldShowSelectedFunctionIcon(AppInterface* app,
@@ -125,6 +126,7 @@ std::string FunctionsDataView::GetValue(int row, int column) {
   }
 
 void FunctionsDataView::DoSort() {
+  ORBIT_SCOPE_FUNCTION;
   // TODO(antonrohr): This sorting function can take a lot of time when a large
   // number of functions is used (several seconds). This function is currently
   // executed on the main thread and therefore freezes the UI and interrupts the
@@ -164,8 +166,9 @@ void FunctionsDataView::DoSort() {
   }
 }
 
-DataView::ActionStatus FunctionsDataView::GetActionStatus(
-    std::string_view action, int clicked_index, const std::vector<int>& selected_indices) {
+DataView::ActionStatus FunctionsDataView::GetActionStatus(std::string_view action,
+                                                          int clicked_index,
+                                                          absl::Span<const int> selected_indices) {
   if (action == kMenuActionDisassembly || action == kMenuActionSourceCode) {
     return ActionStatus::kVisibleAndEnabled;
   }
@@ -213,7 +216,7 @@ void FunctionsDataView::DoFilter() {
   orbit_base::TaskGroup task_group;
 
   for (size_t i = 0; i < chunks.size(); ++i) {
-    task_group.AddTask([& chunk = chunks[i], &result = task_results[i], this]() {
+    task_group.AddTask([&chunk = chunks[i], &result = task_results[i], this]() {
       ORBIT_SCOPE("FunctionsDataView::DoFilter Task");
       for (const FunctionInfo*& function : chunk) {
         ORBIT_CHECK(function != nullptr);
@@ -221,7 +224,7 @@ void FunctionsDataView::DoFilter() {
         std::string module = absl::AsciiStrToLower(
             std::filesystem::path(function->module_path()).filename().string());
 
-        const auto is_token_found = [&name, &module](const std::string& token) {
+        const auto is_token_found = [&name, &module](std::string_view token) {
           return name.find(token) != std::string::npos || module.find(token) != std::string::npos;
         };
 
@@ -243,20 +246,21 @@ void FunctionsDataView::DoFilter() {
 
 void FunctionsDataView::AddFunctions(
     std::vector<const orbit_client_data::FunctionInfo*> functions) {
+  ORBIT_SCOPE_FUNCTION;
   functions_.insert(functions_.end(), functions.begin(), functions.end());
-  OnDataChanged();
 }
 
-void FunctionsDataView::RemoveFunctionsOfModule(const std::string& module_path) {
+void FunctionsDataView::RemoveFunctionsOfModule(std::string_view module_path) {
+  ORBIT_SCOPE_FUNCTION;
   functions_.erase(std::remove_if(functions_.begin(), functions_.end(),
                                   [&module_path](const FunctionInfo* function_info) {
                                     return function_info->module_path() == module_path;
                                   }),
                    functions_.end());
-  OnDataChanged();
 }
 
 void FunctionsDataView::ClearFunctions() {
+  ORBIT_SCOPE_FUNCTION;
   functions_.clear();
   OnDataChanged();
 }

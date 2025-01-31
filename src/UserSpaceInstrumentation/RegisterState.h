@@ -5,22 +5,18 @@
 #ifndef USER_SPACE_INSTRUMENTATION_REGISTER_STATE_H_
 #define USER_SPACE_INSTRUMENTATION_REGISTER_STATE_H_
 
+#include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include "OrbitBase/Result.h"
 
 namespace orbit_user_space_instrumentation {
 
-// The structs below are defined to match the memory layout of the binary blobs containing the
-// register state of the cpu (as returned by the kernel). They should not used directly - see
-// comment on class "RegisterState" below.
-#define PACKED_START _Pragma("pack(push, 1)")
-#define PACKED_END _Pragma("pack(pop)")
-
-PACKED_START
 struct GeneralPurposeRegisters32 {
   uint32_t ebx;
   uint32_t ecx;
@@ -40,6 +36,8 @@ struct GeneralPurposeRegisters32 {
   uint32_t esp;
   uint32_t xss;
 };
+static_assert(sizeof(GeneralPurposeRegisters32) == 68,
+              "GeneralPurposeRegisters32 is not 68 bytes of size");
 
 struct GeneralPurposeRegisters64 {
   uint64_t r15;
@@ -70,6 +68,8 @@ struct GeneralPurposeRegisters64 {
   uint64_t fs;
   uint64_t gs;
 };
+static_assert(sizeof(GeneralPurposeRegisters64) == 216,
+              "GeneralPurposeRegisters64 is not 216 bytes of size");
 
 union GeneralPurposeRegisters {
   GeneralPurposeRegisters32 x86_32;
@@ -80,14 +80,12 @@ struct MmsAs80BitFloat {
   uint64_t mantissa;
   uint16_t sign_exp;
 };
-static_assert(sizeof(MmsAs80BitFloat) == 10, "MmsAsFloat is not 10 bytes of size");
+static_assert(offsetof(MmsAs80BitFloat, sign_exp) == sizeof(MmsAs80BitFloat::mantissa),
+              "MmsAs80BitFloat is not properly aligned.");
 
-struct MmsRegister {
-  union {
-    std::array<uint8_t, 10> bytes;
-    MmsAs80BitFloat as_float;
-  };
-  std::array<uint8_t, 6> reserved;
+union MmsRegister {
+  std::array<uint8_t, 10> bytes;
+  MmsAs80BitFloat as_float;
 };
 static_assert(sizeof(MmsRegister) == 16, "MmsRegister is not 16 bytes of size");
 
@@ -145,10 +143,6 @@ struct YmmHiRegister {
 struct YmmHi {
   std::array<YmmHiRegister, 16> ymm;
 };
-PACKED_END
-
-#undef PACKED_START
-#undef PACKED_END
 
 // Backup, modify and restore register state of a halted thread.
 //

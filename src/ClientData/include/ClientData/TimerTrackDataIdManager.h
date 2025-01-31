@@ -6,9 +6,14 @@
 #define CLIENT_DATA_TIMER_TRACK_DATA_ID_MANAGER_H_
 
 #include <OrbitBase/Logging.h>
+#include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
+#include <absl/synchronization/mutex.h>
 
+#include <cstdint>
 #include <mutex>
+#include <string>
+#include <string_view>
 
 #include "ClientProtos/capture_data.pb.h"
 
@@ -25,7 +30,7 @@ class TimerTrackDataIdManager {
   [[nodiscard]] uint32_t GenerateSchedulerTrackId() const { return scheduler_track_id_; }
   [[nodiscard]] uint32_t GenerateFrameTrackId(uint64_t function_id);
   [[nodiscard]] uint32_t GenerateGpuTrackId(uint64_t timeline_hash);
-  [[nodiscard]] uint32_t GenerateAsyncTrackId(const std::string& name);
+  [[nodiscard]] uint32_t GenerateAsyncTrackId(std::string_view name);
   [[nodiscard]] uint32_t GenerateThreadTrackId(uint32_t thread_id);
 
  private:

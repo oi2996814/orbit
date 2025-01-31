@@ -11,15 +11,17 @@
 #include <absl/strings/str_replace.h>
 #include <absl/strings/str_split.h>
 #include <absl/types/span.h>
-#include <llvm/Object/Binary.h>
-#include <llvm/Object/ObjectFile.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <set>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "Introspection/Introspection.h"
@@ -28,12 +30,12 @@
 #include "ObjectUtils/SymbolsFile.h"
 #include "OrbitBase/ExecutablePath.h"
 #include "OrbitBase/File.h"
+#include "OrbitBase/Future.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
 #include "OrbitBase/Result.h"
 #include "OrbitBase/StopSource.h"
 #include "OrbitBase/WriteStringToFile.h"
-#include "SymbolProvider/ModuleIdentifier.h"
 #include "SymbolProvider/StructuredDebugDirectorySymbolProvider.h"
 #include "SymbolProvider/SymbolLoadingOutcome.h"
 #include "Symbols/SymbolUtils.h"
@@ -46,7 +48,6 @@ using orbit_object_utils::CreateObjectFile;
 using orbit_object_utils::CreateSymbolsFile;
 using orbit_object_utils::ElfFile;
 using orbit_object_utils::ObjectFileInfo;
-using orbit_symbol_provider::ModuleIdentifier;
 using orbit_symbol_provider::StructuredDebugDirectorySymbolProvider;
 using orbit_symbol_provider::SymbolLoadingOutcome;
 using SymbolSource = orbit_symbol_provider::SymbolLoadingSuccessResult::SymbolSource;
@@ -162,7 +163,7 @@ FindStructuredDebugDirectorySymbolProviders() {
 
 // TODO(b/246743231): Remove this function when not needed anymore.
 [[nodiscard]] static std::vector<StructuredDebugDirectorySymbolProvider>
-CreateStructuredDebugDirectorySymbolProviders(const std::vector<std::filesystem::path>& paths) {
+CreateStructuredDebugDirectorySymbolProviders(absl::Span<const std::filesystem::path> paths) {
   std::vector<StructuredDebugDirectorySymbolProvider> result;
   result.reserve(paths.size());
   for (const auto& path : paths) {
@@ -176,15 +177,15 @@ SymbolHelper::SymbolHelper(fs::path cache_directory)
       structured_debug_directory_providers_(FindStructuredDebugDirectorySymbolProviders()) {}
 
 SymbolHelper::SymbolHelper(std::filesystem::path cache_directory,
-                           const std::vector<std::filesystem::path>& structured_debug_directories)
+                           absl::Span<const std::filesystem::path> structured_debug_directories)
     : cache_directory_(std::move(cache_directory)),
       structured_debug_directory_providers_(
           CreateStructuredDebugDirectorySymbolProviders(structured_debug_directories)) {}
 
 ErrorMessageOr<fs::path> SymbolHelper::FindSymbolsFileLocally(
-    const fs::path& module_path, const std::string& build_id,
-    const ModuleInfo::ObjectFileType& object_file_type, absl::Span<const fs::path> paths) const {
-  ORBIT_SCOPE_FUNCTION;
+    const fs::path& module_path, std::string_view build_id,
+    const ModuleInfo::ObjectFileType& object_file_type, absl::Span<const fs::path> paths) {
+  ORBIT_SCOPE(absl::StrFormat("FindSymbolsFileLocally [%s]", module_path.string()).c_str());
   if (build_id.empty()) {
     return ErrorMessage(absl::StrFormat(
         "Could not find symbols file for module \"%s\", because it does not contain a build id.",
@@ -193,11 +194,11 @@ ErrorMessageOr<fs::path> SymbolHelper::FindSymbolsFileLocally(
 
   // structured debug directories is only supported for elf files
   if (object_file_type == ModuleInfo::kElfFile) {
-    for (const auto& provider : structured_debug_directory_providers_) {
-      const ModuleIdentifier module_id{module_path.string(), build_id};
+    for (auto& provider : structured_debug_directory_providers_) {
       const orbit_base::StopSource stop_source;
-      orbit_base::Future<SymbolLoadingOutcome> future =
-          provider.RetrieveSymbols(module_id, stop_source.GetStopToken());
+      orbit_base::Future<SymbolLoadingOutcome> future = provider.RetrieveSymbols(
+          {.module_path = module_path.string(), .build_id = std::string(build_id)},
+          stop_source.GetStopToken());
 
       // TODO(antonrohr): This `.Get()` makes this asynchronous future operation a syncronous
       // operation. This is okay for now.
@@ -254,7 +255,7 @@ ErrorMessageOr<fs::path> SymbolHelper::FindSymbolsFileLocally(
 }
 
 ErrorMessageOr<fs::path> SymbolHelper::FindSymbolsInCache(const fs::path& module_path,
-                                                          const std::string& build_id) const {
+                                                          std::string_view build_id) const {
   return FindSymbolsInCacheImpl(module_path, "symbols",
                                 [&build_id](const std::filesystem::path& cache_file_path) {
                                   return VerifySymbolFile(cache_file_path, build_id);
@@ -270,7 +271,7 @@ ErrorMessageOr<fs::path> SymbolHelper::FindSymbolsInCache(const fs::path& module
 }
 
 ErrorMessageOr<std::filesystem::path> SymbolHelper::FindObjectInCache(
-    const std::filesystem::path& module_path, const std::string& build_id,
+    const std::filesystem::path& module_path, std::string_view build_id,
     uint64_t expected_file_size) const {
   return FindSymbolsInCacheImpl(
       module_path, "object file",
@@ -349,7 +350,7 @@ ErrorMessageOr<orbit_grpc_protos::ModuleSymbols> SymbolHelper::LoadFallbackSymbo
 }
 
 ErrorMessageOr<fs::path> SymbolHelper::FindDebugInfoFileLocally(
-    std::string_view filename, uint32_t checksum, absl::Span<const fs::path> directories) const {
+    std::string_view filename, uint32_t checksum, absl::Span<const fs::path> directories) {
   std::set<fs::path> search_paths;
   for (const auto& directory : directories) {
     search_paths.insert(directory / filename);

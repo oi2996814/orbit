@@ -2,33 +2,43 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "TrackContainer.h"
+#include "OrbitGl/TrackContainer.h"
 
 #include <GteVector.h>
 #include <absl/container/flat_hash_map.h>
-#include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/str_format.h>
 #include <absl/time/time.h>
 #include <stddef.h>
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
+#include <map>
 #include <optional>
+#include <string>
 #include <utility>
 
-#include "AccessibleCaptureViewElement.h"
-#include "App.h"
+#include "ClientData/CallstackType.h"
+#include "ClientData/CaptureData.h"
+#include "ClientData/FunctionInfo.h"
 #include "ClientData/ScopeId.h"
-#include "CoreMath.h"
+#include "ClientData/TimestampIntervalSet.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "Geometry.h"
-#include "GlCanvas.h"
-#include "GlUtils.h"
-#include "OrbitBase/Append.h"
+#include "GrpcProtos/capture.pb.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Sort.h"
-#include "PickingManager.h"
-#include "ThreadColor.h"
-#include "TrackManager.h"
+#include "OrbitGl/AccessibleCaptureViewElement.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/ThreadColor.h"
+#include "OrbitGl/ThreadTrack.h"
+#include "OrbitGl/TrackManager.h"
 
 namespace orbit_gl {
 
@@ -88,7 +98,7 @@ void TrackContainer::VerticallyMoveIntoView(const Track& track) {
 
 int TrackContainer::GetNumVisiblePrimitives() const {
   int num_visible_primitives = 0;
-  for (auto track : track_manager_->GetAllTracks()) {
+  for (auto* track : track_manager_->GetAllTracks()) {
     num_visible_primitives += track->GetVisiblePrimitiveCount();
   }
   return num_visible_primitives;
@@ -109,7 +119,7 @@ void TrackContainer::UpdateTracksPosition() {
   float current_y = GetPos()[1] - vertical_scrolling_offset_;
 
   // Track height including space between them
-  for (auto& track : track_manager_->GetVisibleTracks()) {
+  for (const auto& track : track_manager_->GetVisibleTracks()) {
     if (!track->IsMoving()) {
       track->SetPos(track_pos_x, current_y);
     }
@@ -120,8 +130,8 @@ void TrackContainer::UpdateTracksPosition() {
 
 namespace {
 
-[[nodiscard]] std::string GetLabelBetweenIterators(const std::string& function_from,
-                                                   const std::string& function_to) {
+[[nodiscard]] std::string GetLabelBetweenIterators(std::string_view function_from,
+                                                   std::string_view function_to) {
   return absl::StrFormat("%s to %s", function_from, function_to);
 }
 
@@ -133,9 +143,9 @@ std::string GetTimeString(const TimerInfo& timer_a, const TimerInfo& timer_b) {
 
 [[nodiscard]] Color GetIteratorBoxColor(uint64_t index) {
   constexpr uint64_t kNumColors = 2;
-  const Color kLightBlueGray = Color(177, 203, 250, 60);
-  const Color kMidBlueGray = Color(81, 102, 157, 60);
-  Color colors[kNumColors] = {kLightBlueGray, kMidBlueGray};
+  const Color light_blue_gray = Color(177, 203, 250, 60);
+  const Color mid_blue_gray = Color(81, 102, 157, 60);
+  Color colors[kNumColors] = {light_blue_gray, mid_blue_gray};
   return colors[index % kNumColors];
 }
 
@@ -143,8 +153,8 @@ std::string GetTimeString(const TimerInfo& timer_a, const TimerInfo& timer_b) {
 
 void TrackContainer::DrawIteratorBox(PrimitiveAssembler& primitive_assembler,
                                      TextRenderer& text_renderer, Vec2 pos, Vec2 size,
-                                     const Color& color, const std::string& label,
-                                     const std::string& time, float text_box_y) {
+                                     const Color& color, std::string_view label,
+                                     std::string_view time, float text_box_y) {
   Quad box = MakeBox(pos, size);
   primitive_assembler.AddBox(box, GlCanvas::kZValueOverlay, color);
 
@@ -152,10 +162,10 @@ void TrackContainer::DrawIteratorBox(PrimitiveAssembler& primitive_assembler,
 
   float max_size = size[0];
 
-  const Color kBlack(0, 0, 0, 255);
+  const Color black(0, 0, 0, 255);
   float text_width = text_renderer.AddTextTrailingCharsPrioritized(
       text.c_str(), pos[0], text_box_y + layout_->GetTextOffset(), GlCanvas::kZValueOverlayLabel,
-      {layout_->GetFontSize(), kBlack, max_size}, time.length());
+      {layout_->GetFontSize(), black, max_size}, time.length());
 
   float box_height = layout_->GetTextBoxHeight();
   Vec2 white_box_size(std::min(static_cast<float>(text_width), max_size), box_height);
@@ -163,8 +173,8 @@ void TrackContainer::DrawIteratorBox(PrimitiveAssembler& primitive_assembler,
 
   Quad white_box = MakeBox(white_box_position, white_box_size);
 
-  const Color kWhite(255, 255, 255, 255);
-  primitive_assembler.AddBox(white_box, GlCanvas::kZValueOverlayLabel, kWhite);
+  const Color white(255, 255, 255, 255);
+  primitive_assembler.AddBox(white_box, GlCanvas::kZValueOverlayLabel, white);
 
   Vec2 line_from(pos[0] + white_box_size[0], white_box_position[1] + box_height / 2.f);
   Vec2 line_to(pos[0] + size[0], white_box_position[1] + box_height / 2.f);
@@ -265,8 +275,8 @@ void TrackContainer::DrawOverlay(PrimitiveAssembler& primitive_assembler,
 
     // We do not want the overall box to add any color, so we just set alpha to
     // 0.
-    const Color kColorBlackTransparent(0, 0, 0, 0);
-    DrawIteratorBox(primitive_assembler, text_renderer, pos, size, kColorBlackTransparent, label,
+    const Color color_black_transparent(0, 0, 0, 0);
+    DrawIteratorBox(primitive_assembler, text_renderer, pos, size, color_black_transparent, label,
                     time, text_y);
   }
 }
@@ -312,7 +322,8 @@ void TrackContainer::DrawIncompleteDataIntervals(PrimitiveAssembler& primitive_a
   const float world_height = viewport_->GetWorldHeight();
 
   // Actually draw the ranges.
-  for (const auto& [start_x, end_x] : x_ranges) {
+  for (auto [start_x, end_x] : x_ranges) {
+    start_x = std::max(layout_->GetTrackHeaderWidth(), start_x);
     const Vec2 pos{start_x, world_start_y};
     const Vec2 size{end_x - start_x, world_height};
     float z_value = GlCanvas::kZValueIncompleteDataOverlay;
@@ -335,7 +346,7 @@ void TrackContainer::DrawIncompleteDataIntervals(PrimitiveAssembler& primitive_a
   }
 }
 
-void TrackContainer::SetThreadFilter(const std::string& filter) {
+void TrackContainer::SetThreadFilter(std::string_view filter) {
   track_manager_->SetFilter(filter);
   RequestUpdate();
 }
@@ -425,14 +436,14 @@ void TrackContainer::DrawThreadDependencyArrow(
 void TrackContainer::DrawThreadDependency(PrimitiveAssembler& primitive_assembler,
                                           PickingMode picking_mode) {
   if (app_->selected_thread_state_slice() != std::nullopt) {
-    const Color kSelectedSliceArrowColor{255, 255, 255, 255};
+    const Color selected_slice_arrow_color{255, 255, 255, 255};
     DrawThreadDependencyArrow(primitive_assembler, app_->selected_thread_state_slice().value(),
-                              kSelectedSliceArrowColor, picking_mode);
+                              selected_slice_arrow_color, picking_mode);
   }
   if (app_->hovered_thread_state_slice() != std::nullopt) {
-    const Color kHoveredSliceArrowColor{255, 255, 255, 64};
+    const Color hovered_slice_arrow_color{255, 255, 255, 64};
     DrawThreadDependencyArrow(primitive_assembler, app_->hovered_thread_state_slice().value(),
-                              kHoveredSliceArrowColor, picking_mode);
+                              hovered_slice_arrow_color, picking_mode);
   }
 }
 
@@ -489,7 +500,7 @@ std::unique_ptr<orbit_accessibility::AccessibleInterface>
 TrackContainer::CreateAccessibleInterface() {
   return std::make_unique<AccessibleCaptureViewElement>(
       this, "TrackContainer", orbit_accessibility::AccessibilityRole::Pane,
-      orbit_accessibility::AccessibilityState::Focusable);
+      orbit_accessibility::AccessibilityState::kFocusable);
 }
 
 }  // namespace orbit_gl

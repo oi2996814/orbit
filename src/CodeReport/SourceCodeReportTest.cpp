@@ -2,15 +2,27 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "ClientData/CallstackEvent.h"
+#include "ClientData/FunctionInfo.h"
 #include "ClientData/PostProcessedSamplingData.h"
-#include "ClientProtos/capture_data.pb.h"
 #include "CodeReport/SourceCodeReport.h"
 #include "GrpcProtos/module.pb.h"
 #include "GrpcProtos/symbol.pb.h"
-#include "ObjectUtils/ObjectFile.h"
+#include "ObjectUtils/ElfFile.h"
+#include "OrbitBase/Result.h"
 
 namespace {
 class MockElfFile : public orbit_object_utils::ElfFile {
@@ -52,7 +64,9 @@ class MockElfFile : public orbit_object_utils::ElfFile {
 
 namespace orbit_code_report {
 TEST(SourceCodeReport, Empty) {
-  orbit_client_data::FunctionInfo function_info{"path/to/module", "buildid", 0x42, 0x100, "main()"};
+  orbit_client_data::FunctionInfo function_info{"path/to/module", "buildid",
+                                                /*address=*/0x42, /*size=*/0x100,
+                                                "main()",         /*is_hotpatchable=*/false};
 
   MockElfFile elf_file{};
   EXPECT_CALL(elf_file, GetLineInfo).Times(0);
@@ -67,7 +81,9 @@ TEST(SourceCodeReport, Empty) {
 }
 
 TEST(SourceCodeReport, Simple) {
-  orbit_client_data::FunctionInfo function_info{"path/to/module", "buildid", 0x42, 0x100, "main()"};
+  orbit_client_data::FunctionInfo function_info{"path/to/module", "buildid",
+                                                /*address=*/0x42, /*size=*/0x100,
+                                                "main()",         /*is_hotpatchable=*/false};
 
   MockElfFile elf_file{};
   orbit_grpc_protos::LineInfo static_line_info{};
@@ -102,7 +118,9 @@ TEST(SourceCodeReport, NonMatchingSourceFileName) {
   // The test should discard all line info records that refer to a different source file than the
   // one given by the FunctionInfo object.
 
-  orbit_client_data::FunctionInfo function_info{"path/to/module", "buildid", 0x42, 1, "main()"};
+  orbit_client_data::FunctionInfo function_info{"path/to/module", "buildid",
+                                                /*address=*/0x42, /*size=*/1,
+                                                "main()",         /*is_hotpatchable=*/false};
 
   MockElfFile elf_file{};
   orbit_grpc_protos::LineInfo static_line_info{};

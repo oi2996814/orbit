@@ -11,9 +11,12 @@
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 
+#include <csignal>
 #include <cstdint>
+#include <cstdlib>
+#include <optional>
 #include <string>
-#include <thread>
+#include <utility>
 #include <vector>
 
 #include "AccessTraceesMemory.h"
@@ -21,6 +24,7 @@
 #include "OrbitBase/SafeStrerror.h"
 #include "ReadSeccompModeOfThread.h"
 #include "RegisterState.h"
+#include "UserSpaceInstrumentation/AddressRange.h"
 
 namespace orbit_user_space_instrumentation {
 
@@ -141,7 +145,7 @@ namespace {
   }
   const uint64_t result = return_value.GetGeneralPurposeRegisters()->x86_64.rax;
   // Syscalls return -4095, ..., -1 on failure. And these are actually (-1 * errno)
-  const int64_t result_as_int = absl::bit_cast<int64_t>(result);
+  const auto result_as_int = absl::bit_cast<int64_t>(result);
   if (result_as_int > -4096 && result_as_int < 0) {
     return ErrorMessage(absl::StrFormat("Syscall failed. Return value: %s (%d).%s",
                                         SafeStrerror(-result_as_int), result_as_int,
@@ -210,8 +214,8 @@ ErrorMessageOr<void> MemoryInTracee::EnsureMemoryExecutable() {
   }
 
   constexpr uint64_t kSyscallNumberMprotect = 10;
-  auto result_or_error =
-      SyscallInTracee(pid_, kSyscallNumberMprotect, address_, size_, PROT_EXEC, 0, 0, 0, 0);
+  auto result_or_error = SyscallInTracee(pid_, kSyscallNumberMprotect, address_, size_,
+                                         PROT_EXEC | PROT_READ, 0, 0, 0, 0);
   if (result_or_error.has_error()) {
     return ErrorMessage(absl::StrFormat(
         "Failed to execute mprotect syscall with parameters address=%#x size=%u prot=PROT_EXEC: %s",

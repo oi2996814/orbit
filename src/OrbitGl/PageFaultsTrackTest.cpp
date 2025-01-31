@@ -3,9 +3,14 @@
 // found in the LICENSE file.
 #include <gtest/gtest.h>
 
-#include "CaptureViewElementTester.h"
-#include "PageFaultsTrack.h"
-#include "TrackTestData.h"
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "ClientData/CaptureData.h"
+#include "OrbitGl/CaptureViewElementTester.h"
+#include "OrbitGl/PageFaultsTrack.h"
+#include "OrbitGl/TrackTestData.h"
 
 namespace orbit_gl {
 

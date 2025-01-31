@@ -6,14 +6,19 @@
 
 #include <absl/strings/str_format.h>
 #include <absl/time/time.h>
+#include <stdint.h>
 
+#include <QIODevice>
 #include <QMetaEnum>
 #include <QObject>
 #include <QProcess>
 #include <QTimer>
+#include <QtGlobal>
 #include <memory>
+#include <string>
 
 #include "OrbitBase/Future.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/Promise.h"
 #include "OrbitBase/Result.h"
 
@@ -27,7 +32,7 @@ Future<ErrorMessageOr<QByteArray>> ExecuteProcess(const QString& program,
   auto promise = std::make_shared<orbit_base::Promise<ErrorMessageOr<QByteArray>>>();
 
   // Create and connect QProcess
-  QProcess* process = new QProcess();
+  auto* process = new QProcess();
   process->setProgram(program);
   process->setArguments(arguments);
 
@@ -102,7 +107,7 @@ Future<ErrorMessageOr<QByteArray>> ExecuteProcess(const QString& program,
 
   // Create and connect Timer
   // Since timer has process as parent, it will get deleted when process is deleted
-  QTimer* timer = new QTimer(process);
+  auto* timer = new QTimer(process);
   timer->setSingleShot(true);
 
   uint64_t timeout_in_ms = timeout / absl::Milliseconds(1);

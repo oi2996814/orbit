@@ -4,8 +4,10 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <linux/perf_event.h>
 #include <sys/types.h>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -18,7 +20,7 @@ using ::testing::ElementsAre;
 
 namespace orbit_linux_tracing {
 
-static constexpr perf_event_sample_regs_user_sp_ip_arguments kRegisters{
+static constexpr RingBufferSampleRegsUserSpIpArguments kRegisters{
     .abi = PERF_SAMPLE_REGS_ABI_64,
     .cx = 4,
     .dx = 3,

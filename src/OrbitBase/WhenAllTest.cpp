@@ -2,12 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/types/span.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+
+#include <algorithm>
+#include <string>
+#include <tuple>
+#include <vector>
 
 #include "OrbitBase/Future.h"
 #include "OrbitBase/Promise.h"
 #include "OrbitBase/WhenAll.h"
-#include "absl/types/span.h"
 
 namespace orbit_base {
 
@@ -33,8 +39,8 @@ struct WhenAllTest<void> : testing::Test {
   using ValueType = void;
   using FutureValueType = void;
 
-  static void FinishPromise(Promise<void>* promise, int) { promise->MarkFinished(); }
-  static void VerifyResult(Future<void>*, size_t) {
+  static void FinishPromise(Promise<void>* promise, int /*unused*/) { promise->MarkFinished(); }
+  static void VerifyResult(Future<void>* /*unused*/, size_t /*unused*/) {
     // Nothing to verify when the result type is void
   }
 };

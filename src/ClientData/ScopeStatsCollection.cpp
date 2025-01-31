@@ -5,14 +5,24 @@
 
 #include "ClientData/ScopeStatsCollection.h"
 
+#include <absl/algorithm/container.h>
+#include <absl/types/span.h>
+
+#include <iterator>
+#include <optional>
+#include <utility>
+
+#include "ApiInterface/Orbit.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Typedef.h"
 
 namespace orbit_client_data {
 
 static const ScopeStats kDefaultScopeStats;
 
 ScopeStatsCollection::ScopeStatsCollection(ScopeIdProvider& scope_id_provider,
-                                           const std::vector<const TimerInfo*>& timers) {
+                                           absl::Span<const TimerInfo* const> timers) {
+  ORBIT_SCOPE_WITH_COLOR("ScopeStatsCollection", kOrbitColorDeepPurple);
   for (const TimerInfo* timer : timers) {
     std::optional<ScopeId> scope_id = scope_id_provider.ProvideId(*timer);
     if (scope_id.has_value()) {
@@ -50,7 +60,7 @@ const ScopeStats& ScopeStatsCollection::GetScopeStatsOrDefault(ScopeId scope_id)
 }
 
 const std::vector<uint64_t>* ScopeStatsCollection::GetSortedTimerDurationsForScopeId(
-    ScopeId scope_id) {
+    ScopeId scope_id) const {
   if (!timer_durations_are_sorted_) {
     ORBIT_ERROR(
         "Calling GetSortedTimerDurationsForScopeId on unsorted timers. Must call OnDataChanged() "
@@ -65,6 +75,7 @@ const std::vector<uint64_t>* ScopeStatsCollection::GetSortedTimerDurationsForSco
 }
 
 void ScopeStatsCollection::OnCaptureComplete() {
+  ORBIT_SCOPE_WITH_COLOR("ScopeStatsCollection::OnCaptureComplete", kOrbitColorDeepOrange);
   if (timer_durations_are_sorted_) return;
 
   for (auto& [unused_id, timer_durations] : scope_id_to_timer_durations_) {

@@ -4,14 +4,21 @@
 
 #include "OrbitSshQt/Task.h"
 
-#include <absl/base/macros.h>
+#include <absl/base/attributes.h>
 
 #include <QTimer>
+#include <algorithm>
 #include <chrono>
-#include <type_traits>
+#include <limits>
 #include <utility>
+#include <vector>
 
+#include "OrbitBase/Future.h"
+#include "OrbitBase/FutureHelpers.h"
+#include "OrbitBase/ImmediateExecutor.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Promise.h"
+#include "OrbitBase/Result.h"
 #include "OrbitSsh/Error.h"
 #include "OrbitSshQt/Error.h"
 
@@ -20,19 +27,22 @@ constexpr const std::chrono::milliseconds kShutdownTimeoutMs{2000};
 
 namespace orbit_ssh_qt {
 
-Task::Task(Session* session, std::string command) : session_(session), command_(command) {
+Task::Task(Session* session, std::string command)
+    : session_(session), command_(std::move(command)) {
   about_to_shutdown_connection_.emplace(
       QObject::connect(session_, &Session::aboutToShutdown, this, &Task::HandleSessionShutdown));
 }
 
-void Task::Start() {
-  if (state_ == State::kInitial) {
+orbit_base::Future<ErrorMessageOr<void>> Task::Start() {
+  if (state_ == State::kInitialized) {
     SetState(State::kNoChannel);
     OnEvent();
   }
+
+  return GetStartedFuture();
 }
 
-void Task::Stop() {
+orbit_base::Future<ErrorMessageOr<Task::ExitCode>> Task::Stop() {
   QTimer::singleShot(kShutdownTimeoutMs, this, [this]() {
     if (state_ < State::kChannelClosed) {
       ORBIT_ERROR("Task shutdown timed out");
@@ -44,6 +54,11 @@ void Task::Stop() {
     SetState(State::kSignalEOF);
   }
   OnEvent();
+
+  // Since we control on which thread the stopped_future completes, we know we won't have a race
+  // condition and can use the ImmediateExecutor.
+  orbit_base::ImmediateExecutor executor{};
+  return GetStoppedFuture().ThenIfSuccess(&executor, [this]() { return exit_code_.value(); });
 }
 
 std::string Task::ReadStdOut() {
@@ -52,15 +67,29 @@ std::string Task::ReadStdOut() {
   return tmp;
 }
 
+orbit_base::Future<ErrorMessageOr<Task::ExitCode>> Task::Execute() {
+  // This first calls Start(). When that succeeded it calls Stop().
+
+  // Since we control on which thread the started_futures completes, it's fine to use the
+  // ImmediateExecutor here. No race condition can occur.
+  orbit_base::ImmediateExecutor executor{};
+  return orbit_base::UnwrapFuture(Start().ThenIfSuccess(&executor, [this]() { return Stop(); }));
+}
+
 std::string Task::ReadStdErr() {
   auto tmp = std::move(read_std_err_buffer_);
   read_std_err_buffer_ = std::string{};
   return tmp;
 }
 
-void Task::Write(std::string_view data) {
+orbit_base::Future<ErrorMessageOr<void>> Task::Write(std::string_view data) {
   write_buffer_.append(data);
+  WritePromise& new_entry =
+      write_promises_.emplace_back(bytes_written_counter_ + write_buffer_.size());
+  orbit_base::Future<ErrorMessageOr<void>> future = new_entry.promise.GetFuture();
+
   OnEvent();
+  return future;
 }
 
 outcome::result<void> Task::run() {
@@ -68,7 +97,7 @@ outcome::result<void> Task::run() {
     // read stdout
     bool added_new_data_to_read_buffer = false;
     while (true) {
-      const size_t kChunkSize = 8192;
+      constexpr size_t kChunkSize = 8192;
       auto result = channel_->ReadStdOut(kChunkSize);
 
       if (!result && !orbit_ssh::ShouldITryAgain(result)) {
@@ -76,28 +105,30 @@ outcome::result<void> Task::run() {
           emit readyReadStdOut();
         }
         return result.error();
-      } else if (!result) {
+      }
+      if (!result) {
         if (added_new_data_to_read_buffer) {
           emit readyReadStdOut();
         }
         break;
-      } else if (result && result.value().empty()) {
+      }
+      if (result.value().empty()) {
         // Channel closed
         if (added_new_data_to_read_buffer) {
           emit readyReadStdOut();
         }
         SetState(State::kWaitChannelClosed);
         break;
-      } else if (result) {
-        read_std_out_buffer_.append(std::move(result).value());
-        added_new_data_to_read_buffer = true;
       }
+
+      read_std_out_buffer_.append(std::move(result).value());
+      added_new_data_to_read_buffer = true;
     }
 
     // read stderr
     added_new_data_to_read_buffer = false;
     while (true) {
-      const size_t kChunkSize = 8192;
+      constexpr size_t kChunkSize = 8192;
       auto result = channel_->ReadStdErr(kChunkSize);
 
       if (!result && !orbit_ssh::ShouldITryAgain(result)) {
@@ -105,22 +136,23 @@ outcome::result<void> Task::run() {
           emit readyReadStdErr();
         }
         return result.error();
-      } else if (!result) {
+      }
+      if (!result) {
         if (added_new_data_to_read_buffer) {
           emit readyReadStdErr();
         }
         break;
-      } else if (result && result.value().empty()) {
+      }
+      if (result.value().empty()) {
         // Channel closed
         if (added_new_data_to_read_buffer) {
           emit readyReadStdErr();
         }
         SetState(State::kWaitChannelClosed);
         break;
-      } else if (result) {
-        read_std_err_buffer_.append(std::move(result).value());
-        added_new_data_to_read_buffer = true;
       }
+      read_std_err_buffer_.append(std::move(result).value());
+      added_new_data_to_read_buffer = true;
     }
 
     // If the state here is kWaitChannelClosed, that means a close from the remote side was
@@ -134,6 +166,20 @@ outcome::result<void> Task::run() {
       OUTCOME_TRY(auto&& result, channel_->Write(write_buffer_));
       write_buffer_ = write_buffer_.substr(result);
       emit bytesWritten(result);
+      bytes_written_counter_ += result;
+      while (!write_promises_.empty() &&
+             write_promises_.front().completes_when_bytes_written <= bytes_written_counter_) {
+        write_promises_.front().promise.SetResult(outcome::success());
+        write_promises_.pop_front();
+      }
+
+      // We set the counter to 0 and adjust the thresholds to avoid overflows once in a while.
+      if (bytes_written_counter_ > std::numeric_limits<uint64_t>::max() / 2) {
+        for (auto& write_promise : write_promises_) {
+          write_promise.completes_when_bytes_written -= bytes_written_counter_;
+        }
+        bytes_written_counter_ = 0;
+      }
     }
 
     // Channel::ReadStdout, Channel::ReadStderr, and Channel::Write all potentially process packets
@@ -152,10 +198,10 @@ outcome::result<void> Task::startup() {
   }
 
   switch (CurrentState()) {
-    case State::kInitial:
+    case State::kInitialized:
     case State::kNoChannel: {
-      auto session = session_->GetRawSession();
-      if (!session) {
+      auto* session = session_->GetRawSession();
+      if (session == nullptr) {
         return orbit_ssh::Error::kEagain;
       }
 
@@ -171,11 +217,12 @@ outcome::result<void> Task::startup() {
     }
     case State::kStarted:
     case State::kCommandRunning:
-    case State::kShutdown:
+    case State::kStopping:
     case State::kSignalEOF:
     case State::kWaitRemoteEOF:
     case State::kSignalChannelClose:
     case State::kWaitChannelClosed:
+    case State::kStopped:
     case State::kChannelClosed:
     case State::kError:
       ORBIT_UNREACHABLE();
@@ -186,14 +233,14 @@ outcome::result<void> Task::startup() {
 
 outcome::result<void> Task::shutdown() {
   switch (state_) {
-    case State::kInitial:
+    case State::kInitialized:
     case State::kNoChannel:
     case State::kChannelInitialized:
     case State::kStarted:
     case State::kCommandRunning:
       ORBIT_UNREACHABLE();
 
-    case State::kShutdown:
+    case State::kStopping:
     case State::kSignalEOF: {
       OUTCOME_TRY(channel_->SendEOF());
       SetState(State::kWaitRemoteEOF);
@@ -214,9 +261,11 @@ outcome::result<void> Task::shutdown() {
       SetState(State::kChannelClosed);
       // The exit status is only guaranteed to be available after the channel is really closed on
       // both sides
-      emit finished(channel_->GetExitStatus());
+      exit_code_ = ExitCode{channel_->GetExitStatus()};
+      emit finished(*exit_code_.value());
       ABSL_FALLTHROUGH_INTENDED;
     }
+    case State::kStopped:
     case State::kChannelClosed:
       data_event_connection_ = std::nullopt;
       about_to_shutdown_connection_ = std::nullopt;
@@ -234,6 +283,11 @@ void Task::SetError(std::error_code e) {
   about_to_shutdown_connection_ = std::nullopt;
   StateMachineHelper::SetError(e);
   channel_ = std::nullopt;
+
+  while (!write_promises_.empty()) {
+    write_promises_.front().promise.SetResult(ErrorMessage{e.message()});
+    write_promises_.pop_front();
+  }
 }
 
 void Task::HandleSessionShutdown() {
@@ -245,7 +299,7 @@ void Task::HandleSessionShutdown() {
 }
 
 void Task::HandleEagain() {
-  if (session_) {
+  if (session_ != nullptr) {
     session_->HandleEagain();
   }
 }

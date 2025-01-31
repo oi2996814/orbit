@@ -4,13 +4,19 @@
 
 #pragma once
 
+#include <absl/container/flat_hash_set.h>
+#include <absl/types/span.h>
+
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ClientData/CallstackType.h"
 #include "ClientData/FunctionInfo.h"
+#include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifier.h"
 #include "ClientData/PostProcessedSamplingData.h"
 #include "ClientModel/SamplingDataPostProcessor.h"
 #include "ClientProtos/capture_data.pb.h"
@@ -19,7 +25,6 @@
 #include "DataViews/DataView.h"
 #include "DataViews/SamplingReportInterface.h"
 #include "OrbitBase/Result.h"
-#include "SymbolProvider/ModuleIdentifier.h"
 #include "absl/container/flat_hash_set.h"
 
 class SamplingReport;
@@ -37,39 +42,39 @@ class SamplingReportDataView : public DataView {
   std::string GetToolTip(int /*row*/, int /*column*/) override;
   const std::string& GetName() { return name_; }
 
-  void OnSelect(const std::vector<int>& indices) override;
-  void OnRefresh(const std::vector<int>& visible_selected_indices,
-                 const RefreshMode& mode) override;
+  void OnSelect(absl::Span<const int> indices) override;
+  void OnRefresh(absl::Span<const int> visible_selected_indices, const RefreshMode& mode) override;
 
   void LinkDataView(DataView* data_view) override;
   void SetSamplingReport(SamplingReportInterface* sampling_report) {
     sampling_report_ = sampling_report;
   }
-  void SetSampledFunctions(const std::vector<orbit_client_data::SampledFunction>& functions);
+  void SetSampledFunctions(absl::Span<const orbit_client_data::SampledFunction> functions);
   void SetThreadID(orbit_client_data::ThreadID tid);
   void SetStackEventsCount(uint32_t stack_events_count);
-  orbit_client_data::ThreadID GetThreadID() const { return tid_; }
+  [[nodiscard]] orbit_client_data::ThreadID GetThreadID() const { return tid_; }
 
-  void OnExportEventsToCsvRequested(const std::vector<int>& selection) override;
+  void OnExportEventsToCsvRequested(absl::Span<const int> selection) override;
 
  protected:
   [[nodiscard]] ActionStatus GetActionStatus(std::string_view action, int clicked_index,
-                                             const std::vector<int>& selected_indices) override;
+                                             absl::Span<const int> selected_indices) override;
   void DoSort() override;
   void DoFilter() override;
-  const orbit_client_data::SampledFunction& GetSampledFunction(unsigned int row) const;
+  [[nodiscard]] const orbit_client_data::SampledFunction& GetSampledFunction(
+      unsigned int row) const;
   orbit_client_data::SampledFunction& GetSampledFunction(unsigned int row);
-  [[nodiscard]] std::optional<orbit_symbol_provider::ModuleIdentifier> GetModuleIdentifierFromRow(
+  [[nodiscard]] std::optional<orbit_client_data::ModuleIdentifier> GetModuleIdentifierFromRow(
       int row) const;
 
  private:
   [[nodiscard]] orbit_client_data::ModuleData* GetModuleDataFromRow(int row) const override;
   [[nodiscard]] const orbit_client_data::FunctionInfo* GetFunctionInfoFromRow(int row) override;
 
-  void UpdateSelectedIndicesAndFunctionIds(const std::vector<int>& selected_indices);
+  void UpdateSelectedIndicesAndFunctionIds(absl::Span<const int> selected_indices);
   void RestoreSelectedIndicesAfterFunctionsChanged();
   // The callstack view will be updated according to the visible selected addresses and thread id.
-  void UpdateVisibleSelectedAddressesAndTid(const std::vector<int>& visible_selected_indices);
+  void UpdateVisibleSelectedAddressesAndTid(absl::Span<const int> visible_selected_indices);
 
   [[nodiscard]] std::string BuildPercentageString(float percentage) const;
 
@@ -80,7 +85,7 @@ class SamplingReportDataView : public DataView {
   [[nodiscard]] std::string BuildToolTipUnwindErrors(
       const orbit_client_data::SampledFunction& function) const;
 
-  ErrorMessageOr<void> WriteStackEventsToCsv(const std::string& file_path);
+  ErrorMessageOr<void> WriteStackEventsToCsv(std::string_view file_path);
 
   std::vector<orbit_client_data::SampledFunction> functions_;
   // We need to keep user's selected function ids such that if functions_ changes, the

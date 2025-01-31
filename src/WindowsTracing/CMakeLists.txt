@@ -11,8 +11,6 @@ add_library(WindowsTracing STATIC)
 target_compile_definitions(WindowsTracing PUBLIC WIN32_LEAN_AND_MEAN)
 target_compile_definitions(WindowsTracing PUBLIC INITGUID)
 
-target_compile_features(WindowsTracing PUBLIC cxx_std_17)
-
 target_include_directories(WindowsTracing PUBLIC
         ${CMAKE_CURRENT_LIST_DIR}/include)
 
@@ -52,8 +50,8 @@ target_link_libraries(WindowsTracing PUBLIC
         absl::flat_hash_map
         absl::flat_hash_set
         absl::str_format
-        CONAN_PKG::grpc
-        CONAN_PKG::outcome)
+        grpc::grpc
+        outcome::outcome)
 
 add_executable(WindowsTracingTests)
 
@@ -63,7 +61,7 @@ target_sources(WindowsTracingTests PRIVATE
 
 target_link_libraries(WindowsTracingTests PRIVATE
         WindowsTracing
-        GTest::GTest
+        GTest::gtest
         GTest::Main)
 
 SET_TARGET_PROPERTIES(WindowsTracingTests PROPERTIES LINK_FLAGS "/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\"")

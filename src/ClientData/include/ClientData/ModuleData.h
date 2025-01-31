@@ -5,18 +5,23 @@
 #ifndef CLIENT_DATA_MODULE_DATA_H_
 #define CLIENT_DATA_MODULE_DATA_H_
 
+#include <absl/base/thread_annotations.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/synchronization/mutex.h>
+
 #include <cinttypes>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "ClientData/FunctionInfo.h"
+#include "ClientData/ModuleIdentifier.h"
 #include "GrpcProtos/module.pb.h"
 #include "GrpcProtos/symbol.pb.h"
-#include "SymbolProvider/ModuleIdentifier.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
@@ -36,8 +41,6 @@ class ModuleData final {
   [[nodiscard]] uint64_t executable_segment_offset() const;
   [[nodiscard]] orbit_grpc_protos::ModuleInfo::ObjectFileType object_file_type() const;
   [[nodiscard]] std::vector<orbit_grpc_protos::ModuleInfo::ObjectSegment> GetObjectSegments() const;
-
-  [[nodiscard]] orbit_symbol_provider::ModuleIdentifier module_id() const;
 
   [[nodiscard]] uint64_t ConvertFromVirtualAddressToOffsetInFile(uint64_t virtual_address) const;
   [[nodiscard]] uint64_t ConvertFromOffsetInFileToVirtualAddress(uint64_t offset_in_file) const;
@@ -79,6 +82,8 @@ class ModuleData final {
   SymbolCompleteness loaded_symbols_completeness_ ABSL_GUARDED_BY(mutex_) =
       SymbolCompleteness::kNoSymbols;
   std::map<uint64_t, std::unique_ptr<FunctionInfo>> functions_ ABSL_GUARDED_BY(mutex_);
+  mutable absl::flat_hash_map<uint64_t, FunctionInfo*> absolute_address_to_function_info_cache_
+      ABSL_GUARDED_BY(mutex_);
   absl::flat_hash_map<std::string_view, FunctionInfo*> name_to_function_info_map_
       ABSL_GUARDED_BY(mutex_);
 

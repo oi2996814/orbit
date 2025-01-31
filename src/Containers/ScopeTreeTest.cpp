@@ -2,21 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/container/btree_map.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <algorithm>
 #include <memory>
 #include <random>
+#include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "Containers/ScopeTree.h"
 
 namespace orbit_containers {
 
 struct TestScope {
-  uint64_t start() const { return start_; }
-  uint64_t end() const { return end_; }
+  [[nodiscard]] uint64_t start() const { return start_; }
+  [[nodiscard]] uint64_t end() const { return end_; }
   uint64_t start_;
   uint64_t end_;
 };
@@ -36,11 +41,8 @@ uint64_t GetFakeTimeStamp() {
 }
 
 struct ScopeTimer {
-  ScopeTimer(std::vector<TestScope*>* scopes, size_t max_nodes) {
-    start = GetFakeTimeStamp();
-    max_num_nodes = max_nodes;
-    scope_buffer = scopes;
-  }
+  ScopeTimer(std::vector<TestScope*>* scopes, size_t max_nodes)
+      : start(GetFakeTimeStamp()), max_num_nodes(max_nodes), scope_buffer(scopes) {}
   ~ScopeTimer() {
     if (scope_buffer->size() < max_num_nodes) {
       scope_buffer->push_back(CreateScope(start, GetFakeTimeStamp()));

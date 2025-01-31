@@ -2,22 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "Track.h"
+#include "OrbitGl/Track.h"
 
-#include <stddef.h>
+#include <GteVector.h>
 
-#include <cmath>
-
-#include "AccessibleTrack.h"
 #include "ClientData/CaptureData.h"
-#include "CoreMath.h"
-#include "Geometry.h"
-#include "GlCanvas.h"
-#include "TextRenderer.h"
-#include "TimeGraphLayout.h"
-#include "TrackRenderHelper.h"
-#include "Viewport.h"
+#include "OrbitGl/AccessibleTrack.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/PickingManager.h"
+#include "OrbitGl/TextRenderer.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/Viewport.h"
 
+using orbit_gl::CaptureViewElement;
 using orbit_gl::PrimitiveAssembler;
 using orbit_gl::TextRenderer;
 
@@ -56,59 +55,51 @@ void Track::DoDraw(PrimitiveAssembler& primitive_assembler, TextRenderer& text_r
   // Same for picking - the track background is not pickable
   if (picking || !draw_background) return;
 
-  const float x0 = GetPos()[0];
+  const float x0 = GetPos()[0] + header_->GetWidth();
   const float y0 = GetPos()[1];
-  const float header_height = header_->GetHeight();
   const float track_z = GlCanvas::kZValueTrack;
 
   Color track_background_color = GetTrackBackgroundColor();
 
   Vec2 track_size = GetSize();
 
-  // Draw rounded corners.
-  float radius = std::min(layout_->GetRoundingRadius(), layout_->GetTrackTabHeight() * 0.5f);
-  uint32_t sides = static_cast<uint32_t>(layout_->GetRoundingNumSides() + 0.5f);
-  auto rounded_corner = orbit_gl::GetRoundedCornerMask(radius, sides);
-
   // This draws the non-tab content of the track. The tab itself is a separate CaptureViewElement
   // child of the track.
   // Note that the top-left corner is not rounded due to the design of the track tab sitting
   // in the top left.
   //
-  // [ Header ] ________________________  content_top_right
-  // |                                  `
-  // |XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
-  // \__________________________________/
-  // content_bottom_left                 content_bottom_right
+  //  ____________________________________________  content_top_right
+  // |         |                                  |
+  // | header  |XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|
+  // |_________|__________________________________|
+  //            content_bottom_left                 content_bottom_right
   //
   Vec2 content_bottom_left(x0, y0 + track_size[1]);
   Vec2 content_bottom_right(x0 + track_size[0], y0 + track_size[1]);
 
-  // The track content starts underneath the track header, and we only draw the background
-  // starting
-  // there. This could be prevented by moving the track content into a separate child, but in the
-  // end, the design of track and track header will need to influence each other...
-  Vec2 content_top_right(x0 + track_size[0], y0 + header_height);
-  Vec2 content_top_left(x0, y0 + header_height);
-
-  auto shared_this = shared_from_this();
-  orbit_gl::DrawTriangleFan(primitive_assembler, rounded_corner, content_bottom_left,
-                            GlCanvas::kBackgroundColor, 0, track_z, shared_this);
-  orbit_gl::DrawTriangleFan(primitive_assembler, rounded_corner, content_bottom_right,
-                            GlCanvas::kBackgroundColor, -90.f, track_z, shared_this);
-  orbit_gl::DrawTriangleFan(primitive_assembler, rounded_corner, content_top_right,
-                            GlCanvas::kBackgroundColor, 180.f, track_z, shared_this);
+  Vec2 content_top_right(x0 + track_size[0], y0);
+  Vec2 content_top_left(x0, y0);
 
   // Draw track's content background.
-  Quad box = MakeBox(content_top_left, Vec2(GetWidth(), GetHeight() - header_height));
+  Quad box = MakeBox(content_top_left, Vec2(GetWidth(), GetHeight()));
   primitive_assembler.AddBox(box, track_z, track_background_color, shared_from_this());
+
+  // Track header highlight on hover.
+  if (IsMouseOver()) {
+    static const Color kOutlineColor = Color(128, 128, 128, 255);
+    constexpr float kOutlineWidth = 2.f;
+    Vec2 outline_size = header_->GetSize() - Vec2{layout_->GetSpaceBetweenTracks(), 0};
+    primitive_assembler.AddAabbOutline(GetPos(), outline_size, kOutlineWidth, GlCanvas::kZValueUi,
+                                       kOutlineColor);
+  }
 }
 
 void Track::DoUpdateLayout() {
   CaptureViewElement::DoUpdateLayout();
 
-  header_->SetWidth(layout_->GetTrackTabWidth());
-  header_->SetPos(GetPos()[0] + layout_->GetTrackTabOffset(), GetPos()[1]);
+  header_->SetWidth(layout_->GetTrackHeaderWidth());
+  header_->SetHeight(GetHeight());
+  header_->SetPos(GetPos()[0], GetPos()[1]);
   UpdatePositionOfSubtracks();
 }
 
@@ -125,12 +116,12 @@ Color Track::GetTrackBackgroundColor() const {
 
   if (GetProcessId() != orbit_base::kInvalidProcessId && GetProcessId() != capture_process_id &&
       GetType() != Type::kSchedulerTrack) {
-    const Color kExternalProcessColor(30, 30, 40, 255);
-    return kExternalProcessColor;
+    const Color external_process_color(30, 30, 40, 255);
+    return external_process_color;
   }
 
-  const Color kDarkGrey(50, 50, 50, 255);
-  return kDarkGrey;
+  const Color dark_grey(50, 50, 50, 255);
+  return dark_grey;
 }
 
 bool Track::ShouldBeRendered() const {
@@ -166,4 +157,16 @@ void Track::SetIndentationLevel(uint32_t level) {
 
   indentation_level_ = level;
   RequestUpdate();
+}
+
+CaptureViewElement::EventResult Track::OnMouseEnter() {
+  EventResult event_result = CaptureViewElement::OnMouseEnter();
+  RequestUpdate(RequestUpdateScope::kDraw);
+  return event_result;
+}
+
+CaptureViewElement::EventResult Track::OnMouseLeave() {
+  EventResult event_result = CaptureViewElement::OnMouseLeave();
+  RequestUpdate(RequestUpdateScope::kDraw);
+  return event_result;
 }

@@ -4,7 +4,7 @@
 
 #include "ClientData/ThreadTrackDataProvider.h"
 
-#include <cstdint>
+#include "OrbitBase/Append.h"
 
 namespace orbit_client_data {
 

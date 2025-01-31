@@ -5,12 +5,19 @@
 #include "CaptureFile/CaptureFileOutputStream.h"
 
 #include <absl/base/casts.h>
+#include <absl/strings/str_format.h>
+#include <errno.h>
 #include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/io/zero_copy_stream.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <google/protobuf/io/zero_copy_stream_impl_lite.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "CaptureFile/BufferOutputStream.h"
 #include "CaptureFileConstants.h"
@@ -50,7 +57,7 @@ class CaptureFileOutputStreamImpl final : public CaptureFileOutputStream {
   OutputType output_type_;
 
   std::filesystem::path path_;
-  orbit_base::unique_fd fd_;
+  orbit_base::UniqueFd fd_;
   BufferOutputStream* output_buffer_ = nullptr;
   std::unique_ptr<google::protobuf::io::ZeroCopyOutputStream> zero_copy_output_stream_;
   std::optional<google::protobuf::io::CodedOutputStream> coded_output_;
@@ -136,7 +143,7 @@ std::string_view CaptureFileOutputStreamImpl::GetErrorFromOutputStream() const {
   // There should not be any write error in the case of `OutputType::kBuffer` as we do not limit the
   // buffer size of BufferOutputStream.
   ORBIT_CHECK(output_type_ == OutputType::kFile);
-  auto file_output_stream =
+  auto* file_output_stream =
       static_cast<google::protobuf::io::FileOutputStream*>(zero_copy_output_stream_.get());
   return SafeStrerror(file_output_stream->GetErrno());
 }

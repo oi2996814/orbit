@@ -4,16 +4,30 @@
 
 #include "LibunwindstackUnwinder.h"
 
+#include <absl/types/span.h>
 #include <unwindstack/Error.h>
 #include <unwindstack/Memory.h>
 #include <unwindstack/Regs.h>
 #include <unwindstack/RegsX86_64.h>
 
 #include <array>
+#include <cstddef>
 #include <map>
+#include <unordered_map>
 
 #include "LibunwindstackMultipleOfflineAndProcessMemory.h"
 #include "OrbitBase/Logging.h"  // IWYU pragma: keep
+#include "unwindstack/Arch.h"
+#include "unwindstack/DwarfLocation.h"
+#include "unwindstack/DwarfSection.h"
+#include "unwindstack/DwarfStructs.h"
+#include "unwindstack/Elf.h"
+#include "unwindstack/ElfInterface.h"
+#include "unwindstack/MachineX86_64.h"
+#include "unwindstack/MapInfo.h"
+#include "unwindstack/Maps.h"
+#include "unwindstack/Object.h"
+#include "unwindstack/Unwinder.h"
 
 namespace orbit_linux_tracing {
 
@@ -21,13 +35,13 @@ namespace {
 
 class LibunwindstackUnwinderImpl : public LibunwindstackUnwinder {
  public:
-  LibunwindstackUnwinderImpl(
+  explicit LibunwindstackUnwinderImpl(
       const std::map<uint64_t, uint64_t>* absolute_address_to_size_of_functions_to_stop_at)
       : absolute_address_to_size_of_functions_to_stop_at_{
             absolute_address_to_size_of_functions_to_stop_at} {}
   LibunwindstackResult Unwind(pid_t pid, unwindstack::Maps* maps,
                               const std::array<uint64_t, PERF_REG_X86_64_MAX>& perf_regs,
-                              const std::vector<StackSliceView>& stack_slices,
+                              absl::Span<const StackSliceView> stack_slices,
                               bool offline_memory_only = false,
                               size_t max_frames = kDefaultMaxFrames) override;
 
@@ -55,7 +69,7 @@ const std::array<size_t, unwindstack::X86_64_REG_LAST>
 
 LibunwindstackResult LibunwindstackUnwinderImpl::Unwind(
     pid_t pid, unwindstack::Maps* maps, const std::array<uint64_t, PERF_REG_X86_64_MAX>& perf_regs,
-    const std::vector<StackSliceView>& stack_slices, bool offline_memory_only, size_t max_frames) {
+    absl::Span<const StackSliceView> stack_slices, bool offline_memory_only, size_t max_frames) {
   unwindstack::RegsX86_64 regs{};
   for (size_t perf_reg = 0; perf_reg < unwindstack::X86_64_REG_LAST; ++perf_reg) {
     regs[perf_reg] = perf_regs.at(kUnwindstackRegsToPerfRegs[perf_reg]);
@@ -81,7 +95,7 @@ LibunwindstackResult LibunwindstackUnwinderImpl::Unwind(
                 unwinder.LastErrorAddress());
   }
 #endif
-  return LibunwindstackResult{unwinder.ConsumeFrames(), std::move(regs), unwinder.LastErrorCode()};
+  return LibunwindstackResult{unwinder.ConsumeFrames(), regs, unwinder.LastErrorCode()};
 }
 
 // This functions detects if a frame pointer register was set in the given program counter using
@@ -89,7 +103,7 @@ LibunwindstackResult LibunwindstackUnwinderImpl::Unwind(
 // It does so by verifying if "Canonical Frame Address" gets computed immediately from $rbp (with
 // offset 16 to skip the old frame pointer and the return address).
 // The function returns nullopt if the required Dwarf information is not available.
-static std::optional<bool> HasFramePointerSetFromDwarfSection(
+std::optional<bool> HasFramePointerSetFromDwarfSection(
     uint64_t rel_pc, unwindstack::DwarfSection* dwarf_section,
     std::map<uint64_t, unwindstack::DwarfLocations>* loc_regs_cache) {
   if (dwarf_section == nullptr) {

@@ -4,15 +4,18 @@
 
 #include "TestProcess.h"
 
-#include <absl/time/clock.h>
+#include <stdlib.h>
 #include <sys/wait.h>
 
+#include <algorithm>
 #include <chrono>
-#include <string>
+#include <filesystem>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 #include "OrbitBase/WriteStringToFile.h"
 
 namespace orbit_user_space_instrumentation {
@@ -32,19 +35,20 @@ void Touch(const fs::path& path) {
 
 TestProcess::TestProcess() {
   {
-    auto temporary_file_or_error = orbit_base::TemporaryFile::Create();
+    auto temporary_file_or_error = orbit_test_utils::TemporaryFile::Create();
     ORBIT_CHECK(temporary_file_or_error.has_value());
     flag_file_run_child_.emplace(std::move(temporary_file_or_error.value()));
   }
 
   {
-    auto temporary_file_or_error = orbit_base::TemporaryFile::Create();
+    auto temporary_file_or_error = orbit_test_utils::TemporaryFile::Create();
     ORBIT_CHECK(temporary_file_or_error.has_value());
     flag_file_child_started_.emplace(std::move(temporary_file_or_error.value()));
   }
 
   Touch(flag_file_run_child_->file_path());
   flag_file_child_started_->CloseAndRemove();
+
   pid_ = fork();
   ORBIT_CHECK(pid_ != -1);
   // Start the workload and have the parent wait for the startup to complete.
@@ -60,7 +64,7 @@ TestProcess::TestProcess() {
 
 TestProcess::~TestProcess() {
   flag_file_run_child_->CloseAndRemove();
-  int status;
+  int status{};
   waitpid(pid_, &status, 0);
   ORBIT_CHECK(WIFEXITED(status));
 }

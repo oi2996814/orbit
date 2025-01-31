@@ -4,38 +4,39 @@
 
 project(OrbitQt CXX)
 
-add_library(OrbitQt OBJECT)
+add_library(OrbitQt STATIC)
 
 target_sources(
   OrbitQt
-  PRIVATE AccessibilityAdapter.h
-          AnnotatingSourceCodeDialog.h
-          CallTreeViewItemModel.h
-          CallTreeWidget.h
-          CaptureOptionsDialog.h
-          CustomSignalsTreeView.h
-          CutoutWidget.h
-          ElidedLabel.h
-          FilterPanelWidget.h
-          FilterPanelWidgetAction.h
-          HistogramWidget.h
-          MultipleOfSpinBox.h
-          MultipleOfValidator.h
-          orbitaboutdialog.h
-          orbitdataviewpanel.h
-          orbiteventiterator.h
-          orbitglwidget.h
-          orbitlivefunctions.h
-          orbitmainwindow.h
-          orbitsamplingreport.h
-          orbittablemodel.h
-          orbittreeview.h
-          opengldetect.h
-          resource.h
-          TrackConfigurationWidget.h
-          TrackTypeItemModel.h
-          TutorialContent.h
-          TutorialOverlay.h)
+  PRIVATE include/OrbitQt/AccessibilityAdapter.h
+          include/OrbitQt/AnnotatingSourceCodeDialog.h
+          include/OrbitQt/CallTreeViewItemModel.h
+          include/OrbitQt/CallTreeWidget.h
+          include/OrbitQt/CaptureOptionsDialog.h
+          include/OrbitQt/CaptureWindowDebugWidget.h
+          include/OrbitQt/CustomSignalsTreeView.h
+          include/OrbitQt/CutoutWidget.h
+          include/OrbitQt/DebugTabWidget.h
+          include/OrbitQt/ElidedLabel.h
+          include/OrbitQt/FilterPanelWidget.h
+          include/OrbitQt/FilterPanelWidgetAction.h
+          include/OrbitQt/HistogramWidget.h
+          include/OrbitQt/MultipleOfSpinBox.h
+          include/OrbitQt/MultipleOfValidator.h
+          include/OrbitQt/orbitaboutdialog.h
+          include/OrbitQt/orbitdataviewpanel.h
+          include/OrbitQt/orbiteventiterator.h
+          include/OrbitQt/orbitglwidget.h
+          include/OrbitQt/orbitlivefunctions.h
+          include/OrbitQt/orbitmainwindow.h
+          include/OrbitQt/orbitsamplingreport.h
+          include/OrbitQt/orbittablemodel.h
+          include/OrbitQt/orbittreeview.h
+          include/OrbitQt/opengldetect.h
+          include/OrbitQt/resource.h
+          include/OrbitQt/TimeGraphLayoutWidget.h
+          include/OrbitQt/TrackConfigurationWidget.h
+          include/OrbitQt/TrackTypeItemModel.h)
 
 target_sources(
   OrbitQt
@@ -46,6 +47,10 @@ target_sources(
           CallTreeWidget.ui
           CaptureOptionsDialog.cpp
           CaptureOptionsDialog.ui
+          CaptureWindowDebugWidget.cpp
+          CaptureWindowDebugWidget.ui
+          DebugTabWidget.cpp
+          DebugTabWidget.ui
           ElidedLabel.cpp
           FilterPanelWidget.cpp
           FilterPanelWidgetAction.cpp
@@ -68,14 +73,10 @@ target_sources(
           orbittablemodel.cpp
           orbittreeview.cpp
           opengldetect.cpp
+          TimeGraphLayoutWidget.cpp
           TrackConfigurationWidget.cpp
           TrackConfigurationWidget.ui
-          TrackTypeItemModel.cpp
-          TutorialContent.cpp
-          TutorialOverlay.cpp
-          TutorialOverlay.ui
-          ../../icons/orbiticons.qrc
-          ../../images/orbitimages.qrc)
+          TrackTypeItemModel.cpp)
 
 target_include_directories(OrbitQt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(OrbitQt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -90,7 +91,6 @@ target_link_libraries(
           DisplayFormats
           OrbitAccessibility
           OrbitGl
-          OrbitGgp
           OrbitSshQt
           OrbitVersion
           QtUtils
@@ -105,22 +105,19 @@ target_link_libraries(
 
 set_target_properties(OrbitQt PROPERTIES AUTOMOC ON)
 set_target_properties(OrbitQt PROPERTIES AUTOUIC ON)
-set_target_properties(OrbitQt PROPERTIES AUTORCC ON)
 iwyu_add_dependency(OrbitQt)
 
 add_executable(OrbitQtTests)
 
 target_sources(OrbitQtTests
-        PRIVATE AccessibilityAdapter.h
-                CutoutWidget.h
-                TutorialOverlay.h)
-target_sources(OrbitQtTests
         PRIVATE AccessibilityAdapterTest.cpp
                 AnnotatingSourceCodeDialogTest.cpp
                 CallTreeViewItemModelTest.cpp
+                CaptureWindowDebugWidgetTest.cpp
+                DebugTabWidgetTest.cpp
                 HistogramWidgetTest.cpp
                 MultipleOfValidatorTest.cpp
-                TutorialOverlayTest.cpp
+                TimeGraphLayoutWidgetTest.cpp
                 TrackTypeItemModelTest.cpp)
 
 target_include_directories(OrbitQtTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

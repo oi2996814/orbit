@@ -2,19 +2,51 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <gmock/gmock.h>
+#include <GteVector.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
 
 #include <cmath>
 #include <memory>
+#include <tuple>
 #include <utility>
 
-#include "CaptureViewElementTester.h"
-#include "GlSlider.h"
-#include "Viewport.h"
+#include "OrbitGl/CaptureViewElement.h"
+#include "OrbitGl/CaptureViewElementTester.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/GlSlider.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/Viewport.h"
 
 namespace orbit_gl {
+
+namespace {
+
+template <typename T>
+[[nodiscard]] std::shared_ptr<T> CreateTestSlider(Viewport*, TimeGraphLayout*) {}
+
+template <>
+[[nodiscard]] std::shared_ptr<GlHorizontalSlider> CreateTestSlider(Viewport* viewport,
+                                                                   TimeGraphLayout* layout) {
+  auto result = std::make_shared<GlHorizontalSlider>(/*parent=*/nullptr, viewport, layout,
+                                                     /*timeline_info=*/nullptr);
+  // The tests implicitly assume that the horizontal slider has a specific width which was
+  // previously the default, and only possible width, returned by the HorizontalSlider::GetWidth()
+  // function override: "viewport->GetScreenWidth() - layout->GetSliderWidth()". Since we can now
+  // set the slider width, and the default width is 0, we replicate the previous behavior by
+  // explicitly setting this width.
+  float test_width = viewport->GetScreenWidth() - layout->GetSliderWidth();
+  result->SetWidth(test_width);
+  return result;
+}
+
+template <>
+[[nodiscard]] std::shared_ptr<GlVerticalSlider> CreateTestSlider(Viewport* viewport,
+                                                                 TimeGraphLayout* layout) {
+  return std::make_shared<GlVerticalSlider>(/*parent=*/nullptr, viewport, layout,
+                                            /*timeline_info=*/nullptr);
+}
+
+}  // namespace
 
 template <int dim>
 void Pick(GlSlider& slider, int start, int other_dim = 0) {
@@ -54,7 +86,7 @@ void PickDragRelease(GlSlider& slider, int start, int end = -1, int other_dim = 
 }
 
 template <typename SliderClass>
-std::tuple<std::unique_ptr<SliderClass>, std::unique_ptr<Viewport>,
+std::tuple<std::shared_ptr<SliderClass>, std::unique_ptr<Viewport>,
            std::unique_ptr<CaptureViewElementTester>>
 Setup() {
   std::unique_ptr<CaptureViewElementTester> tester = std::make_unique<CaptureViewElementTester>();
@@ -63,8 +95,9 @@ Setup() {
   std::unique_ptr<Viewport> viewport =
       std::make_unique<Viewport>(100 + orthogonal_slider_width, 1000 + orthogonal_slider_width);
 
-  std::unique_ptr<SliderClass> slider =
-      std::make_unique<SliderClass>(nullptr, viewport.get(), tester->GetLayout(), nullptr);
+  // Sliders use "shared_from_this", so we can't use std::unique_ptr here.
+  std::shared_ptr<SliderClass> slider =
+      CreateTestSlider<SliderClass>(viewport.get(), tester->GetLayout());
 
   // Set the slider to be 50% of the maximum size, position in the middle
   slider->SetNormalizedPosition(0.5f);
@@ -79,9 +112,9 @@ template <typename SliderClass, int dim>
 static void TestDragType() {
   auto [slider, viewport, tester] = Setup<SliderClass>();
 
-  const float kPos = 0.5f;
-  const float kSize = 0.5f;
-  const int kOffset = 2;
+  constexpr float kPos = 0.5f;
+  constexpr float kSize = 0.5f;
+  constexpr int kOffset = 2;
 
   int drag_count = 0;
   float pos = kPos;
@@ -155,18 +188,18 @@ static void TestScroll(float slider_length = 0.25) {
 
   // Use different scales for x and y to make sure dims are chosen correctly
   int scale = static_cast<int>(std::pow(10, dim));
-  float pos;
-  const int kOffset = 2;
+  float pos = 0.f;
+  constexpr int kOffset = 2;
 
   slider->SetDragCallback([&](float ratio) { pos = ratio; });
   slider->SetNormalizedLength(slider_length);
 
   PickDragRelease<dim>(*slider, kOffset);
   EXPECT_LT(pos, 0.5f);
-  const float kCurPos = pos;
+  const float cur_pos = pos;
 
   PickDragRelease<dim>(*slider, 100 * scale - kOffset);
-  EXPECT_GT(pos, kCurPos);
+  EXPECT_GT(pos, cur_pos);
 }
 
 TEST(Slider, Scroll) {
@@ -180,7 +213,7 @@ static void TestDrag(float slider_length = 0.25) {
 
   // Use different scales for x and y to make sure dims are chosen correctly
   int scale = static_cast<int>(std::pow(10, dim));
-  float pos;
+  float pos = 0.f;
 
   slider->SetDragCallback([&](float ratio) { pos = ratio; });
   slider->SetNormalizedLength(slider_length);
@@ -232,7 +265,7 @@ static void TestScaling() {
 
   float size = 0.5f;
   float pos = 0.5f;
-  const int kOffset = 2;
+  constexpr int kOffset = 2;
 
   // Use different scales for x and y to make sure dims are chosen correctly
   int scale = static_cast<int>(std::pow(10, dim));
@@ -292,16 +325,14 @@ static void TestBreakScaling() {
     return;
   }
 
-  float pos;
-  float len;
-  const int kOffset = 2;
+  constexpr int kOffset = 2;
 
   // Use different scales for x and y to make sure dims are chosen correctly
   int scale = static_cast<int>(std::pow(10, dim));
 
   // Pick on the right, then drag across the end of the slider
-  pos = slider->GetSliderPixelPos();
-  len = slider->GetSliderPixelLength();
+  float pos = slider->GetSliderPixelPos();
+  float len = slider->GetSliderPixelLength();
   PickDragRelease<dim>(*slider, 75 * scale - kOffset, 0);
   EXPECT_NEAR(slider->GetSliderPixelPos(), pos, kEpsilon);
   EXPECT_NEAR(slider->GetSliderPixelLength(), slider->GetMinSliderPixelLength(), kEpsilon);
@@ -343,20 +374,24 @@ TEST(Slider, MouseMoveRequestRedraw) {
   CaptureViewElementTester tester;
   Viewport* viewport = tester.GetViewport();
 
-  std::shared_ptr<GlHorizontalSlider> slider{
-      std::make_shared<GlHorizontalSlider>(nullptr, viewport, tester.GetLayout(), nullptr)};
+  std::shared_ptr<GlHorizontalSlider> slider =
+      CreateTestSlider<GlHorizontalSlider>(viewport, tester.GetLayout());
   tester.SimulatePreRender(slider.get());
 
-  Vec2 kPosInSlider = slider->GetPos();
+  // In CreateTestSlider, we have called SetWidth() which sets "update_primitives_requested_" to
+  // true. Simulate a draw loop to reinitialize the draw flags before testing their values below.
+  tester.SimulateDrawLoop(slider.get(), true, true);
+
+  Vec2 pos_in_slider = slider->GetPos();
 
   // Any mouse move or mouse leave should trigger a redraw in the slider.
   EXPECT_EQ(slider->HandleMouseEvent(CaptureViewElement::MouseEvent{
-                CaptureViewElement::MouseEventType::kMouseMove, kPosInSlider}),
+                CaptureViewElement::MouseEventType::kMouseMove, pos_in_slider}),
             CaptureViewElement::EventResult::kIgnored);
   tester.SimulateDrawLoopAndCheckFlags(slider.get(), true, false);
 
   EXPECT_EQ(slider->HandleMouseEvent(CaptureViewElement::MouseEvent{
-                CaptureViewElement::MouseEventType::kMouseMove, kPosInSlider}),
+                CaptureViewElement::MouseEventType::kMouseMove, pos_in_slider}),
             CaptureViewElement::EventResult::kIgnored);
   tester.SimulateDrawLoopAndCheckFlags(slider.get(), true, false);
 
@@ -366,7 +401,7 @@ TEST(Slider, MouseMoveRequestRedraw) {
   tester.SimulateDrawLoopAndCheckFlags(slider.get(), true, false);
 
   EXPECT_EQ(slider->HandleMouseEvent(CaptureViewElement::MouseEvent{
-                CaptureViewElement::MouseEventType::kMouseMove, kPosInSlider}),
+                CaptureViewElement::MouseEventType::kMouseMove, pos_in_slider}),
             CaptureViewElement::EventResult::kIgnored);
   tester.SimulateDrawLoopAndCheckFlags(slider.get(), true, false);
 }

@@ -4,26 +4,28 @@
 
 #include "DataViews/ModulesDataView.h"
 
-#include <absl/flags/declare.h>
-#include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/ascii.h>
+#include <absl/strings/match.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
-#include <stddef.h>
+#include <absl/types/span.h>
+#include <stdint.h>
 
 #include <algorithm>
-#include <cstdint>
+#include <filesystem>
 #include <functional>
+#include <map>
 #include <tuple>
+#include <utility>
 
 #include "ClientData/ModuleData.h"
 #include "ClientData/ProcessData.h"
-#include "ClientFlags/ClientFlags.h"
 #include "DataViews/CompareAscendingOrDescending.h"
 #include "DataViews/DataView.h"
 #include "DataViews/DataViewType.h"
+#include "DataViews/SymbolLoadingState.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "OrbitBase/Append.h"
 #include "OrbitBase/Logging.h"
 
 using orbit_client_data::ModuleData;
@@ -35,7 +37,7 @@ namespace orbit_data_views {
 ModulesDataView::ModulesDataView(AppInterface* app) : DataView(DataViewType::kModules, app) {}
 
 const std::vector<DataView::Column>& ModulesDataView::GetColumns() {
-  static const std::vector<Column> columns = [] {
+  static const std::vector<Column> kColumns = [] {
     std::vector<Column> columns;
     columns.resize(kNumColumns);
     columns[kColumnSymbols] = {"Symbols", .175f, SortingOrder::kDescending};
@@ -45,7 +47,12 @@ const std::vector<DataView::Column>& ModulesDataView::GetColumns() {
     columns[kColumnFileSize] = {"File Size", .1f, SortingOrder::kDescending};
     return columns;
   }();
-  return columns;
+  return kColumns;
+}
+
+void ModulesDataView::OnDataChanged() {
+  ORBIT_SCOPE_FUNCTION;
+  DoFilter();
 }
 
 std::string ModulesDataView::GetValue(int row, int col) {
@@ -94,6 +101,7 @@ std::string ModulesDataView::GetToolTip(int row, int column) {
   }
 
 void ModulesDataView::DoSort() {
+  ORBIT_SCOPE_FUNCTION;
   bool ascending = sorting_orders_[sorting_column_] == SortingOrder::kAscending;
   std::function<bool(uint64_t, uint64_t)> sorter = nullptr;
 
@@ -128,12 +136,7 @@ void ModulesDataView::DoSort() {
 }
 
 DataView::ActionStatus ModulesDataView::GetActionStatus(std::string_view action, int clicked_index,
-                                                        const std::vector<int>& selected_indices) {
-  if (action == kMenuActionVerifyFramePointers &&
-      !absl::GetFlag(FLAGS_enable_frame_pointer_validator)) {
-    return ActionStatus::kInvisible;
-  }
-
+                                                        absl::Span<const int> selected_indices) {
   // transform selected_indices into modules
   std::vector<const ModuleData*> modules;
   modules.reserve(selected_indices.size());
@@ -141,15 +144,6 @@ DataView::ActionStatus ModulesDataView::GetActionStatus(std::string_view action,
     const ModuleData* module = GetModuleDataFromRow(index);
     ORBIT_CHECK(module);
     modules.emplace_back(module);
-  }
-
-  if (action == kMenuActionVerifyFramePointers) {
-    bool at_least_one_module_is_loaded =
-        std::any_of(modules.begin(), modules.end(),
-                    [](const ModuleData* module) { return module->AreDebugSymbolsLoaded(); });
-
-    return at_least_one_module_is_loaded ? ActionStatus::kVisibleAndEnabled
-                                         : ActionStatus::kVisibleButDisabled;
   }
 
   bool at_least_one_module_can_be_loaded =
@@ -197,9 +191,10 @@ void ModulesDataView::DoFilter() {
   std::vector<uint64_t> indices;
   std::vector<std::string> tokens = absl::StrSplit(absl::AsciiStrToLower(filter_), ' ');
 
-  for (const auto& [start_address, memory_space] : start_address_to_module_in_memory_) {
-    std::string module_string = absl::StrFormat("%s %s", memory_space.FormattedAddressRange(),
-                                                absl::AsciiStrToLower(memory_space.file_path()));
+  for (const auto& [start_address, module_in_memory] : start_address_to_module_in_memory_) {
+    std::string module_string = absl::StrFormat(
+        "%s %s", module_in_memory.FormattedAddressRange(),
+        absl::AsciiStrToLower(start_address_to_module_.at(start_address)->file_path()));
 
     bool match = true;
 
@@ -220,7 +215,7 @@ void ModulesDataView::DoFilter() {
 
 void ModulesDataView::AddModule(uint64_t start_address, ModuleData* module,
                                 ModuleInMemory module_in_memory) {
-  start_address_to_module_.insert_or_assign(start_address, std::move(module));
+  start_address_to_module_.insert_or_assign(start_address, module);
   start_address_to_module_in_memory_.insert_or_assign(start_address, std::move(module_in_memory));
   indices_.push_back(start_address);
 }

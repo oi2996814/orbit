@@ -4,7 +4,10 @@
 
 #include <gtest/gtest.h>
 
-#include "Viewport.h"
+#include <memory>
+
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Viewport.h"
 
 namespace orbit_gl {
 

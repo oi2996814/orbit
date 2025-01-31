@@ -7,8 +7,10 @@
 
 #include <absl/container/flat_hash_set.h>
 #include <absl/container/node_hash_map.h>
+#include <absl/hash/hash.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -23,9 +25,21 @@
 #include "ClientProtos/capture_data.pb.h"
 #include "GrpcProtos/capture.pb.h"
 #include "GrpcProtos/tracepoint.pb.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadConstants.h"
 
 namespace orbit_client_data {
+
+// TimeRange represents an inclusive time range. A timer is only considered within the time range if
+// it is fully enclosed in it.
+struct TimeRange {
+  TimeRange(uint64_t start, uint64_t end) : start(start), end(end) { ORBIT_CHECK(start <= end); }
+  [[nodiscard]] bool IsTimerInRange(const orbit_client_protos::TimerInfo& timer) const {
+    return start <= timer.start() && timer.end() <= end;
+  }
+  uint64_t start;
+  uint64_t end;
+};
 
 // This class is responsible for storing and navigating data on the client side.
 // Note that every method of this class should be called on the main thread.
@@ -38,7 +52,7 @@ class DataManager final {
   void DeselectFunction(const FunctionInfo& function);
   void ClearSelectedFunctions();
   void set_visible_scope_ids(absl::flat_hash_set<ScopeId> visible_scope_ids);
-  void set_highlighted_scope_id(std::optional<ScopeId> highlighted_function_id);
+  void set_highlighted_scope_id(std::optional<ScopeId> highlighted_scope_id);
   void set_highlighted_group_id(uint64_t highlighted_group_id);
   void set_selected_thread_id(uint32_t thread_id);
   void set_selected_thread_state_slice(
@@ -67,6 +81,10 @@ class DataManager final {
   void DisableFrameTrack(const FunctionInfo& function);
   [[nodiscard]] bool IsFrameTrackEnabled(const FunctionInfo& function) const;
   void ClearUserDefinedCaptureData();
+
+  void SetSelectionTimeRange(const TimeRange& time_range);
+  void ClearSelectionTimeRange();
+  [[nodiscard]] const std::optional<TimeRange>& GetSelectionTimeRange() const;
 
   [[nodiscard]] const UserDefinedCaptureData& user_defined_capture_data() const;
 
@@ -164,6 +182,8 @@ class DataManager final {
   bool collect_memory_info_ = false;
   uint64_t memory_sampling_period_ms_ = 10;
   uint64_t memory_warning_threshold_kb_ = 8ULL * 1024 * 1024;
+
+  std::optional<TimeRange> selection_time_range_;
 };
 
 }  // namespace orbit_client_data

@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "orbitdataviewpanel.h"
+#include "OrbitQt/orbitdataviewpanel.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <string>
+#include <string_view>
 
 #include "ui_orbitdataviewpanel.h"
 
@@ -43,7 +44,9 @@ void OrbitDataViewPanel::Initialize(orbit_data_views::DataView* data_view,
     ui_->refreshButton->hide();
   }
 
-  data_view->SetUiFilterCallback([this](const std::string& filter) { SetFilter(filter.c_str()); });
+  data_view->SetUiFilterCallback([this](std::string_view filter) {
+    SetFilter(QString::fromUtf8(filter.data(), filter.size()));
+  });
 }
 
 void OrbitDataViewPanel::Deinitialize() { ui_->treeView->Deinitialize(); }
@@ -61,8 +64,6 @@ void OrbitDataViewPanel::Refresh() { ui_->treeView->Refresh(); }
 void OrbitDataViewPanel::SetDataModel(orbit_data_views::DataView* model) {
   ui_->treeView->SetDataModel(model);
 }
-
-void OrbitDataViewPanel::ClearDataModel() { ui_->treeView->ClearDataModel(); }
 
 void OrbitDataViewPanel::SetFilter(const QString& filter) { ui_->FilterLineEdit->setText(filter); }
 

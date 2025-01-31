@@ -2,22 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "FrameTrack.h"
+#include "OrbitGl/FrameTrack.h"
 
 #include <GteVector.h>
 #include <absl/strings/str_format.h>
 #include <absl/time/time.h>
 
 #include <algorithm>
-#include <limits>
+#include <filesystem>
+#include <memory>
 #include <utility>
 
+#include "ApiInterface/Orbit.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "GlCanvas.h"
-#include "GlUtils.h"
-#include "PrimitiveAssembler.h"
-#include "TextRenderer.h"
-#include "TimeGraphLayout.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/TextRenderer.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/TrackHeader.h"
 
 using orbit_client_data::CaptureData;
 using orbit_client_data::FunctionInfo;
@@ -133,8 +136,8 @@ Color FrameTrack::GetTimerColor(const orbit_client_protos::TimerInfo& timer_info
   if (timer_info.user_data_key() % 2 == 0) {
     color = 0.8f * color;
   }
-  return Color(static_cast<uint8_t>(color[0]), static_cast<uint8_t>(color[1]),
-               static_cast<uint8_t>(color[2]), static_cast<uint8_t>(color[3]));
+  return {static_cast<uint8_t>(color[0]), static_cast<uint8_t>(color[1]),
+          static_cast<uint8_t>(color[2]), static_cast<uint8_t>(color[3])};
 }
 
 void FrameTrack::OnTimer(const TimerInfo& timer_info) {
@@ -213,14 +216,14 @@ void FrameTrack::DoDraw(PrimitiveAssembler& primitive_assembler, TextRenderer& t
                         const DrawContext& draw_context) {
   TimerTrack::DoDraw(primitive_assembler, text_renderer, draw_context);
 
-  const Color kWhiteColor(255, 255, 255, 255);
-  const Color kBlackColor(0, 0, 0, 255);
+  const Color white_color(255, 255, 255, 255);
+  const Color black_color(0, 0, 0, 255);
   const Vec2 pos = GetPos();
 
-  const float x = pos[0];
+  const float x = pos[0] + header_->GetWidth();
   const float y = pos[1] + GetHeightAboveTimers() + GetMaximumBoxHeight() - GetAverageBoxHeight();
   Vec2 from(x, y);
-  Vec2 to(x + GetWidth(), y);
+  Vec2 to(pos[0] + GetWidth(), y);
   float text_z = GlCanvas::kZValueTrackText;
 
   std::string avg_time =
@@ -228,14 +231,14 @@ void FrameTrack::DoDraw(PrimitiveAssembler& primitive_assembler, TextRenderer& t
   std::string label = absl::StrFormat("Avg: %s", avg_time);
   uint32_t font_size = layout_->GetFontSize();
   float string_width = text_renderer.GetStringWidth(label.c_str(), font_size);
-  Vec2 white_text_box_position(pos[0] + layout_->GetRightMargin(), y);
+  Vec2 white_text_box_position(x + layout_->GetRightMargin(), y);
 
   primitive_assembler.AddLine(from, from + Vec2(layout_->GetRightMargin() / 2.f, 0), text_z,
-                              kWhiteColor);
+                              white_color);
   primitive_assembler.AddLine(Vec2(white_text_box_position[0] + string_width, y), to, text_z,
-                              kWhiteColor);
+                              white_color);
 
-  TextRenderer::TextFormatting formatting{font_size, kWhiteColor, string_width};
+  TextRenderer::TextFormatting formatting{font_size, white_color, string_width};
   formatting.valign = TextRenderer::VAlign::Middle;
 
   text_renderer.AddText(label.c_str(), white_text_box_position[0], white_text_box_position[1],

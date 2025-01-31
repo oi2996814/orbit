@@ -3,16 +3,23 @@
 // found in the LICENSE file.
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <thread>
+#include <utility>
+#include <variant>
 #include <vector>
 
+#include "ApiInterface/Orbit.h"
 #include "ApiUtils/Event.h"
 #include "Introspection/Introspection.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadUtils.h"
 
 static void TestScopes() {

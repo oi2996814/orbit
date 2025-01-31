@@ -2,22 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "SamplingReport.h"
+#include "OrbitGl/SamplingReport.h"
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
-#include <absl/meta/type_traits.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/str_format.h>
 
 #include <algorithm>
 #include <iterator>
 #include <optional>
 
-#include "App.h"
 #include "ClientData/CallstackInfo.h"
 #include "ClientData/CallstackType.h"
 #include "ClientData/PostProcessedSamplingData.h"
-#include "ClientProtos/capture_data.pb.h"
+#include "Introspection/Introspection.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitGl/OrbitApp.h"
 
 using orbit_client_data::CallstackCount;
 using orbit_client_data::CallstackInfo;
@@ -28,12 +29,10 @@ using orbit_client_data::ThreadSampleData;
 
 SamplingReport::SamplingReport(
     OrbitApp* app, const orbit_client_data::CallstackData* callstack_data,
-    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data,
-    bool has_summary)
+    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data)
     : app_{app},
       callstack_data_{callstack_data},
-      post_processed_sampling_data_{post_processed_sampling_data},
-      has_summary_{has_summary} {
+      post_processed_sampling_data_{post_processed_sampling_data} {
   ORBIT_SCOPE_FUNCTION;
   ORBIT_SCOPED_TIMED_LOG("SamplingReport::SamplingReport");
   ORBIT_CHECK(callstack_data_ != nullptr);
@@ -194,7 +193,7 @@ double SamplingReport::ComputeUnwindErrorRatio(uint32_t thread_id) const {
   if (post_processed_sampling_data_ == nullptr) {
     return 0.;
   }
-  auto* thread_sampling_data =
+  const auto* thread_sampling_data =
       post_processed_sampling_data_->GetThreadSampleDataByThreadId(thread_id);
   if (thread_sampling_data == nullptr) {
     return 0.;

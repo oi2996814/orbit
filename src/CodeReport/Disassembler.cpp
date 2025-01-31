@@ -4,13 +4,16 @@
 
 #include "CodeReport/Disassembler.h"
 
-#include <absl/strings/numbers.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_replace.h>
 #include <capstone/capstone.h>
+#include <capstone/x86.h>
+#include <stdint.h>
 
 #include <algorithm>
+#include <utility>
 
+#include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
 
 namespace orbit_code_report {
@@ -47,10 +50,10 @@ void Disassembler::Disassemble(orbit_client_data::ProcessData& process,
 
   count = cs_disasm(handle, static_cast<const uint8_t*>(machine_code), size, address, 0, &insn);
 
-  if (count) {
-    size_t j;
+  if (count != 0u) {
+    size_t j = 0;
 
-    for (j = 0; j < count; j++) {
+    for (; j < count; j++) {
       cs_insn* current_instruction = &insn[j];
       if (IsCallInstruction(insn[j])) {
         const orbit_client_data::FunctionInfo* callee = nullptr;

@@ -5,8 +5,11 @@
 #ifndef OBJECT_UTILS_PDB_FILE_H_
 #define OBJECT_UTILS_PDB_FILE_H_
 
+#include <stdint.h>
+
 #include <array>
 #include <filesystem>
+#include <memory>
 
 #include "GrpcProtos/symbol.pb.h"
 #include "ObjectUtils/SymbolsFile.h"
@@ -17,7 +20,7 @@ namespace orbit_object_utils {
 class PdbFile : public SymbolsFile {
  public:
   PdbFile() = default;
-  virtual ~PdbFile() = default;
+  ~PdbFile() override = default;
 
   // GUID and Age are used to match PDB files to objects, similar to build id in the ELF case.
   [[nodiscard]] virtual std::array<uint8_t, 16> GetGuid() const = 0;

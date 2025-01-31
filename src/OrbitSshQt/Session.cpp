@@ -4,21 +4,27 @@
 
 #include "OrbitSshQt/Session.h"
 
-#include <absl/base/macros.h>
+#include <absl/base/attributes.h>
 #include <libssh2.h>
 
 #include <optional>
+#include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
+#include "OrbitBase/Future.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
+#include "OrbitSsh/Error.h"
 #include "OrbitSsh/Session.h"
+#include "OrbitSshQt/StateMachineHelper.h"
 
 namespace orbit_ssh_qt {
 
 outcome::result<void> Session::startup() {
   switch (CurrentState()) {
-    case State::kInitial:
+    case State::kInitialized:
     case State::kDisconnected: {
       OUTCOME_TRY(auto&& socket, orbit_ssh::Socket::Create());
       socket_ = std::move(socket);
@@ -52,15 +58,21 @@ outcome::result<void> Session::startup() {
       ABSL_FALLTHROUGH_INTENDED;
     }
     case State::kMatchedKnownHosts: {
-      OUTCOME_TRY(session_->Authenticate(credentials_.user, credentials_.key_path));
+      while (true) {
+        outcome::result<void> result = session_->Authenticate(
+            credentials_.user, credentials_.key_paths.at(next_credential_key_index_));
+        if (!result.has_error()) break;
+        if (result.has_error() && orbit_ssh::ShouldITryAgain(result)) return result;
+        if (++next_credential_key_index_ == credentials_.key_paths.size()) return result;
+      }
       SetState(State::kConnected);
       break;
     }
     case State::kStarted:
     case State::kConnected:
-    case State::kShutdown:
+    case State::kStopping:
     case State::kAboutToDisconnect:
-    case State::kDone:
+    case State::kStopped:
     case State::kError:
       ORBIT_UNREACHABLE();
   }
@@ -70,7 +82,7 @@ outcome::result<void> Session::startup() {
 
 outcome::result<void> Session::shutdown() {
   switch (CurrentState()) {
-    case State::kInitial:
+    case State::kInitialized:
     case State::kDisconnected:
     case State::kSocketCreated:
     case State::kSocketConnected:
@@ -80,16 +92,16 @@ outcome::result<void> Session::shutdown() {
     case State::kStarted:
     case State::kConnected:
       ORBIT_UNREACHABLE();
-    case State::kShutdown:
+    case State::kStopping:
     case State::kAboutToDisconnect: {
       OUTCOME_TRY(session_->Disconnect());
       notifiers_ = std::nullopt;
       socket_ = std::nullopt;
       session_ = std::nullopt;
-      SetState(State::kDone);
+      SetState(State::kStopped);
       ABSL_FALLTHROUGH_INTENDED;
     }
-    case State::kDone:
+    case State::kStopped:
       break;
     case State::kError:
       ORBIT_UNREACHABLE();
@@ -111,12 +123,15 @@ void Session::HandleEagain() {
     // should wait for the socket to have data available for reading or writing.
     // `libssh2_session_block_directions` tells which direction to listen on.
 
-    notifiers_->read.setEnabled(flags & LIBSSH2_SESSION_BLOCK_INBOUND);
-    notifiers_->write.setEnabled(flags & LIBSSH2_SESSION_BLOCK_OUTBOUND);
+    notifiers_->read.setEnabled((flags & LIBSSH2_SESSION_BLOCK_INBOUND) != 0);
+    notifiers_->write.setEnabled((flags & LIBSSH2_SESSION_BLOCK_OUTBOUND) != 0);
   }
 }
 
-void Session::ConnectToServer(orbit_ssh::Credentials creds) {
+orbit_base::Future<ErrorMessageOr<void>> Session::ConnectToServer(orbit_ssh::Credentials creds) {
+  if (creds.key_paths.empty()) {
+    return ErrorMessage{"No private key path was provided."};
+  }
   credentials_ = std::move(creds);
 
   notifiers_ = std::nullopt;
@@ -125,14 +140,16 @@ void Session::ConnectToServer(orbit_ssh::Credentials creds) {
   SetState(State::kDisconnected);
 
   OnEvent();
+  return GetStartedFuture();
 }
 
-void Session::Disconnect() {
+orbit_base::Future<ErrorMessageOr<void>> Session::Disconnect() {
   if (CurrentState() == State::kConnected) {
     SetState(State::kAboutToDisconnect);
+    OnEvent();
   }
 
-  OnEvent();
+  return GetStoppedFuture();
 }
 
 void Session::SetError(std::error_code e) {
@@ -141,6 +158,14 @@ void Session::SetError(std::error_code e) {
   notifiers_ = std::nullopt;
   session_ = std::nullopt;
   socket_ = std::nullopt;
+}
+
+void Session::SetState(details::SessionState state) {
+  auto previous_state = CurrentState();
+  StateMachineHelper::SetState(state);
+  if (previous_state != state && state == State::kMatchedKnownHosts) {
+    next_credential_key_index_ = 0;
+  }
 }
 
 }  // namespace orbit_ssh_qt

@@ -6,6 +6,18 @@
 
 #include <sys/mman.h>
 
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "LibunwindstackMultipleOfflineAndProcessMemory.h"
+#include "OrbitBase/Logging.h"
+#include "unwindstack/MachineX86_64.h"
+#include "unwindstack/MapInfo.h"
+#include "unwindstack/Regs.h"
+#include "unwindstack/RegsX86_64.h"
+
 namespace orbit_linux_tracing {
 template <typename CallchainPerfEventDataT>
 orbit_grpc_protos::Callstack::CallstackType LeafFunctionCallManager::PatchCallerOfLeafFunctionImpl(

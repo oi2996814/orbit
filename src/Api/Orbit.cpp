@@ -6,12 +6,18 @@
 
 #include <absl/base/casts.h>
 
-#include "ApiUtils/ApiEnableInfo.h"
+#include <utility>
+
 #include "ApiUtils/Event.h"
 #include "LockFreeApiEventProducer.h"
 #include "OrbitApiVersions.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/Profiling.h"
 #include "OrbitBase/ThreadUtils.h"
+
+#ifdef _WIN32
+#include "ApiUtils/ApiEnableInfo.h"
+#endif
 
 namespace {
 orbit_api::LockFreeApiEventProducer& GetCaptureEventProducer() {

@@ -10,28 +10,23 @@
 #include <absl/strings/str_format.h>
 #include <absl/synchronization/mutex.h>
 #include <absl/time/time.h>
-#include <stdio.h>
+#include <errno.h>
 
 #include <array>
-#include <system_error>
+#include <cstdio>
+#include <type_traits>
+#include <vector>
 
 #include "LoggingUtils.h"
 #include "OrbitBase/SafeStrerror.h"
 #include "OrbitBase/ThreadUtils.h"
 #include "OrbitBase/UniqueResource.h"
 
-#ifdef _WIN32
-#include <Windows.h>
-
-// Windows does not have TEMP_FAILURE_RETRY, shortcut to expression
-#define TEMP_FAILURE_RETRY(expression) (expression)
-#endif
-
 namespace orbit_base {
 
 static absl::Mutex log_file_mutex(absl::kConstInit);
-static orbit_base::unique_resource log_file{static_cast<FILE*>(nullptr), [](FILE* f) {
-                                              if (f != nullptr) TEMP_FAILURE_RETRY(fclose(f));
+static orbit_base::unique_resource log_file{static_cast<std::FILE*>(nullptr), [](std::FILE* f) {
+                                              if (f != nullptr) std::fclose(f);
                                             }};
 std::string GetLogFileName() {
   std::string timestamp_string = absl::FormatTime(orbit_base_internal::kLogFileNameTimeFormat,
@@ -57,20 +52,17 @@ void InitLogFile(const std::filesystem::path& path) {
     ORBIT_INTERNAL_PLATFORM_ABORT();
   }
 
-  // TEMP_FAILURE_RETRY for FILE*
-  do {
-    // O_WRONLY, O_CLOEXEC for glibc, O_BINARY for windows
+  // O_WRONLY, O_CLOEXEC for glibc, O_BINARY for windows
 #if defined(_WIN32)
-    log_file.reset(fopen(path.string().c_str(), "wb"));
+  log_file.reset(std::fopen(path.string().c_str(), "wb"));
 #else
-    log_file.reset(fopen(path.string().c_str(), "wbe"));
+  log_file.reset(std::fopen(path.string().c_str(), "wbe"));
 #endif
-  } while (log_file.get() == nullptr && errno == EINTR);
 
   if (log_file.get() == nullptr) {
     // Log a error (to stderr)
-    fprintf(stderr, "Error: Unable to open logfile \"%s\": %s\n", path.string().c_str(),
-            SafeStrerror(errno));
+    std::fprintf(stderr, "Error: Unable to open logfile \"%s\": %s\n", path.string().c_str(),
+                 SafeStrerror(errno));
   }
 }
 
@@ -92,20 +84,13 @@ void LogStacktrace() {
 
 namespace orbit_base_internal {
 
-void LogToFile(const std::string& message) {
+void LogToFile(std::string_view message) {
   absl::MutexLock lock(&orbit_base::log_file_mutex);
   if (orbit_base::log_file.get() != nullptr) {
     // Ignore any errors that can happen, we cannot do anything about them at this point anyways.
-    fwrite(message.c_str(), message.size(), 1, orbit_base::log_file.get());
-    fflush(orbit_base::log_file.get());
+    std::fwrite(message.data(), message.size(), 1, orbit_base::log_file.get());
+    std::fflush(orbit_base::log_file.get());
   }
 }
-
-#ifdef _WIN32
-void OutputToDebugger(const char* str) {
-  std::wstring str_w = orbit_base::ToStdWString(str);
-  ::OutputDebugStringW(str_w.c_str());
-}
-#endif
 
 }  // namespace orbit_base_internal

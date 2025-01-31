@@ -4,28 +4,36 @@
 
 #include <absl/base/casts.h>
 #include <gmock/gmock.h>
+#include <google/protobuf/io/coded_stream.h>
 #include <google/protobuf/io/zero_copy_stream_impl_lite.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
 
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
 
 #include "CaptureFile/CaptureFile.h"
 #include "CaptureFile/CaptureFileOutputStream.h"
 #include "CaptureFile/CaptureFileSection.h"
+#include "CaptureFile/ProtoSectionInputStream.h"
 #include "GrpcProtos/capture.pb.h"
-#include "OrbitBase/File.h"
 #include "OrbitBase/MakeUniqueForOverwrite.h"
 #include "OrbitBase/Result.h"
-#include "OrbitBase/TemporaryFile.h"
+#include "OrbitBase/WriteStringToFile.h"
 #include "Test/Path.h"
+#include "TestUtils/TemporaryDirectory.h"
 #include "TestUtils/TestUtils.h"
 
 namespace orbit_capture_file {
 
-using orbit_base::TemporaryFile;
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasNoError;
 using orbit_test_utils::HasValue;
 
@@ -37,11 +45,11 @@ static constexpr uint64_t kNotAnAnswerKey = 43;
 
 using orbit_grpc_protos::ClientCaptureEvent;
 
-static ClientCaptureEvent CreateInternedStringCaptureEvent(uint64_t key, const std::string& str) {
+static ClientCaptureEvent CreateInternedStringCaptureEvent(uint64_t key, std::string str) {
   ClientCaptureEvent event;
   orbit_grpc_protos::InternedString* interned_string = event.mutable_interned_string();
   interned_string->set_key(key);
-  interned_string->set_intern(str);
+  interned_string->set_intern(std::move(str));
   return event;
 }
 
@@ -49,13 +57,18 @@ class CaptureFileHeaderTest : public testing::Test {
  public:
   void SetUp() override {
     // ASSERT_THAT cannot be used in the constructor, hence this work is done in SetUp.
-    auto tmp_file_or_error = TemporaryFile::Create();
-    ASSERT_THAT(tmp_file_or_error, HasNoError());
-    temporary_file_ = std::make_unique<TemporaryFile>(std::move(tmp_file_or_error.value()));
+    auto tmp_dir_or_error = orbit_test_utils::TemporaryDirectory::Create();
+    ASSERT_THAT(tmp_dir_or_error, HasNoError());
+    temporary_dir_ = std::move(tmp_dir_or_error.value());
   }
 
  protected:
-  std::unique_ptr<TemporaryFile> temporary_file_;
+  [[nodiscard]] std::filesystem::path GetCaptureFilePath() const {
+    return temporary_dir_->GetDirectoryPath() / "capture.orbit";
+  }
+
+ private:
+  std::optional<orbit_test_utils::TemporaryDirectory> temporary_dir_;
 };
 
 class CaptureFileTest : public CaptureFileHeaderTest {
@@ -66,15 +79,13 @@ class CaptureFileTest : public CaptureFileHeaderTest {
 
   void SetUp() override {
     CaptureFileHeaderTest::SetUp();
-    temporary_file_->CloseAndRemove();
 
     AddCaptureSection();
     OpenTemporayFileAsCaptureFile();
   }
 
   void AddCaptureSection() {
-    auto output_stream_or_error =
-        CaptureFileOutputStream::Create(temporary_file_->file_path().string());
+    auto output_stream_or_error = CaptureFileOutputStream::Create(GetCaptureFilePath().string());
     ASSERT_THAT(output_stream_or_error, HasNoError());
     auto output_stream = std::move(output_stream_or_error.value());
 
@@ -108,7 +119,7 @@ class CaptureFileTest : public CaptureFileHeaderTest {
   }
 
   void OpenTemporayFileAsCaptureFile() {
-    auto capture_file_or_error = CaptureFile::OpenForReadWrite(temporary_file_->file_path());
+    auto capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
     ASSERT_THAT(capture_file_or_error, HasNoError());
     capture_file_ = std::move(capture_file_or_error.value());
   }
@@ -208,7 +219,7 @@ TEST_F(CaptureFileTest, CreateCaptureFileWriteAdditionalSectionAndReadMainSectio
     ClientCaptureEvent event;
     ErrorMessageOr<void> error = capture_section->ReadMessage(&event);
     if (error.has_error()) {
-      ASSERT_THAT(error, HasError("Unexpected end of section"));
+      ASSERT_THAT(error, HasErrorWithMessage("Unexpected end of section"));
       return;
     }
     ASSERT_EQ(0, event.ByteSizeLong());
@@ -219,7 +230,7 @@ TEST_F(CaptureFileTest, CreateCaptureFileWriteAdditionalSectionAndReadMainSectio
 TEST_F(CaptureFileTest, CreateCaptureFileAndAddUserDataSection) {
   EXPECT_EQ(capture_file_->GetSectionList().size(), 0);
 
-  uint64_t buf_size;
+  uint64_t buf_size{};
   {
     ClientCaptureEvent event;
     event.mutable_capture_finished()->set_status(orbit_grpc_protos::CaptureFinished::kFailed);
@@ -293,18 +304,19 @@ TEST_F(CaptureFileTest, CreateCaptureFileAndAddUserDataSection) {
 }
 
 TEST_F(CaptureFileHeaderTest, OpenCaptureFileInvalidSignature) {
-  auto write_result =
-      orbit_base::WriteFully(temporary_file_->fd(), "This is not an Orbit Capture File");
+  EXPECT_THAT(
+      orbit_base::WriteStringToFile(GetCaptureFilePath(), "This is not an Orbit Capture File"),
+      HasNoError());
 
-  auto capture_file_or_error = CaptureFile::OpenForReadWrite(temporary_file_->file_path());
-  EXPECT_THAT(capture_file_or_error, HasError("Invalid file signature"));
+  auto capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
+  EXPECT_THAT(capture_file_or_error, HasErrorWithMessage("Invalid file signature"));
 }
 
 TEST_F(CaptureFileHeaderTest, OpenCaptureFileTooSmall) {
-  auto write_result = orbit_base::WriteFully(temporary_file_->fd(), "ups");
+  EXPECT_THAT(orbit_base::WriteStringToFile(GetCaptureFilePath(), "ups"), HasNoError());
 
-  auto capture_file_or_error = CaptureFile::OpenForReadWrite(temporary_file_->file_path());
-  EXPECT_THAT(capture_file_or_error, HasError("Failed to read the file signature"));
+  auto capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
+  EXPECT_THAT(capture_file_or_error, HasErrorWithMessage("Failed to read the file signature"));
 }
 
 static std::string CreateHeader(uint32_t version, uint64_t capture_section_offset,
@@ -322,10 +334,10 @@ static std::string CreateHeader(uint32_t version, uint64_t capture_section_offse
 TEST_F(CaptureFileHeaderTest, OpenCaptureFileInvalidVersion) {
   std::string header = CreateHeader(0, 0, 0);
 
-  auto write_result = orbit_base::WriteFully(temporary_file_->fd(), header);
+  EXPECT_THAT(orbit_base::WriteStringToFile(GetCaptureFilePath(), header), HasNoError());
 
-  auto capture_file_or_error = CaptureFile::OpenForReadWrite(temporary_file_->file_path());
-  EXPECT_THAT(capture_file_or_error, HasError("Incompatible version 0, expected 1"));
+  auto capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
+  EXPECT_THAT(capture_file_or_error, HasErrorWithMessage("Incompatible version 0, expected 1"));
 }
 
 TEST_F(CaptureFileHeaderTest, OpenCaptureFileInvalidSectionListSize) {
@@ -335,10 +347,11 @@ TEST_F(CaptureFileHeaderTest, OpenCaptureFileInvalidSectionListSize) {
   header.append(
       std::string_view{absl::bit_cast<const char*>(&kSectionListSize), sizeof(kSectionListSize)});
 
-  auto write_result = orbit_base::WriteFully(temporary_file_->fd(), header);
+  EXPECT_THAT(orbit_base::WriteStringToFile(GetCaptureFilePath(), header), HasNoError());
 
-  auto capture_file_or_error = CaptureFile::OpenForReadWrite(temporary_file_->file_path());
-  EXPECT_THAT(capture_file_or_error, HasError("Unexpected EOF while reading section list"));
+  auto capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
+  EXPECT_THAT(capture_file_or_error,
+              HasErrorWithMessage("Unexpected EOF while reading section list"));
 }
 
 TEST_F(CaptureFileHeaderTest, OpenCaptureFileInvalidSectionListSizeTooLarge) {
@@ -348,10 +361,10 @@ TEST_F(CaptureFileHeaderTest, OpenCaptureFileInvalidSectionListSizeTooLarge) {
   header.append(
       std::string_view{absl::bit_cast<const char*>(&kSectionListSize), sizeof(kSectionListSize)});
 
-  auto write_result = orbit_base::WriteFully(temporary_file_->fd(), header);
+  EXPECT_THAT(orbit_base::WriteStringToFile(GetCaptureFilePath(), header), HasNoError());
 
-  auto capture_file_or_error = CaptureFile::OpenForReadWrite(temporary_file_->file_path());
-  EXPECT_THAT(capture_file_or_error, HasError("The section list is too large"));
+  auto capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
+  EXPECT_THAT(capture_file_or_error, HasErrorWithMessage("The section list is too large"));
 }
 
 TEST_F(CaptureFileTest, AddSectionOfTypeNoUserDataSection) {
@@ -398,28 +411,24 @@ TEST_F(CaptureFileTest, AddSectionOfTypeContainsUserDataSection) {
 }
 
 TEST_F(CaptureFileTest, CannotAddUserDataSectionAsAdditionalSection) {
-  EXPECT_THAT(capture_file_->AddAdditionalSectionOfType(kSectionTypeUserData, 50),
-              HasError("Cannot add a user data section as an additional (read only) section."));
+  EXPECT_THAT(
+      capture_file_->AddAdditionalSectionOfType(kSectionTypeUserData, 50),
+      HasErrorWithMessage("Cannot add a user data section as an additional (read only) section."));
 }
 
 TEST_F(CaptureFileHeaderTest, ModifyExisting) {
-  const std::filesystem::path path = temporary_file_->file_path();
   {
-    // Copy existing file from testdata to the tmp location while preserving permissions
-    const auto temporary_file_perms = std::filesystem::status(path).permissions();
-
-    temporary_file_->CloseAndRemove();
-
     std::error_code error;
-    std::filesystem::copy_file(orbit_test::GetTestdataDir() / "test_capture.orbit", path, error);
+    std::filesystem::copy_file(orbit_test::GetTestdataDir() / "test_capture.orbit",
+                               GetCaptureFilePath(), error);
     ASSERT_FALSE(error) << error.message();
 
-    // Update permissions to what they have been before
-    std::filesystem::permissions(path, temporary_file_perms, error);
+    std::filesystem::permissions(GetCaptureFilePath(), std::filesystem::perms::owner_write,
+                                 std::filesystem::perm_options::add, error);
     ASSERT_FALSE(error) << error.message();
   }
 
-  auto capture_file_or_error = CaptureFile::OpenForReadWrite(path);
+  auto capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
   ASSERT_THAT(capture_file_or_error, HasValue());
   auto capture_file = std::move(capture_file_or_error.value());
 
@@ -434,7 +443,7 @@ TEST_F(CaptureFileHeaderTest, ModifyExisting) {
   EXPECT_EQ(capture_file->FindAllSectionsByType(kSectionType).size(), number_of_type_sections + 1);
 
   // Reopen file, nothing changed
-  capture_file_or_error = CaptureFile::OpenForReadWrite(path);
+  capture_file_or_error = CaptureFile::OpenForReadWrite(GetCaptureFilePath());
   ASSERT_THAT(capture_file_or_error, HasValue());
   capture_file = std::move(capture_file_or_error.value());
 

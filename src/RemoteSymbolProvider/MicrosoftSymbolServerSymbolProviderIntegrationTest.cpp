@@ -3,22 +3,31 @@
 // found in the LICENSE file.
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/str_replace.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <utility>
 
 #include "GrpcProtos/symbol.pb.h"
 #include "Http/HttpDownloadManager.h"
 #include "ObjectUtils/SymbolsFile.h"
+#include "OrbitBase/File.h"
+#include "OrbitBase/Future.h"
 #include "OrbitBase/Result.h"
 #include "OrbitBase/StopSource.h"
-#include "OrbitBase/TemporaryFile.h"
-#include "QtUtils/MainThreadExecutorImpl.h"
+#include "QtUtils/MainThreadExecutor.h"
 #include "RemoteSymbolProvider/MicrosoftSymbolServerSymbolProvider.h"
 #include "SymbolProvider/SymbolLoadingOutcome.h"
 #include "Symbols/MockSymbolCache.h"
+#include "TestUtils/TemporaryFile.h"
 #include "TestUtils/TestUtils.h"
 
 namespace orbit_remote_symbol_provider {
@@ -28,33 +37,33 @@ using orbit_test_utils::HasNoError;
 using orbit_test_utils::HasValue;
 
 TEST(MicrosoftSymbolServerSymbolProviderIntegrationTest, RetrieveWindowsPdbAndLoadDebugSymbols) {
-  auto temporary_file_or_error = orbit_base::TemporaryFile::Create();
+  auto temporary_file_or_error = orbit_test_utils::TemporaryFile::Create();
   ASSERT_THAT(temporary_file_or_error, HasNoError());
-  orbit_base::TemporaryFile temporary_file = std::move(temporary_file_or_error.value());
+  orbit_test_utils::TemporaryFile temporary_file = std::move(temporary_file_or_error.value());
   ASSERT_TRUE(temporary_file.file_path().has_parent_path());
-  const std::filesystem::path kSymbolCacheDir = temporary_file.file_path().parent_path();
+  const std::filesystem::path symbol_cache_dir = temporary_file.file_path().parent_path();
 
   orbit_symbols::MockSymbolCache symbol_cache;
   EXPECT_CALL(symbol_cache, GenerateCachedFilePath)
-      .WillRepeatedly([&kSymbolCacheDir](const std::filesystem::path& module_file_path) {
+      .WillRepeatedly([&symbol_cache_dir](const std::filesystem::path& module_file_path) {
         auto file_name = absl::StrReplaceAll(module_file_path.string(), {{"/", "_"}});
-        return kSymbolCacheDir / file_name;
+        return symbol_cache_dir / file_name;
       });
 
   orbit_http::HttpDownloadManager download_manager{};
   MicrosoftSymbolServerSymbolProvider symbol_provider{&symbol_cache, &download_manager};
 
-  std::shared_ptr<orbit_qt_utils::MainThreadExecutorImpl> executor{
-      orbit_qt_utils::MainThreadExecutorImpl::Create()};
+  orbit_qt_utils::MainThreadExecutor executor{};
 
-  const std::string kValidModuleName{"d3d11.pdb"};
-  const std::string kValidModuleBuildId{"FF5440275BFED43A86CC2B1F287A72151"};
-  orbit_symbol_provider::ModuleIdentifier kValidModuleId{kValidModuleName, kValidModuleBuildId};
+  static const std::string kValidModuleName{"d3d11.pdb"};
+  static const std::string kValidModuleBuildId{"FF5440275BFED43A86CC2B1F287A72151"};
 
   orbit_base::StopSource stop_source{};
 
-  symbol_provider.RetrieveSymbols(kValidModuleId, stop_source.GetStopToken())
-      .Then(executor.get(), [](const orbit_symbol_provider::SymbolLoadingOutcome& result) {
+  symbol_provider
+      .RetrieveSymbols({.module_path = kValidModuleName, .build_id = kValidModuleBuildId},
+                       stop_source.GetStopToken())
+      .Then(&executor, [](const orbit_symbol_provider::SymbolLoadingOutcome& result) {
         ASSERT_TRUE(orbit_symbol_provider::IsSuccessResult(result));
         orbit_symbol_provider::SymbolLoadingSuccessResult success_result =
             orbit_symbol_provider::GetSuccessResult(result);

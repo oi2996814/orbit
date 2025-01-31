@@ -5,6 +5,8 @@
 #ifndef FAKE_CLIENT_GRAPHICS_CAPTURE_EVENT_PROCESSOR_H_
 #define FAKE_CLIENT_GRAPHICS_CAPTURE_EVENT_PROCESSOR_H_
 
+#include <absl/types/span.h>
+
 #include <cstdint>
 
 #include "CaptureClient/CaptureEventProcessor.h"
@@ -52,7 +54,7 @@ void ForEachCentile(uint32_t num_centiles, const Distribution& distribution,
 // keeping track of the calls to the frame boundary function and GPU queue submissions.
 class GraphicsCaptureEventProcessor : public orbit_capture_client::CaptureEventProcessor {
  public:
-  ~GraphicsCaptureEventProcessor() {
+  ~GraphicsCaptureEventProcessor() override {
     CalculateCpuStats();
     CalculateGpuStats();
     std::filesystem::path file_path(absl::GetFlag(FLAGS_output_path));
@@ -148,7 +150,7 @@ class GraphicsCaptureEventProcessor : public orbit_capture_client::CaptureEventP
   }
 
   static void PrintCommandBufferTimestamps(
-      const std::vector<CommandBufferTimestamps>& command_buffers_timestamps) {
+      absl::Span<const CommandBufferTimestamps> command_buffers_timestamps) {
     for (size_t i = 0; i < command_buffers_timestamps.size(); ++i) {
       const uint64_t begin_timestamp_ns = command_buffers_timestamps[i].begin;
       const uint64_t end_timestamp_ns = command_buffers_timestamps[i].end;
@@ -286,7 +288,6 @@ class GraphicsCaptureEventProcessor : public orbit_capture_client::CaptureEventP
   // it as frame boundary to compute the average CPU frame time.
   static constexpr uint64_t kQueuePresentFunctionId = std::numeric_limits<uint64_t>::max();
 
- private:
   static constexpr uint64_t kMaxTimeMs = 1023;  // This is an arbitrary number
   static constexpr const char* kCpuFrameTimeFilename = "cpu_frame_times.txt";
   static constexpr const char* kGpuFrameTimeFilename = "gpu_frame_times.txt";

@@ -286,13 +286,16 @@
 
 #ifdef __cplusplus
 #include <atomic>
+
 #define ORBIT_THREAD_FENCE_ACQUIRE() std::atomic_thread_fence(std::memory_order_acquire)
 #else
 #if __STDC_VERSION__ >= 201112L
 #include <stdatomic.h>
+
 #define ORBIT_THREAD_FENCE_ACQUIRE() atomic_thread_fence(memory_order_acquire)
 #elif defined(_WIN32)
 #include <windows.h>
+
 // In this case we only have a full (read and write) barrier available.
 #define ORBIT_THREAD_FENCE_ACQUIRE() MemoryBarrier()
 #else
@@ -311,7 +314,7 @@ extern "C" {
 #endif
 
 // Material Design Colors #500
-typedef enum {
+typedef enum {  // NOLINT(modernize-use-using): This is C code.
   kOrbitColorAuto = 0x00000000,
   kOrbitColorRed = 0xf44336ff,
   kOrbitColorPink = 0xe91e63ff,
@@ -339,7 +342,7 @@ enum { kOrbitCallerAddressAuto = 0ULL };
 
 enum { kOrbitApiVersion = 2 };
 
-struct orbit_api_v2 {
+struct orbit_api_v2 {  // NOLINT(readability-identifier-naming)
   uint32_t enabled;
   uint32_t initialized;
   void (*start)(const char* name, orbit_api_color color, uint64_t group_id,
@@ -389,9 +392,9 @@ static
 #endif
     inline bool
     orbit_api_active() {
-  bool initialized = g_orbit_api.initialized;
+  bool initialized = g_orbit_api.initialized != 0u;
   ORBIT_THREAD_FENCE_ACQUIRE();
-  return initialized && g_orbit_api.enabled;
+  return initialized && (g_orbit_api.enabled != 0u);
 }
 
 #define ORBIT_CALL(function_name, ...)                                                           \

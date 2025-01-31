@@ -28,10 +28,10 @@ template <typename ScopeT>
 class ScopeNode {
  public:
   ScopeNode() = default;
-  ScopeNode(ScopeT* scope) : scope_(scope) {}
+  explicit ScopeNode(ScopeT* scope) : scope_(scope) {}
 
   void Insert(ScopeNode* node);
-  std::string ToString() const {
+  [[nodiscard]] std::string ToString() const {
     std::string result;
     ToString(this, &result);
     return result;
@@ -76,7 +76,7 @@ class ScopeTree {
   ScopeTree();
   void Insert(ScopeT* scope);
   void Print() const { ORBIT_LOG("%s", ToString()); }
-  std::string ToString() const;
+  [[nodiscard]] std::string ToString() const;
 
   using ScopeNodeT = ScopeNode<ScopeT>;
 
@@ -84,7 +84,7 @@ class ScopeTree {
   [[nodiscard]] size_t Size() const { return nodes_.size(); }
   [[nodiscard]] size_t CountOrderedNodesByDepth() const;
   [[nodiscard]] uint32_t Depth() const;
-  [[nodiscard]] const absl::btree_map<uint64_t /*start time*/, ScopeNodeT*> GetOrderedNodesAtDepth(
+  [[nodiscard]] const absl::btree_map<uint64_t /*start time*/, ScopeNodeT*>& GetOrderedNodesAtDepth(
       uint32_t depth) const;
   [[nodiscard]] const ScopeT* FindFirstScopeAtOrAfterTime(uint32_t depth, uint64_t time) const;
   [[nodiscard]] const ScopeT* FindNextScopeAtDepth(const ScopeT& scope) const;
@@ -109,8 +109,8 @@ class ScopeTree {
 
 template <typename ScopeT>
 ScopeTree<ScopeT>::ScopeTree() {
-  static ScopeT kDefaultScope;
-  root_ = CreateNode(&kDefaultScope);
+  static ScopeT default_scope;
+  root_ = CreateNode(&default_scope);
   ordered_nodes_by_depth_[0].emplace(0, root_);
 }
 
@@ -148,13 +148,14 @@ const ScopeT* ScopeTree<ScopeT>::FindFirstChild(const ScopeT& scope) const {
   return children.begin()->second->GetScope();
 }
 template <typename ScopeT>
-const absl::btree_map<uint64_t, ScopeNode<ScopeT>*> ScopeTree<ScopeT>::GetOrderedNodesAtDepth(
+const absl::btree_map<uint64_t, ScopeNode<ScopeT>*>& ScopeTree<ScopeT>::GetOrderedNodesAtDepth(
     uint32_t depth) const {
   // Scope Tree includes a dummy node at depth 0 and therefore it's 1-indexed.
   depth++;
 
   if (!GetOrderedNodesByDepth().contains(depth)) {
-    return {};
+    static const absl::btree_map<uint64_t, ScopeNode<ScopeT>*> kEmptyScopes = {};
+    return kEmptyScopes;
   }
   return GetOrderedNodesByDepth().at(depth);
 }

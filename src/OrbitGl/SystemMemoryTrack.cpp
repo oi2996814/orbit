@@ -2,51 +2,50 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "SystemMemoryTrack.h"
+#include "OrbitGl/SystemMemoryTrack.h"
 
 #include <absl/strings/str_format.h>
+#include <stdint.h>
 
-#include "ApiUtils/EncodedEvent.h"
-#include "CaptureClient/CaptureEventProcessor.h"
+#include <optional>
+#include <utility>
+#include <vector>
+
 #include "DisplayFormats/DisplayFormats.h"
-#include "GrpcProtos/Constants.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitGl/CoreMath.h"
 
 namespace orbit_gl {
 
 namespace {
 
-using orbit_capture_client::CaptureEventProcessor;
-using orbit_grpc_protos::kMissingInfo;
-
-const std::string kTrackValueLabelUnit = "MB";
-const std::array<std::string, kSystemMemoryTrackDimension> kSeriesName = {
-    "Used", "Buffers / Cached", "Unused"};
-constexpr uint64_t kMegabytesToBytes = 1024 * 1024;
+static const std::vector<std::string> kSeriesName = {"Used", "Buffers / Cached", "Unused"};
+static constexpr uint8_t kTrackValueDecimalDigits = 2;
+static const std::string kTrackValueLabelUnit = "MB";
+static constexpr uint64_t kMegabytesToBytes = 1024 * 1024;
 
 }  // namespace
 
-constexpr uint8_t kTrackValueDecimalDigits = 2;
 SystemMemoryTrack::SystemMemoryTrack(CaptureViewElement* parent,
                                      const orbit_gl::TimelineInfoInterface* timeline_info,
                                      orbit_gl::Viewport* viewport, TimeGraphLayout* layout,
                                      const orbit_client_data::ModuleManager* module_manager,
                                      const orbit_client_data::CaptureData* capture_data)
-    : MemoryTrack<kSystemMemoryTrackDimension>(parent, timeline_info, viewport, layout, kSeriesName,
-                                               kTrackValueDecimalDigits, kTrackValueLabelUnit,
-                                               module_manager, capture_data) {
+    : MemoryTrack(parent, timeline_info, viewport, layout, kSeriesName, kTrackValueDecimalDigits,
+                  kTrackValueLabelUnit, module_manager, capture_data) {
   // Colors are selected from https://convertingcolors.com/list/avery.html.
   // Use reddish colors for different used memories, yellowish colors for different cached memories
   // and greenish colors for different unused memories.
-  const std::array<Color, kSystemMemoryTrackDimension> kSystemMemoryTrackColors{
+  std::vector<Color> system_memory_track_colors{
       Color(231, 68, 53, 255),  // red
       Color(246, 196, 0, 255),  // orange
       Color(87, 166, 74, 255)   // green
   };
-  SetSeriesColors(kSystemMemoryTrackColors);
+  SetSeriesColors(std::move(system_memory_track_colors));
 
-  const std::string kValueLowerBoundLabel = "Minimum: 0 GB";
+  const std::string value_lower_bound_label = "Minimum: 0 GB";
   constexpr double kValueLowerBoundRawValue = 0.0;
-  TrySetValueLowerBound(kValueLowerBoundLabel, kValueLowerBoundRawValue);
+  TrySetValueLowerBound(value_lower_bound_label, kValueLowerBoundRawValue);
 }
 
 std::string SystemMemoryTrack::GetName() const {
@@ -58,19 +57,19 @@ std::string SystemMemoryTrack::GetTooltip() const {
 }
 
 void SystemMemoryTrack::TrySetValueUpperBound(double total_mb) {
-  const std::string kValueUpperBoundLabel = "System Memory Total";
+  const std::string value_upper_bound_label = "System Memory Total";
   std::string pretty_size =
       orbit_display_formats::GetDisplaySize(static_cast<uint64_t>(total_mb * kMegabytesToBytes));
-  std::string pretty_label = absl::StrFormat("%s: %s", kValueUpperBoundLabel, pretty_size);
-  MemoryTrack<kSystemMemoryTrackDimension>::TrySetValueUpperBound(pretty_label, total_mb);
+  std::string pretty_label = absl::StrFormat("%s: %s", value_upper_bound_label, pretty_size);
+  MemoryTrack::TrySetValueUpperBound(pretty_label, total_mb);
 }
 
 void SystemMemoryTrack::SetWarningThreshold(double warning_threshold_mb) {
-  const std::string kWarningThresholdLabel = "Production Limit";
+  const std::string warning_threshold_label = "Production Limit";
   std::string pretty_size = orbit_display_formats::GetDisplaySize(
       static_cast<uint64_t>(warning_threshold_mb * kMegabytesToBytes));
-  std::string pretty_label = absl::StrFormat("%s: %s", kWarningThresholdLabel, pretty_size);
-  MemoryTrack<kSystemMemoryTrackDimension>::SetWarningThreshold(pretty_label, warning_threshold_mb);
+  std::string pretty_label = absl::StrFormat("%s: %s", warning_threshold_label, pretty_size);
+  MemoryTrack::SetWarningThreshold(pretty_label, warning_threshold_mb);
 }
 
 std::string SystemMemoryTrack::GetLegendTooltips(size_t legend_index) const {
@@ -91,31 +90,24 @@ std::string SystemMemoryTrack::GetLegendTooltips(size_t legend_index) const {
   }
 }
 
-void SystemMemoryTrack::OnTimer(const orbit_client_protos::TimerInfo& timer_info) {
-  int64_t total_kb = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kTotalKb)));
-  int64_t unused_kb = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kFreeKb)));
-  int64_t buffers_kb = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kBuffersKb)));
-  int64_t cached_kb = orbit_api::Decode<int64_t>(timer_info.registers(
-      static_cast<size_t>(CaptureEventProcessor::SystemMemoryUsageEncodingIndex::kCachedKb)));
-  if (total_kb == kMissingInfo || unused_kb == kMissingInfo || buffers_kb == kMissingInfo ||
-      cached_kb == kMissingInfo) {
+void SystemMemoryTrack::OnSystemMemoryInfo(
+    const orbit_client_data::SystemMemoryInfo& system_memory_info) {
+  if (system_memory_info.HasMissingInfo()) {
     return;
   }
 
   constexpr double kMegabytesToKilobytes = 1024.0;
-  double total_mb = RoundPrecision(static_cast<double>(total_kb) / kMegabytesToKilobytes);
-  double unused_mb = RoundPrecision(static_cast<double>(unused_kb) / kMegabytesToKilobytes);
-  double buffers_or_cached_mb =
-      RoundPrecision(static_cast<double>(buffers_kb + cached_kb) / kMegabytesToKilobytes);
-  double used_mb = total_mb - unused_mb - buffers_or_cached_mb;
-  AddValues(timer_info.start(), {used_mb, buffers_or_cached_mb, unused_mb});
+  double total_mb =
+      RoundPrecision(static_cast<double>(system_memory_info.total_kb) / kMegabytesToKilobytes);
+  double free_mb =
+      RoundPrecision(static_cast<double>(system_memory_info.free_kb) / kMegabytesToKilobytes);
+  double buffers_or_cached_mb = RoundPrecision(
+      static_cast<double>(system_memory_info.buffers_kb + system_memory_info.cached_kb) /
+      kMegabytesToKilobytes);
+  double used_mb = total_mb - free_mb - buffers_or_cached_mb;
+  AddValues(system_memory_info.timestamp_ns, {used_mb, buffers_or_cached_mb, free_mb});
 
   if (!GetValueUpperBound().has_value()) TrySetValueUpperBound(total_mb);
-
-  MemoryTrack<kSystemMemoryTrackDimension>::OnTimer(timer_info);
 }
 
 }  // namespace orbit_gl

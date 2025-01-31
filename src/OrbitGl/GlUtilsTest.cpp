@@ -5,10 +5,12 @@
 #include <absl/time/time.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <stdlib.h>
 
+#include <cmath>
 #include <memory>
 
-#include "GlUtils.h"
+#include "OrbitGl/GlUtils.h"
 
 TEST(GlUtils, TicksToDuration) {
   uint64_t t0 = 0;
@@ -29,4 +31,11 @@ TEST(GlUtils, TicksToMicroseconds) {
   constexpr double kEpsilon = 0.001;
   EXPECT_TRUE(abs(dt0 - 1.0) < kEpsilon);
   EXPECT_TRUE(abs(dt1 - 2.0) < kEpsilon);
+}
+
+TEST(GlUtils, TicksToMicrosecondsNegative) {
+  uint64_t t0 = 0;
+  uint64_t t1 = 2000;
+  EXPECT_TRUE(TicksToMicroseconds(t0, t1) > 0);
+  EXPECT_TRUE(TicksToMicroseconds(t1, t0) < 0);
 }

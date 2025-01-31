@@ -21,17 +21,10 @@ ABSL_DECLARE_FLAG(std::string, collector_root_password);
 
 ABSL_DECLARE_FLAG(uint16_t, grpc_port);
 
-ABSL_DECLARE_FLAG(bool, local);
-
 ABSL_DECLARE_FLAG(std::string, process_name);
-
-ABSL_DECLARE_FLAG(bool, enable_tutorials_feature);
 
 // TODO(b/160549506): Remove this flag once it can be specified in the ui.
 ABSL_DECLARE_FLAG(bool, frame_pointer_unwinding);
-
-// TODO(kuebler): remove this once we have the validator complete
-ABSL_DECLARE_FLAG(bool, enable_frame_pointer_validator);
 
 // TODO: Remove this flag once we have a way to toggle the display return values
 ABSL_DECLARE_FLAG(bool, show_return_values);
@@ -47,13 +40,7 @@ ABSL_DECLARE_FLAG(std::string, instance_symbols_folder);
 
 ABSL_DECLARE_FLAG(bool, enforce_full_redraw);
 
-// VSI
-ABSL_DECLARE_FLAG(std::string, target_process);
-ABSL_DECLARE_FLAG(std::string, target_instance);
 ABSL_DECLARE_FLAG(std::vector<std::string>, additional_symbol_paths);
-
-// TestHub custom protocol support
-ABSL_DECLARE_FLAG(std::string, target_uri);
 
 // Clears QSettings. This is intended for e2e tests.
 ABSL_DECLARE_FLAG(bool, clear_settings);
@@ -77,5 +64,16 @@ ABSL_DECLARE_FLAG(bool, symbol_store_support);
 
 // Disables retrieving symbols from the instance.
 ABSL_DECLARE_FLAG(bool, disable_instance_symbols);
+
+// SSH related flags.
+ABSL_DECLARE_FLAG(std::string, ssh_hostname);
+ABSL_DECLARE_FLAG(uint16_t, ssh_port);
+ABSL_DECLARE_FLAG(std::string, ssh_user);
+ABSL_DECLARE_FLAG(std::string, ssh_known_host_path);
+ABSL_DECLARE_FLAG(std::string, ssh_key_path);
+ABSL_DECLARE_FLAG(std::string, ssh_target_process);
+
+// Introspection on entry.
+ABSL_DECLARE_FLAG(bool, introspect);
 
 #endif  // CLIENT_FLAGS_CLIENT_FLAGS_H_

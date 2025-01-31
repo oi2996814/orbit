@@ -30,7 +30,6 @@ target_link_libraries(OrbitServiceLib PUBLIC
 else()
 target_link_libraries(OrbitServiceLib PUBLIC
         CrashService
-        FramePointerValidatorService
         LinuxCaptureService
         ProcessService
         TracepointService)
@@ -44,4 +43,8 @@ target_link_libraries(OrbitService PRIVATE
   absl::flags_usage
   absl::flags_parse)
 
-strip_symbols(OrbitService)
+if (NOT WIN32)
+install(TARGETS OrbitService
+        CONFIGURATIONS Release
+        RUNTIME DESTINATION /opt/orbitprofiler)
+endif()

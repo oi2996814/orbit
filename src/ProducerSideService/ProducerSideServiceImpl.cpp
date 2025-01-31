@@ -7,6 +7,7 @@
 #include <absl/synchronization/mutex.h>
 #include <absl/time/time.h>
 #include <google/protobuf/arena.h>
+#include <stddef.h>
 
 #include <thread>
 #include <utility>

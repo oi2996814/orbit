@@ -5,13 +5,16 @@
 #include "ClientData/ModuleData.h"
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
+#include <absl/meta/type_traits.h>
 
 #include <algorithm>
-#include <filesystem>
+#include <cinttypes>
+#include <utility>
 
 #include "GrpcProtos/module.pb.h"
+#include "Introspection/Introspection.h"
 #include "OrbitBase/Logging.h"
-#include "absl/synchronization/mutex.h"
 
 using orbit_grpc_protos::ModuleInfo;
 
@@ -57,11 +60,6 @@ ModuleInfo::ObjectFileType ModuleData::object_file_type() const {
 std::vector<ModuleInfo::ObjectSegment> ModuleData::GetObjectSegments() const {
   absl::MutexLock lock(&mutex_);
   return {module_info_.object_segments().begin(), module_info_.object_segments().end()};
-}
-
-orbit_symbol_provider::ModuleIdentifier ModuleData::module_id() const {
-  absl::MutexLock lock(&mutex_);
-  return orbit_symbol_provider::ModuleIdentifier{module_info_.file_path(), module_info_.build_id()};
 }
 
 uint64_t ModuleData::ConvertFromVirtualAddressToOffsetInFile(uint64_t virtual_address) const {
@@ -136,7 +134,9 @@ bool ModuleData::UpdateIfChangedAndUnload(ModuleInfo new_module_info) {
   ORBIT_LOG("Module %s contained symbols. Because the module changed, those are now removed.",
             module_info_.file_path());
   functions_.clear();
+  absolute_address_to_function_info_cache_.clear();
   hash_to_function_map_.clear();
+  name_to_function_info_map_.clear();
   loaded_symbols_completeness_ = SymbolCompleteness::kNoSymbols;
 
   return true;
@@ -165,20 +165,34 @@ const FunctionInfo* ModuleData::FindFunctionByVirtualAddress(uint64_t virtual_ad
   absl::MutexLock lock(&mutex_);
   if (functions_.empty()) return nullptr;
 
+  auto cache_it = absolute_address_to_function_info_cache_.find(virtual_address);
+  if (cache_it != absolute_address_to_function_info_cache_.end()) {
+    return cache_it->second;
+  }
+
   if (is_exact) {
     auto it = functions_.find(virtual_address);
-    return (it != functions_.end()) ? it->second.get() : nullptr;
+    FunctionInfo* result = (it != functions_.end()) ? it->second.get() : nullptr;
+    absolute_address_to_function_info_cache_.emplace(virtual_address, result);
+    return result;
   }
 
   auto it = functions_.upper_bound(virtual_address);
-  if (it == functions_.begin()) return nullptr;
+  if (it == functions_.begin()) {
+    absolute_address_to_function_info_cache_.emplace(virtual_address, nullptr);
+    return nullptr;
+  }
 
   --it;
   FunctionInfo* function = it->second.get();
   ORBIT_CHECK(function->address() <= virtual_address);
 
-  if (function->address() + function->size() < virtual_address) return nullptr;
+  if (function->address() + function->size() < virtual_address) {
+    absolute_address_to_function_info_cache_.emplace(virtual_address, nullptr);
+    return nullptr;
+  }
 
+  absolute_address_to_function_info_cache_.emplace(virtual_address, function);
   return function;
 }
 
@@ -219,6 +233,7 @@ bool ModuleData::AreAtLeastFallbackSymbolsLoaded() const {
 }
 
 void ModuleData::AddSymbols(const orbit_grpc_protos::ModuleSymbols& module_symbols) {
+  ORBIT_SCOPE_FUNCTION;
   absl::MutexLock lock(&mutex_);
   AddSymbolsInternal(module_symbols, SymbolCompleteness::kDebugSymbols);
 }
@@ -230,10 +245,14 @@ void ModuleData::AddFallbackSymbols(const orbit_grpc_protos::ModuleSymbols& modu
 
 void ModuleData::AddSymbolsInternal(const orbit_grpc_protos::ModuleSymbols& module_symbols,
                                     ModuleData::SymbolCompleteness completeness) {
+  ORBIT_SCOPE(
+      absl::StrFormat("AddSymbolsInternal [%u]", module_symbols.symbol_infos().size()).c_str());
   mutex_.AssertHeld();
   ORBIT_CHECK(loaded_symbols_completeness_ < completeness);
   functions_.clear();
+  absolute_address_to_function_info_cache_.clear();
   hash_to_function_map_.clear();
+  name_to_function_info_map_.clear();
 
   uint32_t address_reuse_counter = 0;
   uint32_t name_reuse_counter = 0;

@@ -3,27 +3,38 @@
 // found in the LICENSE file.
 
 #include <gmock/gmock.h>
+#include <google/protobuf/stubs/port.h>
 #include <gtest/gtest.h>
 #include <sys/mman.h>
 #include <unwindstack/Error.h>
 #include <unwindstack/MapInfo.h>
 #include <unwindstack/Unwinder.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "GrpcProtos/capture.pb.h"
+#include "LibunwindstackMultipleOfflineAndProcessMemory.h"
 #include "LibunwindstackUnwinder.h"
+#include "LinuxTracing/UserSpaceInstrumentationAddresses.h"
 #include "MockTracerListener.h"
 #include "PerfEvent.h"
 #include "PerfEventRecords.h"
+#include "TestUtils/SaveRangeFromArg.h"
 #include "UprobesFunctionCallManager.h"
-#include "UprobesReturnAddressManager.h"
 #include "UprobesUnwindingVisitor.h"
 #include "UprobesUnwindingVisitorTestCommon.h"
+#include "unwindstack/SharedString.h"
+
+using orbit_test_utils::SaveRangeFromArg;
 
 namespace orbit_linux_tracing {
 
@@ -179,7 +190,7 @@ class UprobesUnwindingVisitorDwarfUnwindingTestBase : public ::testing::Test {
       kNonExecutableMapsStart, kNonExecutableMapsEnd, 0, PROT_EXEC | PROT_READ, kNonExecutableName);
 
   static constexpr uint64_t kNumOfSpRegisters =
-      sizeof(perf_event_sample_regs_user_sp) / sizeof(uint64_t);
+      sizeof(RingBufferSampleRegsUserSp) / sizeof(uint64_t);
 };
 
 template <typename>
@@ -188,8 +199,7 @@ class UprobesUnwindingVisitorDwarfUnwindingTest
 
 template <typename PerfEventType>
 PerfEventType BuildFakePerfEventWithStack() {
-  constexpr uint64_t kTotalNumOfRegisters =
-      sizeof(perf_event_sample_regs_user_all) / sizeof(uint64_t);
+  constexpr uint64_t kTotalNumOfRegisters = sizeof(RingBufferSampleRegsUserAll) / sizeof(uint64_t);
 
   constexpr uint64_t kStackSize = 13;
   PerfEventType result{
@@ -234,7 +244,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
                                       ::testing::_, ::testing::_, ::testing::_))
       .Times(1)
       .WillOnce(
-          ::testing::DoAll(::testing::SaveArg<3>(&actual_stack_slices),
+          ::testing::DoAll(SaveRangeFromArg<3>(&actual_stack_slices),
                            ::testing::Return(LibunwindstackResult{
                                libunwindstack_callstack, {}, unwindstack::ErrorCode::ERROR_NONE})));
 
@@ -311,10 +321,8 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitTwoValidStackSamplesSendsAddressInfosOnlyOnce) {
-  typename TypeParam::PerfEventT event1 =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
-  typename TypeParam::PerfEventT event2 =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event1 = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event2 = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample)
       .Times(2)
@@ -408,8 +416,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 TYPED_TEST_P(
     UprobesUnwindingVisitorDwarfUnwindingTest,
     VisitValidStackSampleWithNullptrMapInfosSendsCompleteCallstackAndAddressInfosWithoutModuleName) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -491,8 +498,7 @@ TYPED_TEST_P(
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitEmptyStackSampleWithoutUprobesDoesNothing) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -526,8 +532,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitInvalidStackSampleWithoutUprobesSendsUnwindingErrorAndAddressInfos) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample)
       .Times(1)
@@ -600,8 +605,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitSingleFrameStackSampleWithoutUprobesSendsUnwindingErrorAndAddressInfos) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -661,8 +665,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitSingleFrameStackSampleInFunctionToStopAtSendsCompleteCallstackAndAddressInfos) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   this->absolute_address_to_size_of_functions_to_stop_at_[TestFixture::kTargetAddress1] = 100;
 
@@ -724,8 +727,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 TYPED_TEST_P(
     UprobesUnwindingVisitorDwarfUnwindingTest,
     VisitSingleFrameStackSampleOutsideOfAnyFunctionToStopAtSendsUnwindingErrorAndAddressInfos) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   this->absolute_address_to_size_of_functions_to_stop_at_[TestFixture::kTargetAddress2] = 100;
 
@@ -787,8 +789,7 @@ TYPED_TEST_P(
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitStackSampleWithinUprobeSendsInUprobesCallstack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -859,8 +860,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 TYPED_TEST_P(
     UprobesUnwindingVisitorDwarfUnwindingTest,
     VisitStackSampleWithinUserSpaceInstrumentationTrampolineSendsInUserSpaceInstrumentationCallstack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -932,8 +932,7 @@ TYPED_TEST_P(
 TYPED_TEST_P(
     UprobesUnwindingVisitorDwarfUnwindingTest,
     VisitStackSampleWithinUserSpaceInstrumentationTrampolineAndLibrarySendsInUserSpaceInstrumentationCallstack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1025,8 +1024,7 @@ TYPED_TEST_P(
 TYPED_TEST_P(
     UprobesUnwindingVisitorDwarfUnwindingTest,
     VisitStackSampleWithinUserSpaceInstrumentationLibraryButNotTrampolineSendsCompleteCallstack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1106,8 +1104,7 @@ TYPED_TEST_P(
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitStackSampleStoppedAtUprobesSendsPatchingFailedCallstack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1178,8 +1175,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 TYPED_TEST_P(
     UprobesUnwindingVisitorDwarfUnwindingTest,
     VisitStackSampleStoppedAtUserSpaceInstrumentationTrampolineSendsPatchingFailedCallstack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1249,8 +1245,7 @@ TYPED_TEST_P(
 }
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest, VisitStackSampleUsesUserSpaceStack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1263,7 +1258,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest, VisitStackSampleUsesUser
                                       ::testing::_, ::testing::_, ::testing::_))
       .Times(1)
       .WillOnce(
-          ::testing::DoAll(::testing::SaveArg<3>(&actual_stack_slices),
+          ::testing::DoAll(SaveRangeFromArg<3>(&actual_stack_slices),
                            ::testing::Return(LibunwindstackResult{
                                libunwindstack_callstack, {}, unwindstack::ErrorCode::ERROR_NONE})));
 
@@ -1306,7 +1301,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest, VisitStackSampleUsesUser
               .data = std::make_unique<uint8_t[]>(kUserStackSize),
           },
   };
-  perf_event_sample_regs_user_sp sp_regs{};
+  RingBufferSampleRegsUserSp sp_regs{};
   sp_regs.sp = kUserStackPointer;
   std::memcpy(user_stack_event.data.regs.get(), &sp_regs, sizeof(sp_regs));
   uint8_t* user_stack_data = user_stack_event.data.data.get();
@@ -1366,8 +1361,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest, VisitStackSampleUsesUser
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitStackSampleUsesLatestUserSpaceCallstack) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1380,7 +1374,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
                                       ::testing::_, ::testing::_, ::testing::_))
       .Times(1)
       .WillOnce(
-          ::testing::DoAll(::testing::SaveArg<3>(&actual_stack_slices),
+          ::testing::DoAll(SaveRangeFromArg<3>(&actual_stack_slices),
                            ::testing::Return(LibunwindstackResult{
                                libunwindstack_callstack, {}, unwindstack::ErrorCode::ERROR_NONE})));
 
@@ -1423,7 +1417,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
               .data = std::make_unique<uint8_t[]>(kUserStackSizeOld),
           },
   };
-  perf_event_sample_regs_user_sp sp_regs1{};
+  RingBufferSampleRegsUserSp sp_regs1{};
   sp_regs1.sp = kUserStackPointerOld;
   std::memcpy(user_stack_event_old.data.regs.get(), &sp_regs1, sizeof(sp_regs1));
   PerfEvent{std::move(user_stack_event_old)}.Accept(&this->visitor_);
@@ -1442,7 +1436,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
               .data = std::make_unique<uint8_t[]>(kUserStackSizeNew),
           },
   };
-  perf_event_sample_regs_user_sp sp_regs2{};
+  RingBufferSampleRegsUserSp sp_regs2{};
   sp_regs2.sp = kUserStackPointerNew;
   std::memcpy(user_stack_event_new.data.regs.get(), &sp_regs2, sizeof(sp_regs2));
   uint8_t* user_stack_data = user_stack_event_new.data.data.get();
@@ -1503,8 +1497,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitStackSampleUsesUserSpaceCallstackOnlyFromSameThread) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1517,7 +1510,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
                                       ::testing::_, ::testing::_, ::testing::_))
       .Times(1)
       .WillOnce(
-          ::testing::DoAll(::testing::SaveArg<3>(&actual_stack_slices),
+          ::testing::DoAll(SaveRangeFromArg<3>(&actual_stack_slices),
                            ::testing::Return(LibunwindstackResult{
                                libunwindstack_callstack, {}, unwindstack::ErrorCode::ERROR_NONE})));
 
@@ -1560,7 +1553,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
               .data = std::make_unique<uint8_t[]>(kUserStackSizeSameThread),
           },
   };
-  perf_event_sample_regs_user_sp sp_regs1{};
+  RingBufferSampleRegsUserSp sp_regs1{};
   sp_regs1.sp = kUserStackPointerSameThread;
   std::memcpy(user_stack_event_same_thread.data.regs.get(), &sp_regs1, sizeof(sp_regs1));
   uint8_t* user_stack_data = user_stack_event_same_thread.data.data.get();
@@ -1580,7 +1573,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
               .data = std::make_unique<uint8_t[]>(kUserStackSizeOtherThread),
           },
   };
-  perf_event_sample_regs_user_sp sp_regs2{};
+  RingBufferSampleRegsUserSp sp_regs2{};
   sp_regs2.sp = kUserStackPointerOtherThread;
   std::memcpy(user_stack_event_other_thread.data.regs.get(), &sp_regs2, sizeof(sp_regs2));
   PerfEvent{std::move(user_stack_event_other_thread)}.Accept(&this->visitor_);
@@ -1640,8 +1633,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
 
 TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
              VisitStackSampleUsesUserStackMemoryFromAllStreamIds) {
-  typename TypeParam::PerfEventT event =
-      BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
+  auto event = BuildFakePerfEventWithStack<typename TypeParam::PerfEventT>();
 
   EXPECT_CALL(this->return_address_manager_, PatchSample).Times(1).WillOnce(::testing::Return());
   EXPECT_CALL(this->maps_, Get).Times(1).WillOnce(::testing::Return(nullptr));
@@ -1654,7 +1646,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
                                       ::testing::_, ::testing::_, ::testing::_))
       .Times(1)
       .WillOnce(
-          ::testing::DoAll(::testing::SaveArg<3>(&actual_stack_slices),
+          ::testing::DoAll(SaveRangeFromArg<3>(&actual_stack_slices),
                            ::testing::Return(LibunwindstackResult{
                                libunwindstack_callstack, {}, unwindstack::ErrorCode::ERROR_NONE})));
 
@@ -1697,7 +1689,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
               .data = std::make_unique<uint8_t[]>(kUserStackSize1),
           },
   };
-  perf_event_sample_regs_user_sp sp_regs1{};
+  RingBufferSampleRegsUserSp sp_regs1{};
   sp_regs1.sp = kUserStackPointer1;
   std::memcpy(user_stack_event1.data.regs.get(), &sp_regs1, sizeof(sp_regs1));
   uint8_t* user_stack_data1 = user_stack_event1.data.data.get();
@@ -1717,7 +1709,7 @@ TYPED_TEST_P(UprobesUnwindingVisitorDwarfUnwindingTest,
               .data = std::make_unique<uint8_t[]>(kUserStackSize2),
           },
   };
-  perf_event_sample_regs_user_sp sp_regs2{};
+  RingBufferSampleRegsUserSp sp_regs2{};
   sp_regs2.sp = kUserStackPointer2;
   std::memcpy(user_stack_event2.data.regs.get(), &sp_regs2, sizeof(sp_regs2));
   uint8_t* user_stack_data2 = user_stack_event2.data.data.get();

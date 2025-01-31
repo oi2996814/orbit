@@ -6,16 +6,20 @@
 
 #include <QAbstractItemModelTester>
 #include <QModelIndex>
-#include <QSignalSpy>
+#include <QPoint>
 #include <QTableView>
 #include <QTest>
-#include <string>
+#include <QVariant>
+#include <Qt>
+#include <memory>
 
+#include "ClientData/CaptureData.h"
+#include "OrbitGl/StaticTimeGraphLayout.h"
+#include "OrbitGl/Track.h"
+#include "OrbitGl/TrackManager.h"
+#include "OrbitGl/TrackTestData.h"
+#include "OrbitQt/TrackTypeItemModel.h"
 #include "QtUtils/AssertNoQtLogWarnings.h"
-#include "TimeGraphLayout.h"
-#include "TrackManager.h"
-#include "TrackTestData.h"
-#include "TrackTypeItemModel.h"
 
 namespace orbit_qt {
 
@@ -25,7 +29,7 @@ class TrackTypeItemModelTest : public ::testing::Test {
     int found_row = -1;
 
     for (int i = 0; i < model_.rowCount(); ++i) {
-      Track::Type this_row_type =
+      auto this_row_type =
           model_.data(model_.index(i, 0), TrackTypeItemModel::kTrackTypeRole).value<Track::Type>();
       if (track_type == this_row_type) {
         found_row = i;
@@ -43,7 +47,7 @@ class TrackTypeItemModelTest : public ::testing::Test {
   orbit_qt_utils::AssertNoQtLogWarnings log_qt_test_;
   TrackTypeItemModel model_;
 
-  TimeGraphLayout layout_;
+  orbit_gl::StaticTimeGraphLayout layout_;
   std::unique_ptr<orbit_client_data::CaptureData> capture_data_ =
       orbit_gl::TrackTestData::GenerateTestCaptureData();
   orbit_gl::TrackManager track_manager_ = orbit_gl::TrackManager(
@@ -67,18 +71,18 @@ TEST_F(TrackTypeItemModelTest, ReadAndWriteData) {
   EXPECT_TRUE(found_row >= 0);
   constexpr int kNameCol = static_cast<int>(TrackTypeItemModel::Column::kName);
   constexpr int kVisCol = static_cast<int>(TrackTypeItemModel::Column::kVisibility);
-  QModelIndex kNameIndex = model_.index(found_row, kNameCol);
-  QModelIndex kVisIndex = model_.index(found_row, kVisCol);
+  QModelIndex name_index = model_.index(found_row, kNameCol);
+  QModelIndex vis_index = model_.index(found_row, kVisCol);
 
   // Check the colum contents:
   // - Expect the "name" column to be non-empty
   // - Expect the "visibility" column to be checked depending on the visibility
-  EXPECT_NE("", model_.data(kNameIndex, Qt::DisplayRole).toString());
-  EXPECT_EQ(Qt::Checked, model_.data(kVisIndex, Qt::CheckStateRole).value<Qt::CheckState>());
+  EXPECT_NE("", model_.data(name_index, Qt::DisplayRole).toString());
+  EXPECT_EQ(Qt::Checked, model_.data(vis_index, Qt::CheckStateRole).value<Qt::CheckState>());
 
   // When track visibility changes, the check state changes as well
   track_manager_.SetTrackTypeVisibility(Track::Type::kThreadTrack, false);
-  EXPECT_EQ(Qt::Unchecked, model_.data(kVisIndex, Qt::CheckStateRole).value<Qt::CheckState>());
+  EXPECT_EQ(Qt::Unchecked, model_.data(vis_index, Qt::CheckStateRole).value<Qt::CheckState>());
 }
 
 TEST_F(TrackTypeItemModelTest, ViewInteraction) {

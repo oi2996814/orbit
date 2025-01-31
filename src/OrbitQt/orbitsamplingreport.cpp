@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "orbitsamplingreport.h"
+#include "OrbitQt/orbitsamplingreport.h"
+
+#include <absl/strings/str_format.h>
+#include <stdint.h>
 
 #include <QColor>
 #include <QGridLayout>
-#include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QList>
@@ -14,22 +16,21 @@
 #include <QModelIndexList>
 #include <QPushButton>
 #include <QSplitter>
-#include <QStaticStringData>
 #include <QStringLiteral>
 #include <QTabWidget>
 #include <Qt>
 #include <algorithm>
-#include <optional>
 #include <string>
 
+#include "ApiInterface/Orbit.h"
 #include "DataViews/SamplingReportDataView.h"
 #include "OrbitBase/Logging.h"
-#include "SamplingReport.h"
+#include "OrbitGl/SamplingReport.h"
+#include "OrbitQt/orbitdataviewpanel.h"
+#include "OrbitQt/orbittablemodel.h"
+#include "OrbitQt/orbittreeview.h"
+#include "OrbitQt/types.h"
 #include "UtilWidgets/NoticeWidget.h"
-#include "orbitdataviewpanel.h"
-#include "orbittablemodel.h"
-#include "orbittreeview.h"
-#include "types.h"
 #include "ui_orbitsamplingreport.h"
 
 const QColor kRed{255, 0, 0, 26};
@@ -54,56 +55,62 @@ OrbitSamplingReport::OrbitSamplingReport(QWidget* parent)
           &OrbitSamplingReport::OnCurrentThreadTabChanged);
 }
 
-OrbitSamplingReport::~OrbitSamplingReport() { delete ui_; }
+OrbitSamplingReport::~OrbitSamplingReport() {
+  Deinitialize();
+  delete ui_;
+}
 
-void OrbitSamplingReport::Initialize(orbit_data_views::DataView* callstack_data_view,
-                                     const std::shared_ptr<SamplingReport>& report) {
+void OrbitSamplingReport::Initialize(
+    OrbitApp* app, orbit_data_views::DataView* callstack_data_view,
+    const orbit_client_data::CallstackData* callstack_data,
+    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data) {
   ui_->CallstackTreeView->Initialize(callstack_data_view, SelectionType::kExtended,
                                      FontType::kDefault, false);
-  sampling_report_ = report;
+  if (callstack_data == nullptr || post_processed_sampling_data == nullptr) {
+    sampling_report_ = nullptr;
+    return;
+  }
 
-  if (!report) return;
+  sampling_report_ =
+      std::make_shared<SamplingReport>(app, callstack_data, post_processed_sampling_data);
 
   sampling_report_->SetUiRefreshFunc([&]() { this->RefreshCallstackView(); });
 
-  for (orbit_data_views::SamplingReportDataView& report_data_view : report->GetThreadDataViews()) {
+  for (orbit_data_views::SamplingReportDataView& report_data_view :
+       sampling_report_->GetThreadDataViews()) {
     ORBIT_SCOPE("SamplingReportDataView tab creation");
     auto* tab = new QWidget();
     tab->setObjectName(QStringLiteral("samplingReportThreadTab"));
     tab->setAccessibleName(QStringLiteral("SamplingReportThreadTab"));
 
-    auto* gridLayout_2 = new QGridLayout(tab);
-    gridLayout_2->setObjectName(QStringLiteral("gridLayout_2"));
-    auto* treeView = new OrbitDataViewPanel(tab);
-    treeView->SetDataModel(&report_data_view);
+    auto* grid_layout_2 = new QGridLayout(tab);
+    grid_layout_2->setObjectName(QStringLiteral("gridLayout_2"));
+    auto* tree_view = new OrbitDataViewPanel(tab);
+    tree_view->SetDataModel(&report_data_view);
 
     if (!report_data_view.IsSortingAllowed()) {
-      treeView->GetTreeView()->setSortingEnabled(false);
+      tree_view->GetTreeView()->setSortingEnabled(false);
     } else {
       int column = report_data_view.GetDefaultSortingColumn();
       Qt::SortOrder order = report_data_view.GetColumns()[column].initial_order ==
                                     orbit_data_views::DataView::SortingOrder::kAscending
                                 ? Qt::AscendingOrder
                                 : Qt::DescendingOrder;
-      treeView->GetTreeView()->sortByColumn(column, order);
+      tree_view->GetTreeView()->sortByColumn(column, order);
     }
 
-    treeView->setObjectName(QStringLiteral("samplingReportDataView"));
-    treeView->setAccessibleName(QStringLiteral("SamplingReportDataView"));
-    gridLayout_2->addWidget(treeView, 0, 0, 1, 1);
-    treeView->Initialize(&report_data_view, SelectionType::kExtended, FontType::kDefault);
-    {
-      ORBIT_SCOPE("resizeSections");
-      treeView->GetTreeView()->header()->resizeSections(QHeaderView::ResizeToContents);
-    }
-    treeView->GetTreeView()->SetIsMultiSelection(true);
+    tree_view->setObjectName(QStringLiteral("samplingReportDataView"));
+    tree_view->setAccessibleName(QStringLiteral("SamplingReportDataView"));
+    grid_layout_2->addWidget(tree_view, 0, 0, 1, 1);
+    tree_view->Initialize(&report_data_view, SelectionType::kExtended, FontType::kDefault);
+    tree_view->GetTreeView()->SetIsMultiSelection(true);
 
-    treeView->Link(ui_->CallstackTreeView);
+    tree_view->Link(ui_->CallstackTreeView);
 
     // This is hack - it is needed to update ui when data changes
     // TODO: Remove this once model is implemented properly and there
     //  is no need for manual updates.
-    orbit_data_views_.push_back(treeView);
+    orbit_data_views_.push_back(tree_view);
 
     uint32_t thread_id = report_data_view.GetThreadID();
     // Report any thread that contains more than 5% unwinding errors.
@@ -119,7 +126,7 @@ void OrbitSamplingReport::Initialize(orbit_data_views::DataView* callstack_data_
       notice_box->Initialize(label, "Hide", kRed);
       QObject::connect(notice_box, &orbit_util_widgets::NoticeWidget::ButtonClicked, notice_box,
                        [notice_box]() { notice_box->hide(); });
-      gridLayout_2->addWidget(notice_box, 1, 0);
+      grid_layout_2->addWidget(notice_box, 1, 0);
     }
 
     ui_->tabWidget->addTab(tab, QString::fromStdString(report_data_view.GetName()));
@@ -191,11 +198,12 @@ void OrbitSamplingReport::RefreshTabs() {
   }
 }
 
-void OrbitSamplingReport::SetInspection(orbit_data_views::DataView* callstack_data_view,
-                                        std::unique_ptr<SamplingReport> report) {
-  Deinitialize();
-  Initialize(callstack_data_view, std::move(report));
-  ui_->inspectionNoticeWidget->show();
-  RefreshCallstackView();
-  RefreshTabs();
+void OrbitSamplingReport::SetInspection() { ui_->inspectionNoticeWidget->show(); }
+
+void OrbitSamplingReport::UpdateReport(
+    const orbit_client_data::CallstackData* callstack_data,
+    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data) {
+  if (sampling_report_ != nullptr) {
+    sampling_report_->UpdateReport(callstack_data, post_processed_sampling_data);
+  }
 }

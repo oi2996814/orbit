@@ -2,11 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <gmock/gmock.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <google/protobuf/util/message_differencer.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include "CaptureClient/GpuQueueSubmissionProcessor.h"
+#include "ClientProtos/capture_data.pb.h"
+#include "GrpcProtos/capture.pb.h"
 
 using google::protobuf::util::MessageDifferencer;
 using orbit_client_protos::TimerInfo;
@@ -140,7 +148,7 @@ TEST_F(GpuQueueSubmissionProcessorTest, DXVKVulkanDebugMarkerEncodesGroupId) {
 
   bool was_called = false;
   static constexpr uint64_t kCommandBufferTextKey = 1234;
-  auto get_string_hash_and_send_if_necessary_fake = [&was_called](const std::string &
+  auto get_string_hash_and_send_if_necessary_fake = [&was_called](std::string_view
                                                                   /*str*/) -> uint64_t {
     was_called = true;
     return kCommandBufferTextKey;

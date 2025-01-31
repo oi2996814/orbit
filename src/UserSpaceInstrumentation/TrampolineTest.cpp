@@ -3,6 +3,9 @@
 // found in the LICENSE file.
 
 #include <absl/base/casts.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
+#include <capstone/capstone.h>
 #include <dlfcn.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -19,19 +22,23 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "AccessTraceesMemory.h"
 #include "AllocateInTracee.h"
 #include "GetTestLibLibraryPath.h"
+#include "GrpcProtos/module.pb.h"
 #include "MachineCode.h"
 #include "ModuleUtils/ReadLinuxModules.h"
 #include "OrbitBase/ExecutablePath.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 #include "TestUtils.h"
 #include "TestUtils/TestUtils.h"
 #include "Trampoline.h"
@@ -40,16 +47,17 @@
 #include "UserSpaceInstrumentation/InjectLibraryInTracee.h"
 
 namespace orbit_user_space_instrumentation {
+using orbit_test_utils::HasErrorWithMessage;
 
 namespace {
 
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasNoError;
 using orbit_test_utils::HasValue;
 using testing::ElementsAreArray;
 
-static constexpr const char* kEntryPayloadFunctionName = "EntryPayload";
-static constexpr const char* kExitPayloadFunctionName = "ExitPayload";
+constexpr const char* kEntryPayloadFunctionName = "EntryPayload";
+constexpr const char* kExitPayloadFunctionName = "ExitPayload";
 
 extern "C" __attribute__((noinline)) int DoubleAndIncrement(int i) {
   i = 2 * i;
@@ -79,47 +87,47 @@ TEST(TrampolineTest, DoAddressRangesOverlap) {
 }
 
 TEST(TrampolineTest, LowestIntersectingAddressRange) {
-  const std::vector<AddressRange> kAllRanges = {{0, 5}, {20, 30}, {40, 60}};
+  const std::vector<AddressRange> all_ranges = {{0, 5}, {20, 30}, {40, 60}};
 
   EXPECT_FALSE(LowestIntersectingAddressRange({}, {0, 60}).has_value());
 
-  EXPECT_EQ(0, LowestIntersectingAddressRange(kAllRanges, {1, 2}));
-  EXPECT_EQ(1, LowestIntersectingAddressRange(kAllRanges, {21, 22}));
-  EXPECT_EQ(2, LowestIntersectingAddressRange(kAllRanges, {51, 52}));
+  EXPECT_EQ(0, LowestIntersectingAddressRange(all_ranges, {1, 2}));
+  EXPECT_EQ(1, LowestIntersectingAddressRange(all_ranges, {21, 22}));
+  EXPECT_EQ(2, LowestIntersectingAddressRange(all_ranges, {51, 52}));
 
-  EXPECT_EQ(0, LowestIntersectingAddressRange(kAllRanges, {3, 6}));
-  EXPECT_EQ(1, LowestIntersectingAddressRange(kAllRanges, {19, 22}));
-  EXPECT_EQ(2, LowestIntersectingAddressRange(kAllRanges, {30, 52}));
+  EXPECT_EQ(0, LowestIntersectingAddressRange(all_ranges, {3, 6}));
+  EXPECT_EQ(1, LowestIntersectingAddressRange(all_ranges, {19, 22}));
+  EXPECT_EQ(2, LowestIntersectingAddressRange(all_ranges, {30, 52}));
 
-  EXPECT_EQ(0, LowestIntersectingAddressRange(kAllRanges, {4, 72}));
-  EXPECT_EQ(1, LowestIntersectingAddressRange(kAllRanges, {29, 52}));
-  EXPECT_EQ(2, LowestIntersectingAddressRange(kAllRanges, {59, 72}));
+  EXPECT_EQ(0, LowestIntersectingAddressRange(all_ranges, {4, 72}));
+  EXPECT_EQ(1, LowestIntersectingAddressRange(all_ranges, {29, 52}));
+  EXPECT_EQ(2, LowestIntersectingAddressRange(all_ranges, {59, 72}));
 
-  EXPECT_FALSE(LowestIntersectingAddressRange(kAllRanges, {5, 20}).has_value());
-  EXPECT_FALSE(LowestIntersectingAddressRange(kAllRanges, {30, 40}).has_value());
-  EXPECT_FALSE(LowestIntersectingAddressRange(kAllRanges, {60, 80}).has_value());
+  EXPECT_FALSE(LowestIntersectingAddressRange(all_ranges, {5, 20}).has_value());
+  EXPECT_FALSE(LowestIntersectingAddressRange(all_ranges, {30, 40}).has_value());
+  EXPECT_FALSE(LowestIntersectingAddressRange(all_ranges, {60, 80}).has_value());
 }
 
 TEST(TrampolineTest, HighestIntersectingAddressRange) {
-  std::vector<AddressRange> kAllRanges = {{0, 5}, {20, 30}, {40, 60}};
+  const std::vector<AddressRange> all_ranges = {{0, 5}, {20, 30}, {40, 60}};
 
   EXPECT_FALSE(HighestIntersectingAddressRange({}, {0, 60}).has_value());
 
-  EXPECT_EQ(0, HighestIntersectingAddressRange(kAllRanges, {1, 2}));
-  EXPECT_EQ(1, HighestIntersectingAddressRange(kAllRanges, {21, 22}));
-  EXPECT_EQ(2, HighestIntersectingAddressRange(kAllRanges, {51, 52}));
+  EXPECT_EQ(0, HighestIntersectingAddressRange(all_ranges, {1, 2}));
+  EXPECT_EQ(1, HighestIntersectingAddressRange(all_ranges, {21, 22}));
+  EXPECT_EQ(2, HighestIntersectingAddressRange(all_ranges, {51, 52}));
 
-  EXPECT_EQ(0, HighestIntersectingAddressRange(kAllRanges, {3, 6}));
-  EXPECT_EQ(1, HighestIntersectingAddressRange(kAllRanges, {19, 22}));
-  EXPECT_EQ(2, HighestIntersectingAddressRange(kAllRanges, {30, 52}));
+  EXPECT_EQ(0, HighestIntersectingAddressRange(all_ranges, {3, 6}));
+  EXPECT_EQ(1, HighestIntersectingAddressRange(all_ranges, {19, 22}));
+  EXPECT_EQ(2, HighestIntersectingAddressRange(all_ranges, {30, 52}));
 
-  EXPECT_EQ(2, HighestIntersectingAddressRange(kAllRanges, {4, 72}));
-  EXPECT_EQ(2, HighestIntersectingAddressRange(kAllRanges, {29, 52}));
-  EXPECT_EQ(2, HighestIntersectingAddressRange(kAllRanges, {59, 72}));
+  EXPECT_EQ(2, HighestIntersectingAddressRange(all_ranges, {4, 72}));
+  EXPECT_EQ(2, HighestIntersectingAddressRange(all_ranges, {29, 52}));
+  EXPECT_EQ(2, HighestIntersectingAddressRange(all_ranges, {59, 72}));
 
-  EXPECT_FALSE(HighestIntersectingAddressRange(kAllRanges, {5, 20}).has_value());
-  EXPECT_FALSE(HighestIntersectingAddressRange(kAllRanges, {30, 40}).has_value());
-  EXPECT_FALSE(HighestIntersectingAddressRange(kAllRanges, {60, 80}).has_value());
+  EXPECT_FALSE(HighestIntersectingAddressRange(all_ranges, {5, 20}).has_value());
+  EXPECT_FALSE(HighestIntersectingAddressRange(all_ranges, {30, 40}).has_value());
+  EXPECT_FALSE(HighestIntersectingAddressRange(all_ranges, {60, 80}).has_value());
 }
 
 TEST(TrampolineTest, FindAddressRangeForTrampoline) {
@@ -130,52 +138,52 @@ TEST(TrampolineTest, FindAddressRangeForTrampoline) {
   constexpr uint64_t kOneGb = 0x40000000;
 
   // Trivial placement to the left.
-  const std::vector<AddressRange> kUnavailableRanges1 = {
+  const std::vector<AddressRange> unavailable_ranges1 = {
       {0, k64Kb}, {kOneGb, 2 * kOneGb}, {3 * kOneGb, 4 * kOneGb}};
   auto address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges1, {kOneGb, 2 * kOneGb}, k256Mb);
+      FindAddressRangeForTrampoline(unavailable_ranges1, {kOneGb, 2 * kOneGb}, k256Mb);
   ASSERT_FALSE(address_range_or_error.has_error());
   EXPECT_EQ(kOneGb - k256Mb, address_range_or_error.value().start);
 
   // Placement to the left just fits.
-  const std::vector<AddressRange> kUnavailableRanges2 = {
+  const std::vector<AddressRange> unavailable_ranges2 = {
       {0, k64Kb}, {k256Mb, kOneGb}, {3 * kOneGb, 4 * kOneGb}};
   address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges2, {k256Mb, kOneGb}, k256Mb - k64Kb);
+      FindAddressRangeForTrampoline(unavailable_ranges2, {k256Mb, kOneGb}, k256Mb - k64Kb);
   ASSERT_FALSE(address_range_or_error.has_error());
   EXPECT_EQ(k64Kb, address_range_or_error.value().start);
 
   // Placement to the left fails due to page alignment. So we place to the right which fits
   // trivially.
-  const std::vector<AddressRange> kUnavailableRanges3 = {
+  const std::vector<AddressRange> unavailable_ranges3 = {
       {0, k64Kb + 1}, {k256Mb, kOneGb}, {3 * kOneGb, 4 * kOneGb}};
   address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges3, {k256Mb, kOneGb}, k256Mb - k64Kb - 5);
+      FindAddressRangeForTrampoline(unavailable_ranges3, {k256Mb, kOneGb}, k256Mb - k64Kb - 5);
   ASSERT_FALSE(address_range_or_error.has_error());
   EXPECT_EQ(kOneGb, address_range_or_error.value().start);
 
   // Placement to the left just fits but only after a few hops.
-  const std::vector<AddressRange> kUnavailableRanges4 = {
+  const std::vector<AddressRange> unavailable_ranges4 = {
       {0, k64Kb},  // this is the gap that just fits
       {k64Kb + kOneMb, 6 * kOneMb},
       {6 * kOneMb + kOneMb - 1, 7 * kOneMb},
       {7 * kOneMb + kOneMb - 1, 8 * kOneMb},
       {8 * kOneMb + kOneMb - 1, 9 * kOneMb}};
   address_range_or_error = FindAddressRangeForTrampoline(
-      kUnavailableRanges4, {8 * kOneMb + kOneMb - 1, 9 * kOneMb}, kOneMb);
+      unavailable_ranges4, {8 * kOneMb + kOneMb - 1, 9 * kOneMb}, kOneMb);
   ASSERT_FALSE(address_range_or_error.has_error());
   EXPECT_EQ(k64Kb, address_range_or_error.value().start);
 
   // No space to the left but trivial placement to the right.
-  const std::vector<AddressRange> kUnavailableRanges5 = {
+  const std::vector<AddressRange> unavailable_ranges5 = {
       {0, k64Kb}, {kOneMb, kOneGb}, {5 * kOneGb, 6 * kOneGb}};
   address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges5, {kOneMb, kOneGb}, kOneMb);
+      FindAddressRangeForTrampoline(unavailable_ranges5, {kOneMb, kOneGb}, kOneMb);
   ASSERT_FALSE(address_range_or_error.has_error()) << address_range_or_error.error().message();
   EXPECT_EQ(kOneGb, address_range_or_error.value().start);
 
   // No space to the left but placement to the right works after a few hops.
-  const std::vector<AddressRange> kUnavailableRanges6 = {
+  const std::vector<AddressRange> unavailable_ranges6 = {
       {0, k64Kb},
       {kOneMb, kOneGb},
       {kOneGb + 0x01 * kOneMb - 1, kOneGb + 0x10 * kOneMb},
@@ -183,13 +191,13 @@ TEST(TrampolineTest, FindAddressRangeForTrampoline) {
       {kOneGb + 0x21 * kOneMb - 1, kOneGb + 0x30 * kOneMb},
       {kOneGb + 0x31 * kOneMb - 1, kOneGb + 0x40 * kOneMb}};
   address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges6, {kOneMb, kOneGb}, kOneMb);
+      FindAddressRangeForTrampoline(unavailable_ranges6, {kOneMb, kOneGb}, kOneMb);
   ASSERT_FALSE(address_range_or_error.has_error()) << address_range_or_error.error().message();
   EXPECT_EQ(kOneGb + 0x40 * kOneMb, address_range_or_error.value().start);
 
   // No space to the left and the last segment nearly fills up the 64 bit address space. So no
   // placement is possible.
-  const std::vector<AddressRange> kUnavailableRanges7 = {
+  const std::vector<AddressRange> unavailable_ranges7 = {
       {0, k64Kb},
       {kOneMb, k256Mb},
       {1 * k256Mb + kOneMb - 1, 2 * k256Mb},
@@ -198,19 +206,19 @@ TEST(TrampolineTest, FindAddressRangeForTrampoline) {
       {4 * k256Mb + kOneMb + 2, 5 * k256Mb},
       {5 * k256Mb + kOneMb - 1, 0xffffffffffffffff - kOneMb / 2}};
   address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges7, {kOneMb, k256Mb}, kOneMb);
+      FindAddressRangeForTrampoline(unavailable_ranges7, {kOneMb, k256Mb}, kOneMb);
   ASSERT_TRUE(address_range_or_error.has_error());
 
   // There is no sufficiently large gap in the mappings in the 2GB below the code segment. So the
   // trampoline is placed above the code segment. Also we test that the trampoline starts at the
   // next memory page above last taken segment.
-  const std::vector<AddressRange> kUnavailableRanges8 = {
+  const std::vector<AddressRange> unavailable_ranges8 = {
       {0, k64Kb},  // huge gap here, but it's too far away
       {0x10 * kOneGb, 0x11 * kOneGb},
       {0x11 * kOneGb + kOneMb - 1, 0x12 * kOneGb},
       {0x12 * kOneGb + kOneMb - 1, 0x12 * kOneGb + 2 * kOneMb + 42}};
   address_range_or_error = FindAddressRangeForTrampoline(
-      kUnavailableRanges8, {0x12 * kOneGb + kOneMb - 1, 0x12 * kOneGb + 2 * kOneMb}, kOneMb);
+      unavailable_ranges8, {0x12 * kOneGb + kOneMb - 1, 0x12 * kOneGb + 2 * kOneMb}, kOneMb);
   ASSERT_FALSE(address_range_or_error.has_error()) << address_range_or_error.error().message();
   constexpr uint64_t kPageSize = 4096;
   constexpr uint64_t kNextPage =
@@ -219,7 +227,7 @@ TEST(TrampolineTest, FindAddressRangeForTrampoline) {
 
   // There is no sufficiently large gap in the mappings in the 2GB below the code segment. And there
   // also is no gap large enough in the 2GB above the code segment. So no placement is possible.
-  const std::vector<AddressRange> kUnavailableRanges9 = {
+  const std::vector<AddressRange> unavailable_ranges9 = {
       {0, k64Kb},  // huge gap here, but it's too far away
       {0x10 * kOneGb + kOneMb - 1, 0x11 * kOneGb},
       {0x11 * kOneGb + kOneMb - 1, 0x12 * kOneGb},
@@ -227,13 +235,13 @@ TEST(TrampolineTest, FindAddressRangeForTrampoline) {
       {0x12 * kOneGb + 3 * kOneMb - 1, 0x13 * kOneGb + 1},
       {0x13 * kOneGb + kOneMb + 42, 0x14 * kOneGb}};
   address_range_or_error = FindAddressRangeForTrampoline(
-      kUnavailableRanges9, {0x12 * kOneGb + kOneMb - 1, 0x12 * kOneGb + 2 * kOneMb}, kOneMb);
+      unavailable_ranges9, {0x12 * kOneGb + kOneMb - 1, 0x12 * kOneGb + 2 * kOneMb}, kOneMb);
   ASSERT_TRUE(address_range_or_error.has_error());
 
   // Fail on malformed input: first address range does not start at zero.
-  const std::vector<AddressRange> kUnavailableRanges10 = {{k64Kb, kOneGb}};
+  const std::vector<AddressRange> unavailable_ranges10 = {{k64Kb, kOneGb}};
   EXPECT_DEATH(
-      auto result = FindAddressRangeForTrampoline(kUnavailableRanges10, {k64Kb, kOneGb}, kOneMb),
+      auto result = FindAddressRangeForTrampoline(unavailable_ranges10, {k64Kb, kOneGb}, kOneMb),
       "needs to start at zero");
 
   // Placement to the left fails since the requested memory chunk is too big. So we place to the
@@ -241,28 +249,28 @@ TEST(TrampolineTest, FindAddressRangeForTrampoline) {
   // The special case here is that the requested memory size (k256Mb + k64Kb) is larger than the
   // left interval border of the second interval (k256Mb). This produced an artithmetic overflow in
   // a previous version of the algorithm.
-  const std::vector<AddressRange> kUnavailableRanges11 = {{0, k64Kb}, {k256Mb, kOneGb}};
+  const std::vector<AddressRange> unavailable_ranges11 = {{0, k64Kb}, {k256Mb, kOneGb}};
   address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges11, {k256Mb, kOneGb}, k256Mb + k64Kb);
+      FindAddressRangeForTrampoline(unavailable_ranges11, {k256Mb, kOneGb}, k256Mb + k64Kb);
   ASSERT_FALSE(address_range_or_error.has_error());
   EXPECT_EQ(kOneGb, address_range_or_error.value().start);
 
   // Placement to the left fails, placement to the right fails also because we are close to the end
   // of the address space. This produced an artithmetic overflow in a previous version of the
   // algorithm.
-  const std::vector<AddressRange> kUnavailableRanges12 = {
+  const std::vector<AddressRange> unavailable_ranges12 = {
       {0, k64Kb},
       {UINT64_MAX - 10 * kOneGb, UINT64_MAX - k64Kb - 1},
       {UINT64_MAX - k64Kb, UINT64_MAX - k1Kb}};
   address_range_or_error = FindAddressRangeForTrampoline(
-      kUnavailableRanges12, {UINT64_MAX - k64Kb, UINT64_MAX - k1Kb}, k64Kb);
-  ASSERT_THAT(address_range_or_error, HasError("No place to fit"));
+      unavailable_ranges12, {UINT64_MAX - k64Kb, UINT64_MAX - k1Kb}, k64Kb);
+  ASSERT_THAT(address_range_or_error, HasErrorWithMessage("No place to fit"));
 
   // We can not fit anything close to a range larger than 2GB.
-  const std::vector<AddressRange> kUnavailableRanges13 = {{0, k64Kb}, {kOneGb, 4 * kOneGb}};
+  const std::vector<AddressRange> unavailable_ranges13 = {{0, k64Kb}, {kOneGb, 4 * kOneGb}};
   address_range_or_error =
-      FindAddressRangeForTrampoline(kUnavailableRanges13, {kOneGb, 4 * kOneGb}, k64Kb);
-  ASSERT_THAT(address_range_or_error, HasError("No place to fit"));
+      FindAddressRangeForTrampoline(unavailable_ranges13, {kOneGb, 4 * kOneGb}, k64Kb);
+  ASSERT_THAT(address_range_or_error, HasErrorWithMessage("No place to fit"));
 }
 
 TEST(TrampolineTest, AllocateMemoryForTrampolines) {
@@ -319,30 +327,30 @@ TEST(TrampolineTest, AllocateMemoryForTrampolines) {
 TEST(TrampolineTest, AddressDifferenceAsInt32) {
   // Result of the difference is negative; in the first case it just fits, the second case
   // overflows.
-  const uint64_t kAddr1 = 0x6012345612345678;
-  const uint64_t kAddr2Larger = kAddr1 - std::numeric_limits<int32_t>::min();
+  constexpr uint64_t kAddr1 = 0x6012345612345678;
+  constexpr uint64_t kAddr2Larger = kAddr1 - std::numeric_limits<int32_t>::min();
   auto result = AddressDifferenceAsInt32(kAddr1, kAddr2Larger);
   ASSERT_THAT(result, HasNoError());
   EXPECT_EQ(std::numeric_limits<int32_t>::min(), result.value());
   result = AddressDifferenceAsInt32(kAddr1, kAddr2Larger + 1);
-  EXPECT_THAT(result, HasError("Difference is larger than -2GB"));
+  EXPECT_THAT(result, HasErrorWithMessage("Difference is larger than -2GB"));
 
   // Result of the difference is positive; in the first case it just fits, the second case
   // overflows.
-  const uint64_t kAddr2Smaller = kAddr1 - std::numeric_limits<int32_t>::max();
+  constexpr uint64_t kAddr2Smaller = kAddr1 - std::numeric_limits<int32_t>::max();
   result = AddressDifferenceAsInt32(kAddr1, kAddr2Smaller);
   ASSERT_THAT(result, HasNoError());
   EXPECT_EQ(std::numeric_limits<int32_t>::max(), result.value());
   result = AddressDifferenceAsInt32(kAddr1, kAddr2Smaller - 1);
-  EXPECT_THAT(result, HasError("Difference is larger than +2GB"));
+  EXPECT_THAT(result, HasErrorWithMessage("Difference is larger than +2GB"));
 
   // Result of the difference does not even fit into a int64. We handle that gracefully as well.
-  const uint64_t kAddrHigh = 0xf234567812345678;
-  const uint64_t kAddrLow = kAddrHigh - 0xe234567812345678;
+  constexpr uint64_t kAddrHigh = 0xf234567812345678;
+  constexpr uint64_t kAddrLow = kAddrHigh - 0xe234567812345678;
   result = AddressDifferenceAsInt32(kAddrHigh, kAddrLow);
-  EXPECT_THAT(result, HasError("Difference is larger than +2GB"));
+  EXPECT_THAT(result, HasErrorWithMessage("Difference is larger than +2GB"));
   result = AddressDifferenceAsInt32(kAddrLow, kAddrHigh);
-  EXPECT_THAT(result, HasError("Difference is larger than -2GB"));
+  EXPECT_THAT(result, HasErrorWithMessage("Difference is larger than -2GB"));
 }
 
 class RelocateInstructionTest : public testing::Test {
@@ -381,7 +389,7 @@ TEST_F(RelocateInstructionTest, RipRelativeAddressing) {
   code.AppendBytes({0x48, 0x83, 0x05}).AppendImmediate32(kOffset).AppendBytes({0x01});
   Disassemble(code);
 
-  uint64_t kOriginalAddress = 0x0100000000;
+  constexpr uint64_t kOriginalAddress = 0x0100000000;
   ErrorMessageOr<RelocatedInstruction> result =
       RelocateInstruction(instruction_, kOriginalAddress, kOriginalAddress + kOffset - 0x123456);
   ASSERT_THAT(result, HasValue());
@@ -408,8 +416,9 @@ TEST_F(RelocateInstructionTest, RipRelativeAddressing) {
 
   result = RelocateInstruction(instruction_, kOriginalAddress, kOriginalAddress - 0x7fff0000);
   EXPECT_THAT(result,
-              HasError("While trying to relocate an instruction with rip relative addressing the "
-                       "target was out of range from the trampoline."));
+              HasErrorWithMessage(
+                  "While trying to relocate an instruction with rip relative addressing the "
+                  "target was out of range from the trampoline."));
 }
 
 TEST_F(RelocateInstructionTest, UnconditionalJumpTo8BitImmediate) {
@@ -462,7 +471,7 @@ TEST_F(RelocateInstructionTest, CallInstructionIsNotSupported) {
 
   ErrorMessageOr<RelocatedInstruction> result =
       RelocateInstruction(instruction_, 0x0100000000, 0x0200000000);
-  EXPECT_THAT(result, HasError("Relocating a call instruction is not supported."));
+  EXPECT_THAT(result, HasErrorWithMessage("Relocating a call instruction is not supported."));
 }
 
 TEST_F(RelocateInstructionTest, ConditionalJumpTo8BitImmediate) {
@@ -523,7 +532,7 @@ TEST_F(RelocateInstructionTest, LoopIsUnsupported) {
 
   ErrorMessageOr<RelocatedInstruction> result =
       RelocateInstruction(instruction_, 0x0100000000, 0x0200000000);
-  EXPECT_THAT(result, HasError("Relocating a loop instruction is not supported."));
+  EXPECT_THAT(result, HasErrorWithMessage("Relocating a loop instruction is not supported."));
 }
 
 TEST_F(RelocateInstructionTest, TrivialTranslation) {
@@ -591,7 +600,8 @@ class InstrumentFunctionTest : public testing::Test {
     const std::vector<orbit_grpc_protos::ModuleInfo>& modules = modules_or_error.value();
 
     // Inject the payload for the instrumentation.
-    auto library_handle_or_error = DlopenInTracee(pid_, modules, library_path, RTLD_NOW);
+    auto library_handle_or_error = DlmopenInTracee(pid_, modules, library_path, RTLD_NOW,
+                                                   LinkerNamespace::kCreateNewNamespace);
     ORBIT_CHECK(library_handle_or_error.has_value());
     void* library_handle = library_handle_or_error.value();
 
@@ -671,15 +681,15 @@ class InstrumentFunctionTest : public testing::Test {
   csh capstone_handle_ = 0;
   uint64_t max_trampoline_size_ = 0;
   std::unique_ptr<MemoryInTracee> trampoline_memory_;
-  uint64_t trampoline_address_;
-  uint64_t return_trampoline_address_;
-  uint64_t entry_payload_function_address_;
-  uint64_t exit_payload_function_address_;
+  uint64_t trampoline_address_ = 0;
+  uint64_t return_trampoline_address_ = 0;
+  uint64_t entry_payload_function_address_ = 0;
+  uint64_t exit_payload_function_address_ = 0;
 
   absl::flat_hash_map<uint64_t, uint64_t> relocation_map_;
 
   std::string function_name_;
-  uint64_t function_address_;
+  uint64_t function_address_ = 0;
   std::vector<uint8_t> function_code_;
 };
 
@@ -747,7 +757,8 @@ TEST_F(InstrumentFunctionTest, TooShort) {
   ErrorMessageOr<uint64_t> result = CreateTrampoline(
       pid_, function_address_, function_code_, trampoline_address_, entry_payload_function_address_,
       return_trampoline_address_, capstone_handle_, relocation_map_);
-  EXPECT_THAT(result, HasError("Unable to disassemble enough of the function to instrument it"));
+  EXPECT_THAT(result,
+              HasErrorWithMessage("Unable to disassemble enough of the function to instrument it"));
   RestartAndRemoveInstrumentation();
 }
 
@@ -941,7 +952,7 @@ TEST_F(InstrumentFunctionTest, Loop) {
   ErrorMessageOr<uint64_t> result = CreateTrampoline(
       pid_, function_address_, function_code_, trampoline_address_, entry_payload_function_address_,
       return_trampoline_address_, capstone_handle_, relocation_map_);
-  EXPECT_THAT(result, HasError("Relocating a loop instruction is not supported."));
+  EXPECT_THAT(result, HasErrorWithMessage("Relocating a loop instruction is not supported."));
   RestartAndRemoveInstrumentation();
 }
 
@@ -1190,7 +1201,8 @@ TEST_F(InstrumentFunctionTest, UnconditionalJump8BitOffsetBackToBeginning) {
       pid_, function_address_, function_code_, trampoline_address_, entry_payload_function_address_,
       return_trampoline_address_, capstone_handle_, relocation_map_);
   EXPECT_THAT(result,
-              HasError("Failed to create trampoline since the function contains a jump back into"));
+              HasErrorWithMessage(
+                  "Failed to create trampoline since the function contains a jump back into"));
 }
 
 extern "C" __attribute__((noinline, naked)) int UnconditionalJump32BitOffsetBackToBeginning() {
@@ -1223,7 +1235,8 @@ TEST_F(InstrumentFunctionTest, UnconditionalJump32BitOffsetBackToBeginning) {
       pid_, function_address_, function_code_, trampoline_address_, entry_payload_function_address_,
       return_trampoline_address_, capstone_handle_, relocation_map_);
   EXPECT_THAT(result,
-              HasError("Failed to create trampoline since the function contains a jump back into"));
+              HasErrorWithMessage(
+                  "Failed to create trampoline since the function contains a jump back into"));
 }
 
 extern "C" __attribute__((noinline, naked)) int ConditionalJump8BitOffsetBackToBeginning() {
@@ -1255,7 +1268,8 @@ TEST_F(InstrumentFunctionTest, ConditionalJump8BitOffsetBackToBeginning) {
       pid_, function_address_, function_code_, trampoline_address_, entry_payload_function_address_,
       return_trampoline_address_, capstone_handle_, relocation_map_);
   EXPECT_THAT(result,
-              HasError("Failed to create trampoline since the function contains a jump back into"));
+              HasErrorWithMessage(
+                  "Failed to create trampoline since the function contains a jump back into"));
 }
 
 extern "C" __attribute__((noinline, naked)) int ConditionalJump32BitOffsetBackToBeginning() {
@@ -1288,7 +1302,8 @@ TEST_F(InstrumentFunctionTest, ConditionalJump32BitOffsetBackToBeginning) {
       pid_, function_address_, function_code_, trampoline_address_, entry_payload_function_address_,
       return_trampoline_address_, capstone_handle_, relocation_map_);
   EXPECT_THAT(result,
-              HasError("Failed to create trampoline since the function contains a jump back into"));
+              HasErrorWithMessage(
+                  "Failed to create trampoline since the function contains a jump back into"));
 }
 
 extern "C" __attribute__((noinline, naked)) int LongConditionalJump32BitOffsetBackToBeginning() {

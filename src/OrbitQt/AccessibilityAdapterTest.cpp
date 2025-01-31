@@ -7,12 +7,11 @@
 #include <QAccessible>
 #include <QAccessibleInterface>
 #include <QString>
-#include <algorithm>
 #include <memory>
 #include <vector>
 
-#include "AccessibilityAdapter.h"
 #include "OrbitAccessibility/AccessibleObjectFake.h"
+#include "OrbitQt/AccessibilityAdapter.h"
 
 namespace orbit_qt {
 

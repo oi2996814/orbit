@@ -4,9 +4,11 @@
 
 #include "RegisterState.h"
 
+#include <absl/strings/str_format.h>
 #include <cpuid.h>
 #include <elf.h>
 #include <errno.h>
+#include <stdint.h>
 #include <sys/ptrace.h>
 #include <sys/uio.h>
 
@@ -14,7 +16,6 @@
 
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/SafeStrerror.h"
-#include "absl/strings/str_format.h"
 
 namespace orbit_user_space_instrumentation {
 
@@ -35,10 +36,10 @@ namespace {
   uint32_t ebx = 0;
   uint32_t ecx = 0;
   uint32_t edx = 0;
-  if (!__get_cpuid(0x01, &eax, &ebx, &ecx, &edx) || !(ecx & bit_XSAVE)) {
+  if ((__get_cpuid(0x01, &eax, &ebx, &ecx, &edx) == 0) || ((ecx & bit_XSAVE) == 0u)) {
     return ErrorMessage("XSAVE is not supported by the Cpu.");
   }
-  if (!__get_cpuid_count(0x0d, 0x00, &eax, &ebx, &ecx, &edx)) {
+  if (__get_cpuid_count(0x0d, 0x00, &eax, &ebx, &ecx, &edx) == 0) {
     return ErrorMessage("XSAVE is not supported by the Cpu.");
   }
   return static_cast<size_t>(ecx);
@@ -50,10 +51,10 @@ namespace {
   uint32_t ebx = 0;
   uint32_t ecx = 0;
   uint32_t edx = 0;
-  if (!__get_cpuid(0x01, &eax, &ebx, &ecx, &edx) || !(ecx & bit_AVX)) {
+  if ((__get_cpuid(0x01, &eax, &ebx, &ecx, &edx) == 0) || ((ecx & bit_AVX) == 0u)) {
     return ErrorMessage("AVX is not supported by the Cpu.");
   }
-  if (!__get_cpuid_count(0x0d, 0x02, &eax, &ebx, &ecx, &edx)) {
+  if (__get_cpuid_count(0x0d, 0x02, &eax, &ebx, &ecx, &edx) == 0) {
     return ErrorMessage("AVX offset query failed.");
   }
   return static_cast<size_t>(ebx);
@@ -79,9 +80,7 @@ bool RegisterState::HasAvxDataStored() {
 ErrorMessageOr<void> RegisterState::BackupRegisters(pid_t tid) {
   tid_ = tid;
 
-  iovec iov;
-  iov.iov_base = &general_purpose_registers_;
-  iov.iov_len = sizeof(GeneralPurposeRegisters);
+  iovec iov{.iov_base = &general_purpose_registers_, .iov_len = sizeof(GeneralPurposeRegisters)};
   auto result = ptrace(PTRACE_GETREGSET, tid, NT_PRSTATUS, &iov);
   if (result == -1) {
     return ErrorMessage(absl::StrFormat("PTRACE_GETREGS, NT_PRSTATUS failed with errno: %d: %s",
@@ -122,10 +121,9 @@ ErrorMessageOr<void> RegisterState::RestoreRegisters() {
   // BackupRegisters needs to be called before RestoreRegisters.
   ORBIT_CHECK(tid_ != -1);
 
-  iovec iov;
-  iov.iov_base = &general_purpose_registers_;
-  iov.iov_len = (bitness_ == Bitness::k32Bit) ? sizeof(GeneralPurposeRegisters32)
-                                              : sizeof(GeneralPurposeRegisters64);
+  iovec iov{.iov_base = &general_purpose_registers_,
+            .iov_len = (bitness_ == Bitness::k32Bit) ? sizeof(GeneralPurposeRegisters32)
+                                                     : sizeof(GeneralPurposeRegisters64)};
   auto result = ptrace(PTRACE_SETREGSET, tid_, NT_PRSTATUS, &iov);
   if (result == -1) {
     return ErrorMessage(

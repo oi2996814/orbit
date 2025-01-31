@@ -2,14 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "AnnotatingSourceCodeDialog.h"
+#include "OrbitQt/AnnotatingSourceCodeDialog.h"
 
+#include <Qt>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <ratio>
+#include <string>
 
 #include "CodeReport/AnnotateDisassembly.h"
 #include "CodeReport/AnnotatingLine.h"
 #include "ObjectUtils/ElfFile.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
 #include "OrbitBase/Result.h"
 #include "SourcePathsMapping/MappingManager.h"
@@ -27,8 +32,9 @@ void AnnotatingSourceCodeDialog::AddAnnotatingSourceCode(
   SetStatusMessage("Loading source location information", std::nullopt);
 
   ORBIT_CHECK(function_info_.has_value());
-  retrieve_module_with_debug_info_(function_info_->module_id())
-      .Then(main_thread_executor_.get(),
+  retrieve_module_with_debug_info_(
+      {.module_path = function_info_->module_path(), .build_id = function_info_->module_build_id()})
+      .Then(&main_thread_executor_,
             [this](const ErrorMessageOr<std::filesystem::path>& local_file_path_or_error) {
               HandleDebugInfo(local_file_path_or_error);
             });

@@ -2,23 +2,29 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "SchedulerTrack.h"
+#include "OrbitGl/SchedulerTrack.h"
 
 #include <GteVector.h>
 #include <absl/strings/str_format.h>
 #include <stdint.h>
 
-#include <cmath>
+#include <algorithm>
+#include <memory>
+#include <utility>
 
-#include "App.h"
+#include "ApiInterface/Orbit.h"
 #include "ClientData/CaptureData.h"
+#include "ClientData/TimerChain.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadConstants.h"
-#include "PrimitiveAssembler.h"
-#include "ThreadColor.h"
-#include "TimeGraphLayout.h"
-#include "Viewport.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/ThreadColor.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/TrackHeader.h"
+#include "OrbitGl/Viewport.h"
 
 using orbit_client_protos::TimerInfo;
 using orbit_gl::PickingUserData;
@@ -54,22 +60,6 @@ float SchedulerTrack::GetHeight() const {
          (num_gaps * layout_->GetSpaceBetweenCores()) + layout_->GetTrackContentBottomMargin();
 }
 
-[[nodiscard]] static std::pair<float, float> GetBoxPosXAndWidth(
-    const TimerInfo& timer_info, const orbit_gl::TimelineInfoInterface* timeline_info) {
-  const float start_x = timeline_info->GetWorldFromTick(timer_info.start());
-  const float end_x = timeline_info->GetWorldFromTick(timer_info.end());
-  // TODO(b/244736453): GetWorldFromTick uses floats and therefore is not precise enough. Since
-  //  the optimization looks for the first timer after the boundary of a pixel, we are getting
-  //  several values very close to that boundary. The lack of precision is making some of that
-  //  numbers to be just before the boundary and they ended be floored in the previous pixel. We
-  //  are temporarily hacking this issue by adding an epsilon.
-  // Epsilon for any float in the range of (0, 8092), maximum width for a 8k pixel screen.
-  constexpr float kEpsilon = std::numeric_limits<float>::epsilon() * 8092;
-  const float extended_start_x = std::floor(start_x + kEpsilon);
-  const float extended_end_x = std::ceil(end_x + kEpsilon);
-  return {extended_start_x, extended_end_x - extended_start_x};
-}
-
 void SchedulerTrack::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
                                         TextRenderer& /*text_renderer*/, uint64_t min_tick,
                                         uint64_t max_tick, PickingMode /*picking_mode*/) {
@@ -82,8 +72,9 @@ void SchedulerTrack::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
   visible_timer_count_ = 0;
 
   const internal::DrawData draw_data =
-      GetDrawData(min_tick, max_tick, GetPos()[0], GetWidth(), &primitive_assembler, timeline_info_,
-                  viewport_, IsCollapsed(), app_->selected_timer(), app_->GetScopeIdToHighlight(),
+      GetDrawData(min_tick, max_tick, GetPos()[0] + header_->GetWidth(),
+                  GetWidth() - header_->GetWidth(), &primitive_assembler, timeline_info_, viewport_,
+                  IsCollapsed(), app_->selected_timer(), app_->GetScopeIdToHighlight(),
                   app_->GetGroupIdToHighlight(), app_->GetHistogramSelectionRange());
 
   const uint32_t resolution_in_pixels = viewport_->WorldToScreen({GetWidth(), 0})[0];
@@ -100,7 +91,8 @@ void SchedulerTrack::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
       std::unique_ptr<PickingUserData> user_data =
           CreatePickingUserData(primitive_assembler, *timer_info);
 
-      auto [box_start_x, box_width] = GetBoxPosXAndWidth(*timer_info, timeline_info_);
+      auto [box_start_x, box_width] =
+          timeline_info_->GetBoxPosXAndWidthFromTicks(timer_info->start(), timer_info->end());
       const Vec2 pos = {box_start_x, world_timer_y};
       const Vec2 size = {box_width, box_height};
       primitive_assembler.AddShadedBox(pos, size, draw_data.z, color, std::move(user_data));
@@ -131,7 +123,8 @@ Color SchedulerTrack::GetTimerColor(const TimerInfo& timer_info, bool is_selecte
   }
   if (!IsTimerActive(timer_info)) {
     const TimerInfo* selected_timer = draw_data.selected_timer;
-    bool is_same_pid = selected_timer && timer_info.process_id() == selected_timer->process_id();
+    bool is_same_pid =
+        (selected_timer != nullptr) && timer_info.process_id() == selected_timer->process_id();
     return is_same_pid ? kSamePidColor : kInactiveColor;
   }
   return orbit_gl::GetThreadColor(timer_info.thread_id());
@@ -167,7 +160,7 @@ std::string SchedulerTrack::GetTooltip() const {
 std::string SchedulerTrack::GetBoxTooltip(const PrimitiveAssembler& primitive_assembler,
                                           PickingId id) const {
   const orbit_client_protos::TimerInfo* timer_info = primitive_assembler.GetTimerInfo(id);
-  if (!timer_info) {
+  if (timer_info == nullptr) {
     return "";
   }
 

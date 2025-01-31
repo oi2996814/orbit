@@ -2,27 +2,32 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "AsyncTrack.h"
+#include "OrbitGl/AsyncTrack.h"
 
 #include <GteVector.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/str_format.h>
 
 #include <algorithm>
-#include <ctime>
+#include <filesystem>
+#include <memory>
+#include <utility>
 
-#include "App.h"
+#include "ApiInterface/Orbit.h"
 #include "ClientData/CaptureData.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "GlUtils.h"
-#include "ManualInstrumentationManager.h"
 #include "OrbitBase/Logging.h"
-#include "PrimitiveAssembler.h"
-#include "TextRenderer.h"
-#include "ThreadColor.h"
-#include "TimeGraphLayout.h"
-#include "Viewport.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/ManualInstrumentationManager.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/TextRenderer.h"
+#include "OrbitGl/TimeGraph.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/Viewport.h"
 
 using orbit_client_protos::TimerInfo;
 using orbit_gl::PrimitiveAssembler;
@@ -119,16 +124,16 @@ std::string AsyncTrack::GetTimesliceText(const TimerInfo& timer_info) const {
 Color AsyncTrack::GetTimerColor(const TimerInfo& timer_info, bool is_selected, bool is_highlighted,
                                 const internal::DrawData& /*draw_data*/) const {
   ORBIT_CHECK(timer_info.type() == TimerInfo::kApiScopeAsync);
-  const Color kInactiveColor(100, 100, 100, 255);
-  const Color kSelectionColor(0, 128, 255, 255);
+  const Color inactive_color(100, 100, 100, 255);
+  const Color selection_color(0, 128, 255, 255);
   if (is_highlighted) {
     return TimerTrack::kHighlightColor;
   }
   if (is_selected) {
-    return kSelectionColor;
+    return selection_color;
   }
   if (!IsTimerActive(timer_info)) {
-    return kInactiveColor;
+    return inactive_color;
   }
 
   if (timer_info.has_color()) {
@@ -136,10 +141,10 @@ Color AsyncTrack::GetTimerColor(const TimerInfo& timer_info, bool is_selected, b
     ORBIT_CHECK(timer_info.color().green() < 256);
     ORBIT_CHECK(timer_info.color().blue() < 256);
     ORBIT_CHECK(timer_info.color().alpha() < 256);
-    return Color(static_cast<uint8_t>(timer_info.color().red()),
-                 static_cast<uint8_t>(timer_info.color().green()),
-                 static_cast<uint8_t>(timer_info.color().blue()),
-                 static_cast<uint8_t>(timer_info.color().alpha()));
+    return {static_cast<uint8_t>(timer_info.color().red()),
+            static_cast<uint8_t>(timer_info.color().green()),
+            static_cast<uint8_t>(timer_info.color().blue()),
+            static_cast<uint8_t>(timer_info.color().alpha())};
   }
 
   uint64_t event_id = timer_info.api_async_scope_id();

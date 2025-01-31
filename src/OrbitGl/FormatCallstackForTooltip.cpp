@@ -2,17 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "FormatCallstackForTooltip.h"
+#include "OrbitGl/FormatCallstackForTooltip.h"
 
+#include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_replace.h>
+#include <stdint.h>
 
+#include <algorithm>
+#include <filesystem>
+#include <limits>
 #include <string>
+#include <vector>
 
 #include "ClientData/CallstackInfo.h"
 #include "ClientData/CaptureData.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
-#include "ShortenStringWithEllipsis.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitGl/ShortenStringWithEllipsis.h"
 
 namespace orbit_gl {
 

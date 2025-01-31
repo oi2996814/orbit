@@ -30,11 +30,11 @@ target_sources(OrbitBase PRIVATE
         include/OrbitBase/Future.h
         include/OrbitBase/FutureHelpers.h
         include/OrbitBase/Logging.h
-        include/OrbitBase/MainThreadExecutor.h
         include/OrbitBase/MakeUniqueForOverwrite.h
         include/OrbitBase/NotFoundOr.h
         include/OrbitBase/GetProcessIds.h
         include/OrbitBase/Overloaded.h
+        include/OrbitBase/ParameterPackTrait.h
         include/OrbitBase/Profiling.h
         include/OrbitBase/Promise.h
         include/OrbitBase/PromiseHelpers.h
@@ -47,7 +47,6 @@ target_sources(OrbitBase PRIVATE
         include/OrbitBase/StopSource.h
         include/OrbitBase/StopToken.h
         include/OrbitBase/TaskGroup.h
-        include/OrbitBase/TemporaryFile.h
         include/OrbitBase/ThreadConstants.h
         include/OrbitBase/ThreadPool.h
         include/OrbitBase/ThreadUtils.h
@@ -69,7 +68,6 @@ target_sources(OrbitBase PRIVATE
         SafeStrerror.cpp
         SimpleExecutor.cpp
         StringConversion.cpp
-        TemporaryFile.cpp
         ThreadPool.cpp
         WhenAll.cpp
         WriteStringToFile.cpp)
@@ -84,6 +82,7 @@ target_sources(OrbitBase PRIVATE
         ExecutablePathWindows.cpp
         GetLastErrorWindows.cpp
         GetProcAddressWindows.cpp
+        LoggingWindows.cpp
         OsVersionWindows.cpp
         ThreadUtilsWindows.cpp)
 else()
@@ -95,7 +94,7 @@ target_sources(OrbitBase PRIVATE
 endif()
 
 target_link_libraries(OrbitBase PUBLIC
-        CONAN_PKG::outcome
+        outcome::outcome
         absl::base
         absl::flat_hash_map
         absl::strings
@@ -122,6 +121,7 @@ target_sources(OrbitBaseTests PRIVATE
         LoggingUtilsTest.cpp
         NotFoundOrTest.cpp
         OverloadedTest.cpp
+        ParameterPackTraitTest.cpp
         ProfilingTest.cpp
         PromiseTest.cpp
         PromiseHelpersTest.cpp
@@ -133,7 +133,6 @@ target_sources(OrbitBaseTests PRIVATE
         StopSourceTest.cpp
         StopTokenTest.cpp
         TaskGroupTest.cpp
-        TemporaryFileTest.cpp
         TypedefTest.cpp
         ThreadUtilsTest.cpp
         UniqueResourceTest.cpp
@@ -164,7 +163,7 @@ endif()
 target_link_libraries(OrbitBaseTests PRIVATE
         OrbitBase
         TestUtils
-        GTest::GTest
+        GTest::gtest
         GTest::Main)
 
 register_test(OrbitBaseTests)

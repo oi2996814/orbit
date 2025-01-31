@@ -10,6 +10,8 @@
 #include <QObject>
 #include <QTimer>
 #include <chrono>
+#include <memory>
+#include <ratio>
 
 #include "QtUtils/Throttle.h"
 
@@ -69,6 +71,10 @@ TEST(Throttle, SecondImmediateFireLeadsToDelayedTrigger) {
 }
 
 TEST(Throttle, SecondDelayedFireLeadsToImmediateTrigger) {
+// TODO(https://github.com/google/orbit/issues/4503): Enable test again.
+#ifdef _WIN32
+  GTEST_SKIP();
+#endif
   Throttle throttle{kStandardDelay};
 
   MockReceiver receiver{};

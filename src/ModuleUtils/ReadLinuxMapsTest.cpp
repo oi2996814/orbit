@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <string>
 #include <vector>
 
 #include "ModuleUtils/ReadLinuxMaps.h"

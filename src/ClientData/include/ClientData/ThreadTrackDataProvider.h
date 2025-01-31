@@ -5,9 +5,20 @@
 #ifndef THREAD_TRACK_DATA_PROVIDER_H_
 #define THREAD_TRACK_DATA_PROVIDER_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <limits>
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "ClientData/ScopeId.h"
+#include "ClientData/ScopeTreeTimerData.h"
 #include "ClientData/ThreadTrackDataManager.h"
+#include "ClientData/TimerChain.h"
 #include "ClientData/TimerData.h"
+#include "ClientProtos/capture_data.pb.h"
 
 namespace orbit_client_data {
 
@@ -32,14 +43,16 @@ class ThreadTrackDataProvider final {
   [[nodiscard]] std::vector<uint32_t> GetAllThreadIds() const;
 
   // For the following methods, we assume ScopeTreeTimerData is already been created for thread_id.
-  std::vector<const TimerChain*> GetChains(uint32_t thread_id) const {
+  [[nodiscard]] std::vector<const TimerChain*> GetChains(uint32_t thread_id) const {
     return GetScopeTreeTimerData(thread_id)->GetChains();
   }
 
   [[nodiscard]] std::vector<const orbit_client_protos::TimerInfo*> GetTimers(
       uint32_t thread_id, uint64_t min_tick = std::numeric_limits<uint64_t>::min(),
-      uint64_t max_tick = std::numeric_limits<uint64_t>::max()) const {
-    return GetScopeTreeTimerData(thread_id)->GetTimers(min_tick, max_tick);
+      uint64_t max_tick = std::numeric_limits<uint64_t>::max(), bool exclusive = false) const {
+    const auto* scope_tree_timer_data = GetScopeTreeTimerData(thread_id);
+    if (scope_tree_timer_data == nullptr) return {};
+    return scope_tree_timer_data->GetTimers(min_tick, max_tick, exclusive);
   }
 
   // This method avoids returning two timers that map to the same pixel, so is especially useful

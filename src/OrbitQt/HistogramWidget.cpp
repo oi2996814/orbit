@@ -2,29 +2,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "HistogramWidget.h"
+#include "OrbitQt/HistogramWidget.h"
 
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_replace.h>
 #include <absl/time/time.h>
-#include <qwindowdefs.h>
+#include <absl/types/span.h>
+#include <stdlib.h>
 
 #include <QColor>
-#include <QEvent>
+#include <QFlags>
+#include <QFont>
+#include <QFontMetrics>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
 #include <QPoint>
+#include <QRect>
+#include <QSize>
 #include <QStringLiteral>
-#include <QWidget>
 #include <Qt>
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <random>
 #include <string>
@@ -35,6 +39,7 @@
 #include "ClientData/ScopeId.h"
 #include "DisplayFormats/DisplayFormats.h"
 #include "Introspection/Introspection.h"
+#include "OrbitBase/Typedef.h"
 #include "Statistics/Histogram.h"
 
 using ::orbit_client_data::ScopeId;
@@ -125,7 +130,7 @@ static void DrawVerticalLine(QPainter& painter, const QPoint& start, int length)
 // Hence, we choose the step leading to the number of ticks closest to `optimal_tick_count`.
 // If the available tick count is either 0 or 1, the step yielding zero ticks may be returned.
 [[nodiscard]] static TickStep ChooseBestStep(double min, double max,
-                                             const std::vector<TickStep>& steps,
+                                             absl::Span<const TickStep> steps,
                                              uint32_t optimal_tick_count) {
   std::optional<TickStep> best_step;
   int best_deviation = std::numeric_limits<int>::max();
@@ -151,15 +156,15 @@ struct Ticks {
 };
 }  // namespace
 
-[[nodiscard]] static Ticks MakeTicksFromValues(const std::vector<double>& values, int precision) {
+[[nodiscard]] static Ticks MakeTicksFromValues(std::vector<double> values, int precision) {
   std::vector<QString> labels;
   std::transform(
       std::begin(values), std::end(values), std::back_inserter(labels),
       [precision](const double value) { return QString::number(value, 'f', precision); });
-  return {labels, values, precision};
+  return {labels, std::move(values), precision};
 }
 
-[[nodiscard]] static Ticks MakeTicks(double min, double max, const std::vector<TickStep>& steps,
+[[nodiscard]] static Ticks MakeTicks(double min, double max, absl::Span<const TickStep> steps,
                                      uint32_t optimal_tick_count) {
   TickStep step = ChooseBestStep(min, max, steps, optimal_tick_count);
   std::vector<double> values = MakeLabelValues(min, max, step.value);
@@ -235,7 +240,7 @@ static void SetBoldFont(QPainter& painter) {
   painter.setFont(font);
 }
 
-static void DrawHoverLabel(QPainter& painter, const QRect& rect, const QString text) {
+static void DrawHoverLabel(QPainter& painter, const QRect& rect, const QString& text) {
   SetBoldFont(painter);
   painter.fillRect(rect, kHoverLabelColor);
   painter.drawText(rect, Qt::AlignCenter, text);
@@ -355,8 +360,8 @@ static void DrawHorizontalHoverLabel(QPainter& painter, const QPoint& axes_inter
   DrawHoverLabel(painter, label_rect, label_text);
 }
 
-static void DrawOneLineOfHint(QPainter& painter, const QString message, const QPoint& bottom_right,
-                              const QColor color) {
+static void DrawOneLineOfHint(QPainter& painter, const QString& message, const QPoint& bottom_right,
+                              const QColor& color) {
   painter.setPen(color);
   const QRect rect(QPoint(0, 0), bottom_right);
   painter.drawText(rect, Qt::AlignRight | Qt::AlignBottom, message);

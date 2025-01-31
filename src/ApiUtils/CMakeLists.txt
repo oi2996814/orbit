@@ -7,7 +7,6 @@ add_library(ApiUtils STATIC)
 target_sources(ApiUtils PUBLIC
         include/ApiUtils/ApiEnableInfo.h
         include/ApiUtils/Event.h
-        include/ApiUtils/EncodedEvent.h
         include/ApiUtils/EncodedString.h
         include/ApiUtils/GetFunctionTableAddressPrefix.h)
 
@@ -25,7 +24,6 @@ target_include_directories(ApiUtils PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 add_executable(ApiUtilsTests)
 
 target_sources(ApiUtilsTests PRIVATE
-        EncodedEventTest.cpp
         EncodedStringTest.cpp)
 
 target_link_libraries(ApiUtilsTests PRIVATE

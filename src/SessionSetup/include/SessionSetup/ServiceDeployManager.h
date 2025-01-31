@@ -13,11 +13,13 @@
 #include <QThread>
 #include <QTimer>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <variant>
 
 #include "DeploymentConfigurations.h"
 #include "OrbitBase/AnyInvocable.h"
@@ -34,6 +36,7 @@
 #include "OrbitSshQt/SftpCopyToRemoteOperation.h"
 #include "OrbitSshQt/Task.h"
 #include "OrbitSshQt/Tunnel.h"
+#include "QtUtils/SingleThreadExecutor.h"
 
 namespace orbit_session_setup {
 
@@ -46,8 +49,9 @@ class ServiceDeployManager : public QObject {
   };
 
   explicit ServiceDeployManager(const DeploymentConfiguration* deployment_configuration,
-                                const orbit_ssh::Context* context, orbit_ssh::Credentials creds,
-                                const GrpcPort& grpc_port, QObject* parent = nullptr);
+                                const orbit_ssh::Context* context,
+                                orbit_ssh::Credentials credentials, const GrpcPort& grpc_port,
+                                QObject* parent = nullptr);
 
   ~ServiceDeployManager() override;
 
@@ -58,7 +62,6 @@ class ServiceDeployManager : public QObject {
       std::filesystem::path source, std::filesystem::path destination,
       orbit_base::StopToken stop_token);
 
-  void Shutdown();
   void Cancel();
 
  signals:
@@ -77,8 +80,9 @@ class ServiceDeployManager : public QObject {
   std::unique_ptr<orbit_ssh_qt::SftpChannel> sftp_channel_;
   QTimer ssh_watchdog_timer_;
 
-  QThread background_thread_;
+  orbit_qt_utils::SingleThreadExecutor background_executor_{};
 
+  void Shutdown();
   ErrorMessageOr<void> ConnectToServer();
   ErrorMessageOr<bool> CheckIfInstalled();
   ErrorMessageOr<void> CopyOrbitServicePackage();
@@ -99,7 +103,7 @@ class ServiceDeployManager : public QObject {
   ErrorMessageOr<void> ShutdownTask(orbit_ssh_qt::Task* task);
   ErrorMessageOr<void> ShutdownSession(orbit_ssh_qt::Session* session);
   ErrorMessageOr<void> CopyFileToRemote(
-      const std::string& source, const std::string& dest,
+      std::string_view source, std::string_view dest,
       orbit_ssh_qt::SftpCopyToRemoteOperation::FileMode dest_mode);
 
   // TODO(http://b/209807583): With our current integration of libssh2 we can only ever have one

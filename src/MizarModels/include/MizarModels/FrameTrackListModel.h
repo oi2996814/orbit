@@ -103,11 +103,11 @@ class FrameTrackListModelTmpl : public QAbstractListModel {
   }
 
   [[nodiscard]] static std::string MakeDisplayedName(const FrameTrackInfo& info) {
-    return std::visit(orbit_base::overloaded{&MakeFrameTrackString, &PresentEventSourceName},
+    return std::visit(orbit_base::Overloaded{&MakeFrameTrackString, &PresentEventSourceName},
                       *info);
   }
 
-  [[nodiscard]] QString MakeTooltip(FrameTrackId id, const std::string& name) const {
+  [[nodiscard]] QString MakeTooltip(FrameTrackId id, std::string_view name) const {
     const auto& [wall_clock_time, active_invocation_time] =
         data_->WallClockAndActiveInvocationTimeStats(
             *selected_tids_, id, *start_timestamp_,

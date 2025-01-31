@@ -45,7 +45,7 @@ class Socket {
 
   static outcome::result<Socket> Create(int domain = AF_INET, int type = SOCK_STREAM,
                                         int protocol = IPPROTO_TCP);
-  static void PrintWithLastError(const std::string& message);
+  static void PrintWithLastError(std::string_view message);
 
   [[nodiscard]] outcome::result<void> Connect(const AddrAndPort& addr_and_port,
                                               int domain = AF_INET) const;
@@ -58,7 +58,7 @@ class Socket {
   [[nodiscard]] outcome::result<Socket> Accept() const;
 
   [[nodiscard]] outcome::result<void> Shutdown() const;
-  outcome::result<void> WaitDisconnect();
+  [[nodiscard]] outcome::result<void> WaitDisconnect() const;
   [[nodiscard]] Descriptor GetFileDescriptor() const { return descriptor_; }
 
   [[nodiscard]] outcome::result<void> CanBeRead() const;

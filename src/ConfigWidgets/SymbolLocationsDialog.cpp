@@ -4,19 +4,34 @@
 
 #include "ConfigWidgets/SymbolLocationsDialog.h"
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/flags/flag.h>
 #include <absl/strings/str_format.h>
 
+#include <QAbstractButton>
+#include <QCheckBox>
 #include <QDesktopServices>
 #include <QFileDialog>
+#include <QFrame>
+#include <QGroupBox>
+#include <QIcon>
+#include <QLabel>
+#include <QList>
 #include <QListWidget>
+#include <QListWidgetItem>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
+#include <QStringList>
+#include <QUrl>
+#include <QVariant>
+#include <Qt>
 #include <algorithm>
 #include <filesystem>
 #include <iterator>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <tuple>
 
 #include "ClientFlags/ClientFlags.h"
@@ -56,19 +71,20 @@ namespace {
 // module_symbol_file_mappings_ map.
 class OverrideMappingItem : public QListWidgetItem {
  public:
-  explicit OverrideMappingItem(const std::string& module_file_path,
+  explicit OverrideMappingItem(std::string_view module_file_path,
                                const std::filesystem::path& symbol_file_path,
                                QListWidget* parent = nullptr)
-      : QListWidgetItem(QIcon(":/actions/alert"),
-                        QString("%1 -> %2")
-                            .arg(QString::fromStdString(module_file_path))
-                            .arg(QString::fromStdString(symbol_file_path.string())),
-                        parent, kOverrideMappingItemType),
+      : QListWidgetItem(
+            QIcon(":/actions/alert"),
+            QString("%1 -> %2")
+                .arg(QString::fromUtf8(module_file_path.data(), module_file_path.size()))
+                .arg(QString::fromStdString(symbol_file_path.string())),
+            parent, kOverrideMappingItemType),
         module_file_path_(module_file_path) {
     setToolTip(
         QString(
             R"(This is a symbol file override. Orbit will always use the symbol file "%1" for the module "%2".)")
-            .arg(QString::fromStdString(module_file_path))
+            .arg(QString::fromUtf8(module_file_path.data(), module_file_path.size()))
             .arg(QString::fromStdString(symbol_file_path.string())));
   }
   std::string module_file_path_;
@@ -227,7 +243,10 @@ void SymbolLocationsDialog::OnRemoveButtonClicked() {
       ORBIT_CHECK(module_symbol_file_mappings_.contains(mapping_item->module_file_path_));
       module_symbol_file_mappings_.erase(mapping_item->module_file_path_);
     }
-    ui_->listWidget->takeItem(ui_->listWidget->row(selected_item));
+
+    // This object is managed by Qt. A "raw" delete is unavoidable.
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
+    delete selected_item;
   }
 }
 

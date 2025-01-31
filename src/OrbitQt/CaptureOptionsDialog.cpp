@@ -2,20 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "CaptureOptionsDialog.h"
+#include "OrbitQt/CaptureOptionsDialog.h"
 
-#include <absl/flags/declare.h>
 #include <absl/flags/flag.h>
 
-#include <QAbstractButton>
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QGroupBox>
+#include <QLabel>
+#include <QLineEdit>
+#include <QNonConstOverload>
+#include <QRadioButton>
 #include <QWidget>
-#include <QtGui/QValidator>
 
 #include "ClientFlags/ClientFlags.h"
 #include "GrpcProtos/capture.pb.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitQt/MultipleOfSpinBox.h"
 #include "ui_CaptureOptionsDialog.h"
 
 namespace orbit_qt {
@@ -112,6 +117,8 @@ CaptureOptionsDialog::CaptureOptionsDialog(QWidget* parent)
     ui_->wineNoneRadioButton->hide();
   }
 }
+
+CaptureOptionsDialog::~CaptureOptionsDialog() = default;
 
 void CaptureOptionsDialog::SetEnableSampling(bool enable_sampling) {
   ui_->samplingCheckBox->setChecked(enable_sampling);

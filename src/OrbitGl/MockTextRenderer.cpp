@@ -2,9 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "MockTextRenderer.h"
+#include "OrbitGl/MockTextRenderer.h"
 
-#include "CoreMath.h"
+#include <GteVector.h>
+#include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
+#include <string.h>
+
+#include <algorithm>
+#include <limits>
+
+#include "OrbitGl/BatchRenderGroup.h"
+#include "OrbitGl/CoreMath.h"
 
 namespace orbit_gl {
 
@@ -59,7 +68,7 @@ void MockTextRenderer::AddText(const char* text, float x, float y, float z,
 
   AdjustDrawingBoundaries({real_start_x, real_start_y});
   AdjustDrawingBoundaries({real_start_x + text_width, real_start_y + text_height});
-  z_layers_.insert(z);
+  render_groups_.insert(BatchRenderGroupId(z));
   num_add_text_calls_++;
   num_characters_in_add_text_.insert(strlen(text));
   vertical_position_in_add_text.insert(real_start_y);
@@ -91,16 +100,18 @@ float MockTextRenderer::GetStringHeight(const char* /*text*/, uint32_t font_size
   return font_size;
 }
 
-[[nodiscard]] bool MockTextRenderer::IsTextInsideRectangle(Vec2 start, Vec2 size) const {
+[[nodiscard]] bool MockTextRenderer::IsTextInsideRectangle(const Vec2& start,
+                                                           const Vec2& size) const {
   if (GetNumAddTextCalls() == 0) return true;
   return IsInsideRectangle(min_point_, start, size) && IsInsideRectangle(max_point_, start, size);
 }
 
 bool MockTextRenderer::IsTextBetweenZLayers(float z_layer_min, float z_layer_max) const {
-  return std::find_if_not(z_layers_.begin(), z_layers_.end(),
-                          [z_layer_min, z_layer_max](float layer) {
-                            return ClosedInterval<float>{z_layer_min, z_layer_max}.Contains(layer);
-                          }) == z_layers_.end();
+  return std::find_if_not(
+             render_groups_.begin(), render_groups_.end(),
+             [z_layer_min, z_layer_max](const BatchRenderGroupId& group) {
+               return ClosedInterval<float>{z_layer_min, z_layer_max}.Contains(group.layer);
+             }) == render_groups_.end();
 }
 
 void MockTextRenderer::AdjustDrawingBoundaries(Vec2 point) {

@@ -2,17 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "orbitmainwindow.h"
+#include "OrbitQt/orbitmainwindow.h"
 
 #include <absl/container/flat_hash_set.h>
-#include <absl/flags/declare.h>
-#include <absl/flags/internal/flag.h>
+#include <absl/flags/flag.h>
+#include <absl/strings/match.h>
+#include <absl/strings/str_format.h>
+#include <absl/types/span.h>
 
-#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QColor>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QDesktopServices>
@@ -21,12 +23,10 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFlags>
-#include <QFontMetrics>
 #include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIODevice>
-#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QList>
@@ -37,6 +37,7 @@
 #include <QMouseEvent>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
+#include <QPainter>
 #include <QPixmap>
 #include <QPointer>
 #include <QProcess>
@@ -45,8 +46,11 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSplitter>
+#include <QStatusBar>
 #include <QStringList>
+#include <QSyntaxHighlighter>
 #include <QTabBar>
+#include <QTextEdit>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -59,22 +63,23 @@
 #include <array>
 #include <filesystem>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <system_error>
+#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include "AnnotatingSourceCodeDialog.h"
-#include "App.h"
-#include "CallTreeWidget.h"
+#include "ApiInterface/Orbit.h"
 #include "CaptureClient/CaptureClient.h"
 #include "CaptureClient/CaptureListener.h"
-#include "CaptureOptionsDialog.h"
-#include "ClientData/CaptureData.h"
+#include "ClientData/ModulePathAndBuildId.h"
 #include "ClientData/ProcessData.h"
 #include "ClientData/ScopeId.h"
+#include "ClientData/WineSyscallHandlingMethod.h"
 #include "ClientFlags/ClientFlags.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "ClientServices/ProcessManager.h"
@@ -87,14 +92,12 @@
 #include "ConfigWidgets/StopSymbolDownloadDialog.h"
 #include "ConfigWidgets/SymbolErrorDialog.h"
 #include "ConfigWidgets/SymbolLocationsDialog.h"
-#include "DataViewFactory.h"
+#include "DataViews/DataView.h"
 #include "DataViews/DataViewType.h"
 #include "DataViews/LiveFunctionsDataView.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "GlCanvas.h"
 #include "GrpcProtos/capture.pb.h"
 #include "GrpcProtos/services.pb.h"
-#include "LiveFunctionsController.h"
 #include "OrbitBase/CanceledOr.h"
 #include "OrbitBase/ExecutablePath.h"
 #include "OrbitBase/Future.h"
@@ -102,32 +105,44 @@
 #include "OrbitBase/ReadFileToString.h"
 #include "OrbitBase/Result.h"
 #include "OrbitBase/StopToken.h"
-#include "OrbitGgp/Instance.h"
+#include "OrbitGl/CaptureWindow.h"
+#include "OrbitGl/DataViewFactory.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/IntrospectionWindow.h"
+#include "OrbitGl/LiveFunctionsController.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/SelectionData.h"
+#include "OrbitGl/TimeGraph.h"
+#include "OrbitGl/TrackManager.h"
 #include "OrbitPaths/Paths.h"
+#include "OrbitQt/AnnotatingSourceCodeDialog.h"
+#include "OrbitQt/CallTreeWidget.h"
+#include "OrbitQt/CaptureOptionsDialog.h"
+#include "OrbitQt/DebugTabWidget.h"
+#include "OrbitQt/TrackConfigurationWidget.h"
+#include "OrbitQt/orbitaboutdialog.h"
+#include "OrbitQt/orbitdataviewpanel.h"
+#include "OrbitQt/orbitglwidget.h"
+#include "OrbitQt/orbitlivefunctions.h"
+#include "OrbitQt/orbitsamplingreport.h"
+#include "OrbitQt/orbittreeview.h"
+#include "OrbitQt/types.h"
+#include "OrbitSsh/AddrAndPort.h"
 #include "OrbitVersion/OrbitVersion.h"
-#include "QtUtils/MainThreadExecutorImpl.h"
-#include "SamplingReport.h"
+#include "QtUtils/MainThreadExecutor.h"
 #include "SessionSetup/Connections.h"
+#include "SessionSetup/OrbitServiceInstance.h"
 #include "SessionSetup/ServiceDeployManager.h"
 #include "SessionSetup/TargetConfiguration.h"
 #include "SessionSetup/TargetLabel.h"
 #include "SourcePathsMapping/Mapping.h"
 #include "SourcePathsMapping/MappingManager.h"
 #include "SourcePathsMappingUI/AskUserForFile.h"
-#include "SymbolProvider/ModuleIdentifier.h"
+#include "Statistics/Histogram.h"
 #include "Symbols/SymbolHelper.h"
 #include "SyntaxHighlighter/Cpp.h"
 #include "SyntaxHighlighter/X86Assembly.h"
-#include "TutorialContent.h"
-#include "absl/flags/flag.h"
-#include "absl/strings/match.h"
-#include "absl/strings/str_format.h"
-#include "orbitaboutdialog.h"
-#include "orbitdataviewpanel.h"
-#include "orbitglwidget.h"
-#include "orbitlivefunctions.h"
-#include "orbitsamplingreport.h"
-#include "types.h"
+#include "absl/flags/internal/flag.h"
 #include "ui_orbitmainwindow.h"
 
 using orbit_capture_client::CaptureClient;
@@ -140,7 +155,7 @@ using orbit_grpc_protos::CrashOrbitServiceRequest_CrashType_STACK_OVERFLOW;
 
 using orbit_session_setup::LocalTarget;
 using orbit_session_setup::ServiceDeployManager;
-using orbit_session_setup::StadiaTarget;
+using orbit_session_setup::SshTarget;
 using orbit_session_setup::TargetConfiguration;
 using orbit_session_setup::TargetLabel;
 
@@ -165,12 +180,16 @@ constexpr int kHintFrameHeight = 45;
 OrbitMainWindow::OrbitMainWindow(TargetConfiguration target_configuration,
                                  const QStringList& command_line_flags)
     : QMainWindow(nullptr),
-      main_thread_executor_{orbit_qt_utils::MainThreadExecutorImpl::Create()},
-      app_{OrbitApp::Create(this, main_thread_executor_.get())},
+      app_{OrbitApp::Create(this, &main_thread_executor_)},
       ui(new Ui::OrbitMainWindow),
       command_line_flags_(command_line_flags),
       target_configuration_(std::move(target_configuration)) {
   SetupMainWindow();
+
+  // Start introspection from entry.
+  if (absl::GetFlag(FLAGS_introspect)) {
+    on_actionIntrospection_triggered();
+  }
 
   SetupStatusBarLogButton();
   SetupHintFrame();
@@ -312,68 +331,27 @@ void OrbitMainWindow::SetupMainWindow() {
   };
   app_->SetCaptureStoppedCallback(capture_finished_callback);
   app_->SetCaptureFailedCallback(capture_finished_callback);
-  app_->SetCaptureClearedCallback([this] { OnCaptureCleared(); });
 
-  app_->SetRefreshCallback([this](DataViewType type) {
-    if (type == DataViewType::kAll || type == DataViewType::kLiveFunctions) {
-      this->ui->liveFunctions->OnDataChanged();
-    }
-    this->OnRefreshDataViewPanels(type);
-  });
-
-  app_->SetSamplingReportCallback([this](orbit_data_views::DataView* callstack_data_view,
-                                         const std::shared_ptr<SamplingReport>& report) {
-    this->OnNewSamplingReport(callstack_data_view, report);
-  });
-
-  app_->SetSelectionReportCallback([this](orbit_data_views::DataView* callstack_data_view,
-                                          const std::shared_ptr<SamplingReport>& report) {
-    this->OnNewSelectionReport(callstack_data_view, report);
-  });
-
-  app_->SetTopDownViewCallback([this](std::unique_ptr<CallTreeView> top_down_view) {
-    this->OnNewTopDownView(std::move(top_down_view));
-  });
-
-  app_->SetSelectionTopDownViewCallback(
-      [this](std::unique_ptr<CallTreeView> selection_top_down_view) {
-        this->OnNewSelectionTopDownView(std::move(selection_top_down_view));
-      });
-
-  app_->SetBottomUpViewCallback([this](std::unique_ptr<CallTreeView> bottom_up_view) {
-    this->OnNewBottomUpView(std::move(bottom_up_view));
-  });
-
-  app_->SetSelectionBottomUpViewCallback(
-      [this](std::unique_ptr<CallTreeView> selection_bottom_up_view) {
-        this->OnNewSelectionBottomUpView(std::move(selection_bottom_up_view));
-      });
-
-  app_->SetSelectLiveTabCallback([this] { ui->RightTabWidget->setCurrentWidget(ui->liveTab); });
-  app_->SetErrorMessageCallback([this](const std::string& title, const std::string& text) {
-    QMessageBox::critical(this, QString::fromStdString(title), QString::fromStdString(text));
-  });
-  app_->SetWarningMessageCallback([this](const std::string& title, const std::string& text) {
-    QMessageBox::warning(this, QString::fromStdString(title), QString::fromStdString(text));
-  });
-  app_->SetInfoMessageCallback([this](const std::string& title, const std::string& text) {
-    QMessageBox::information(this, QString::fromStdString(title), QString::fromStdString(text));
-  });
-  app_->SetSaveFileCallback(
-      [this](const std::string& extension) { return this->OnGetSaveFileName(extension); });
-  app_->SetClipboardCallback([this](const std::string& text) { this->OnSetClipboard(text); });
-
-  ui->CaptureGLWidget->Initialize(GlCanvas::CanvasType::kCaptureWindow, this, app_.get());
-
-  app_->SetTimerSelectedCallback([this](const orbit_client_protos::TimerInfo* timer_info) {
-    OnTimerSelectionChanged(timer_info);
-  });
+  auto capture_window = std::make_unique<CaptureWindow>(
+      app_.get(), app_.get(), ui->debugTabWidget->GetCaptureWindowTimeGraphLayout());
+  auto* capture_window_ptr = capture_window.get();
+  app_->SetCaptureWindow(capture_window_ptr);
+  QObject::connect(ui->debugTabWidget, &orbit_qt::DebugTabWidget::AnyCaptureWindowPropertyChanged,
+                   ui->CaptureGLWidget,
+                   [capture_window_ptr]() { capture_window_ptr->RequestUpdatePrimitives(); });
+  ui->CaptureGLWidget->Initialize(std::move(capture_window));
 
   if (absl::GetFlag(FLAGS_devmode)) {
-    ui->debugOpenGLWidget->Initialize(GlCanvas::CanvasType::kDebug, this, app_.get());
-    app_->SetDebugCanvas(ui->debugOpenGLWidget->GetCanvas());
+    ui->debugTabWidget->SetCaptureWindowDebugInterface(capture_window_ptr);
   } else {
     ui->RightTabWidget->removeTab(ui->RightTabWidget->indexOf(ui->debugTab));
+  }
+
+  // TODO(b/240111699): remove selection tabs.
+  if (absl::GetFlag(FLAGS_time_range_selection)) {
+    ui->RightTabWidget->removeTab(ui->RightTabWidget->indexOf(ui->selectionTopDownTab));
+    ui->RightTabWidget->removeTab(ui->RightTabWidget->indexOf(ui->selectionBottomUpTab));
+    ui->RightTabWidget->removeTab(ui->RightTabWidget->indexOf(ui->selectionSamplingTab));
   }
 
   ui->TracepointsList->Initialize(
@@ -386,10 +364,6 @@ void OrbitMainWindow::SetupMainWindow() {
 
   if (!absl::GetFlag(FLAGS_devmode)) {
     ui->menuDebug->menuAction()->setVisible(false);
-  }
-
-  if (absl::GetFlag(FLAGS_enable_tutorials_feature)) {
-    InitTutorials(this);
   }
 
   SetupCaptureToolbar();
@@ -424,7 +398,7 @@ void OrbitMainWindow::SetupMainWindow() {
   std::filesystem::path icon_file_name = (orbit_base::GetExecutableDir() / "orbit.ico");
   this->setWindowIcon(QIcon(QString::fromStdString(icon_file_name.string())));
 
-  if (!absl::GetFlag(FLAGS_devmode)) {
+  if (!absl::GetFlag(FLAGS_devmode) && !absl::GetFlag(FLAGS_introspect)) {
     ui->actionIntrospection->setVisible(false);
   }
 }
@@ -463,7 +437,7 @@ void OrbitMainWindow::SetupHintFrame() {
   hint_layout->setMargin(0);
   hint_frame_->setLayout(hint_layout);
   auto* hint_arrow = new QLabel();
-  hint_arrow->setPixmap(QPixmap(":/images/tutorial/grey_arrow_up.png").scaledToHeight(12));
+  hint_arrow->setPixmap(QPixmap(":/actions/grey_arrow_up").scaledToHeight(12));
   hint_layout->addWidget(hint_arrow);
   auto* hint_message = new QLabel("Start a capture here");
   hint_message->setAlignment(Qt::AlignCenter);
@@ -516,7 +490,7 @@ void OrbitMainWindow::SetupStatusBarLogButton() {
   capture_log_layout->setContentsMargins(0, 0, 9, 0);
   capture_log_widget->setLayout(capture_log_layout);
 
-  static const QIcon icon = [] {
+  static const QIcon kIcon = [] {
     QIcon icon;
     QPixmap expand_up_pixmap = QPixmap{":/actions/expand_up"};
     QPixmap expand_down_pixmap = QPixmap{":/actions/expand_down"};
@@ -539,7 +513,7 @@ void OrbitMainWindow::SetupStatusBarLogButton() {
   capture_log_button_->setAccessibleName("CaptureLogButton");
   capture_log_button_->setEnabled(false);
   capture_log_button_->setCheckable(true);
-  capture_log_button_->setIcon(icon);
+  capture_log_button_->setIcon(kIcon);
   capture_log_button_->setStyleSheet(
       "padding-left: 11; padding-right: 11; padding-top: 2; padding-bottom: 2;");
   capture_log_layout->addWidget(capture_log_button_);
@@ -604,8 +578,8 @@ void OrbitMainWindow::CreateTabBarContextMenu(QTabWidget* tab_widget, int tab_in
   QMenu context_menu(this);
   context_menu.setAccessibleName("TabBarContextMenu");
   QAction move_action;
-  QTabWidget* other_widget;
 
+  QTabWidget* other_widget{};
   if (tab_widget == ui->MainTabWidget) {
     move_action.setIcon(icon_keyboard_arrow_right_);
     move_action.setText(QString("Move \"") + tab_widget->tabText(tab_index) + "\" to right pane");
@@ -637,12 +611,14 @@ void OrbitMainWindow::CreateTabBarContextMenu(QTabWidget* tab_widget, int tab_in
 void OrbitMainWindow::UpdateCaptureStateDependentWidgets() {
   auto set_tab_enabled = [this](QWidget* widget, bool enabled) -> void {
     QTabWidget* tab_widget = FindParentTabWidget(widget);
-    ORBIT_CHECK(tab_widget != nullptr);
-    tab_widget->setTabEnabled(tab_widget->indexOf(widget), enabled);
+    // TODO(b/240111699): revert to ORBIT_CHECK(tab_widget != nullptr);
+    if (tab_widget != nullptr) {
+      tab_widget->setTabEnabled(tab_widget->indexOf(widget), enabled);
+    }
   };
 
   const bool has_data = app_->HasCaptureData();
-  const bool has_selection = has_data && app_->HasSampleSelection();
+  const bool has_selection = has_data && ui->selectionReport->HasSamples();
   CaptureClient::State capture_state = app_->GetCaptureState();
   const bool is_capturing = capture_state != CaptureClient::State::kStopped;
   const bool is_target_process_running = target_process_state_ == TargetProcessState::kRunning;
@@ -722,12 +698,15 @@ void OrbitMainWindow::UpdateProcessConnectionStateDependentWidgets() {
 void OrbitMainWindow::ClearCaptureFilters() { filter_panel_action_->ClearEdits(); }
 
 void OrbitMainWindow::UpdateActiveTabsAfterSelection(bool selection_has_samples) {
+  // TODO(b/240111699): remove this function.
+  if (absl::GetFlag(FLAGS_time_range_selection)) return;
+
   const QTabWidget* capture_parent = FindParentTabWidget(ui->CaptureTab);
 
   // Automatically switch between (complete capture) report and selection report tabs
   // if applicable
   auto show_corresponding_selection_tab = [this, capture_parent, selection_has_samples](
-                                              const std::vector<QWidget*>& report_tabs,
+                                              absl::Span<QWidget* const> report_tabs,
                                               QWidget* selection_tab) {
     QTabWidget* selection_parent = FindParentTabWidget(selection_tab);
 
@@ -781,8 +760,6 @@ QTabWidget* OrbitMainWindow::FindParentTabWidget(const QWidget* widget) const {
 }
 
 OrbitMainWindow::~OrbitMainWindow() {
-  DeinitTutorials();
-
   ui->selectionBottomUpWidget->Deinitialize();
   ui->bottomUpWidget->Deinitialize();
   ui->selectionTopDownWidget->Deinitialize();
@@ -793,21 +770,12 @@ OrbitMainWindow::~OrbitMainWindow() {
   ui->samplingReport->Deinitialize();
   ui->selectionReport->Deinitialize();
 
-  if (absl::GetFlag(FLAGS_devmode)) {
-    ui->debugOpenGLWidget->Deinitialize(this);
-  }
-
-  ui->CaptureGLWidget->Deinitialize(this);
+  ui->CaptureGLWidget->Deinitialize();
   ui->PresetsList->Deinitialize();
   ui->FunctionsList->Deinitialize();
   ui->ModulesList->Deinitialize();
 
   delete ui;
-
-  // This explicitly destructs the main_thread_executor_ before all other members.
-  // That ensures that all scheduled main thread tasks will be destructed before
-  // we destruct all the resources these tasks might rely on.
-  main_thread_executor_.reset();
 }
 
 void OrbitMainWindow::OnRefreshDataViewPanels(DataViewType type) {
@@ -839,75 +807,78 @@ void OrbitMainWindow::UpdatePanel(DataViewType type) {
       ui->samplingReport->RefreshTabs();
       ui->selectionReport->RefreshCallstackView();
       ui->selectionReport->RefreshTabs();
-      ui->inspectionReport->RefreshCallstackView();
-      ui->inspectionReport->RefreshTabs();
       break;
     default:
       break;
   }
 }
 
-void OrbitMainWindow::OnNewSamplingReport(orbit_data_views::DataView* callstack_data_view,
-                                          const std::shared_ptr<SamplingReport>& sampling_report) {
+void OrbitMainWindow::SetSamplingReport(
+    const orbit_client_data::CallstackData* callstack_data,
+    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data) {
   ui->samplingGridLayout->removeWidget(ui->samplingReport);
   delete ui->samplingReport;
 
+  auto* callstack_data_view = app_->GetOrCreateDataView(orbit_data_views::DataViewType::kCallstack);
   ui->samplingReport = new OrbitSamplingReport(ui->samplingTab);
-  ui->samplingReport->Initialize(callstack_data_view, sampling_report);
+  ui->samplingReport->Initialize(app_.get(), callstack_data_view, callstack_data,
+                                 post_processed_sampling_data);
   ui->samplingGridLayout->addWidget(ui->samplingReport, 0, 0, 1, 1);
 
   UpdateCaptureStateDependentWidgets();
-
-  // Switch to sampling tab if:
-  //  * Report is non-empty
-  //  * Sampling-tab is not in the same widget as the capture tab
-  //  * Live-tab isn't selected in the same widget as the sampling tab
-  bool has_samples = sampling_report != nullptr && sampling_report->HasSamples();
-  QTabWidget* sampling_tab_parent = FindParentTabWidget(ui->samplingTab);
-  if (has_samples && (FindParentTabWidget(ui->CaptureTab) != sampling_tab_parent) &&
-      (sampling_tab_parent->currentWidget() != ui->liveTab)) {
-    sampling_tab_parent->setCurrentWidget(ui->samplingTab);
-  }
 }
 
-void OrbitMainWindow::OnNewSelectionReport(
+void OrbitMainWindow::SetSelectionSamplingReport(
     orbit_data_views::DataView* callstack_data_view,
-    const std::shared_ptr<SamplingReport>& selection_report) {
+    const orbit_client_data::CallstackData* callstack_data,
+    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data) {
   ui->selectionGridLayout->removeWidget(ui->selectionReport);
   delete ui->selectionReport;
-  bool has_samples = selection_report != nullptr && selection_report->HasSamples();
 
   ui->selectionReport = new OrbitSamplingReport(ui->selectionSamplingTab);
-  ui->selectionReport->Initialize(callstack_data_view, selection_report);
+  ui->selectionReport->Initialize(app_.get(), callstack_data_view, callstack_data,
+                                  post_processed_sampling_data);
   ui->selectionGridLayout->addWidget(ui->selectionReport, 0, 0, 1, 1);
 
-  UpdateActiveTabsAfterSelection(has_samples);
+  UpdateActiveTabsAfterSelection(ui->selectionReport->HasSamples());
   UpdateCaptureStateDependentWidgets();
 }
 
-void OrbitMainWindow::OnNewTopDownView(std::unique_ptr<CallTreeView> top_down_view) {
+void OrbitMainWindow::UpdateSamplingReport(
+    const orbit_client_data::CallstackData* callstack_data,
+    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data) {
+  ui->samplingReport->UpdateReport(callstack_data, post_processed_sampling_data);
+}
+
+void OrbitMainWindow::UpdateSelectionReport(
+    const orbit_client_data::CallstackData* callstack_data,
+    const orbit_client_data::PostProcessedSamplingData* post_processed_sampling_data) {
+  ui->selectionReport->UpdateReport(callstack_data, post_processed_sampling_data);
+}
+
+void OrbitMainWindow::SetTopDownView(std::shared_ptr<const CallTreeView> top_down_view) {
   ui->topDownWidget->SetTopDownView(std::move(top_down_view));
 }
 
-void OrbitMainWindow::OnNewSelectionTopDownView(
-    std::unique_ptr<CallTreeView> selection_top_down_view) {
+void OrbitMainWindow::SetSelectionTopDownView(
+    std::shared_ptr<const CallTreeView> selection_top_down_view) {
   ui->selectionTopDownWidget->SetTopDownView(std::move(selection_top_down_view));
 }
 
-void OrbitMainWindow::OnNewBottomUpView(std::unique_ptr<CallTreeView> bottom_up_view) {
+void OrbitMainWindow::SetBottomUpView(std::shared_ptr<const CallTreeView> bottom_up_view) {
   ui->bottomUpWidget->SetBottomUpView(std::move(bottom_up_view));
 }
 
-void OrbitMainWindow::OnNewSelectionBottomUpView(
-    std::unique_ptr<CallTreeView> selection_bottom_up_view) {
+void OrbitMainWindow::SetSelectionBottomUpView(
+    std::shared_ptr<const CallTreeView> selection_bottom_up_view) {
   ui->selectionBottomUpWidget->SetBottomUpView(std::move(selection_bottom_up_view));
 }
 
-std::string OrbitMainWindow::OnGetSaveFileName(const std::string& extension) {
+std::string OrbitMainWindow::OnGetSaveFileName(std::string_view extension) {
   QFileDialog dialog(this);
   dialog.setFileMode(QFileDialog::FileMode::AnyFile);
   dialog.setAcceptMode(QFileDialog::AcceptMode::AcceptSave);
-  dialog.setNameFilter(QString::fromStdString(extension + " (*" + extension + ")"));
+  dialog.setNameFilter(QString::fromStdString(absl::StrFormat("%s (*%s)", extension, extension)));
   dialog.setWindowTitle("Specify a file to save...");
   dialog.setDirectory(nullptr);
   std::string filename;
@@ -921,8 +892,8 @@ std::string OrbitMainWindow::OnGetSaveFileName(const std::string& extension) {
   return filename;
 }
 
-void OrbitMainWindow::OnSetClipboard(const std::string& text) {
-  QApplication::clipboard()->setText(QString::fromStdString(text));
+void OrbitMainWindow::OnSetClipboard(std::string_view text) {
+  QApplication::clipboard()->setText(QString::fromUtf8(text.data(), text.size()));
 }
 
 void OrbitMainWindow::on_actionReport_Missing_Feature_triggered() {
@@ -1006,12 +977,6 @@ void OrbitMainWindow::StartMainTimer() {
 void OrbitMainWindow::OnTimer() {
   ORBIT_SCOPE("OrbitMainWindow::OnTimer");
   app_->MainTick();
-
-  for (OrbitGLWidget* gl_widget : gl_widgets_) {
-    if (gl_widget->GetCanvas() != nullptr && gl_widget->GetCanvas()->IsRedrawNeeded()) {
-      gl_widget->update();
-    }
-  }
 
   if (app_->IsCapturing()) {
     filter_panel_action_->SetTimerLabelText(QString::fromStdString(
@@ -1385,24 +1350,21 @@ void OrbitMainWindow::on_actionIntrospection_triggered() {
   if (introspection_widget_ == nullptr) {
     introspection_widget_ = std::make_unique<OrbitGLWidget>();
     introspection_widget_->setWindowFlags(Qt::WindowStaysOnTopHint);
-    introspection_widget_->Initialize(GlCanvas::CanvasType::kIntrospectionWindow, this, app_.get());
+    auto introspection_window = std::make_unique<IntrospectionWindow>(
+        app_.get(), app_.get(), ui->debugTabWidget->GetIntrospectionWindowTimeGraphLayout());
+    auto* introspection_window_ptr = introspection_window.get();
+    app_->SetIntrospectionWindow(introspection_window_ptr);
+    introspection_widget_->Initialize(std::move(introspection_window));
     introspection_widget_->installEventFilter(this);
+
+    ui->debugTabWidget->SetIntrospectionWindowDebugInterface(introspection_window_ptr);
+    QObject::connect(
+        ui->debugTabWidget, &orbit_qt::DebugTabWidget::AnyIntrospectionWindowPropertyChanged,
+        introspection_widget_.get(),
+        [introspection_window_ptr]() { introspection_window_ptr->RequestUpdatePrimitives(); });
   }
 
   introspection_widget_->show();
-}
-
-void OrbitMainWindow::RestoreDefaultTabLayout() {
-  for (auto& widget_and_layout : default_tab_layout_) {
-    QTabWidget* tab_widget = widget_and_layout.first;
-    tab_widget->clear();
-    for (auto& tab_and_title : widget_and_layout.second.tabs_and_titles) {
-      tab_widget->addTab(tab_and_title.first, tab_and_title.second);
-    }
-    tab_widget->setCurrentIndex(widget_and_layout.second.current_index);
-  }
-
-  UpdateCaptureStateDependentWidgets();
 }
 
 void OrbitMainWindow::OnTimerSelectionChanged(const orbit_client_protos::TimerInfo* timer_info) {
@@ -1413,10 +1375,10 @@ void OrbitMainWindow::OnTimerSelectionChanged(const orbit_client_protos::TimerIn
     live_functions_data_view = &live_functions_controller.value()->GetDataView();
   }
   bool is_live_function_data_view_initialized = live_functions_data_view != nullptr;
-  if (timer_info) {
+  if (timer_info != nullptr) {
     ORBIT_CHECK(is_live_function_data_view_initialized);
 
-    if (const std::optional<ScopeId> scope_id = app_->GetCaptureData().ProvideScopeId(*timer_info);
+    if (const std::optional<ScopeId> scope_id = app_->ProvideScopeId(*timer_info);
         scope_id.has_value()) {
       selected_row = live_functions_data_view->GetRowFromScopeId(scope_id.value());
       live_functions_data_view->UpdateSelectedFunctionId();
@@ -1473,8 +1435,8 @@ void OrbitMainWindow::on_actionRename_Capture_File_triggered() {
   orbit_base::Future<ErrorMessageOr<void>> rename_future =
       app_->MoveCaptureFile(current_file_path, new_file_path);
 
-  rename_future.Then(main_thread_executor_.get(), [this, progress_dialog, current_file_path,
-                                                   new_file_path](ErrorMessageOr<void> result) {
+  rename_future.Then(&main_thread_executor_, [this, progress_dialog, current_file_path,
+                                              new_file_path](ErrorMessageOr<void> result) {
     progress_dialog->close();
     if (result.has_error()) {
       QMessageBox::critical(
@@ -1489,7 +1451,7 @@ void OrbitMainWindow::on_actionRename_Capture_File_triggered() {
   });
 }
 
-void OrbitMainWindow::OpenCapture(const std::string& filepath) {
+void OrbitMainWindow::OpenCapture(std::string_view filepath) {
   auto* loading_capture_dialog =
       new QProgressDialog("Waiting for the capture to be loaded...", nullptr, 0, 0, this, Qt::Tool);
   loading_capture_dialog->setWindowTitle("Loading capture");
@@ -1507,7 +1469,7 @@ void OrbitMainWindow::OpenCapture(const std::string& filepath) {
   loading_capture_dialog->show();
 
   app_->LoadCaptureFromFile(filepath).Then(
-      main_thread_executor_.get(),
+      &main_thread_executor_,
       [this, loading_capture_dialog](ErrorMessageOr<CaptureListener::CaptureOutcome> result) {
         loading_capture_dialog->close();
         if (!result.has_value()) {
@@ -1527,7 +1489,7 @@ void OrbitMainWindow::OpenCapture(const std::string& filepath) {
         }
       });
 
-  setWindowTitle(QString::fromStdString(filepath));
+  setWindowTitle(QString::fromUtf8(filepath.data(), filepath.size()));
   UpdateCaptureStateDependentWidgets();
   FindParentTabWidget(ui->CaptureTab)->setCurrentWidget(ui->CaptureTab);
 }
@@ -1628,9 +1590,6 @@ void OrbitMainWindow::Exit(int return_code) {
     app_->AbortCapture();
   }
 
-  if (main_thread_executor_ != nullptr) {
-    main_thread_executor_->AbortWaitingJobs();
-  }
   if (introspection_widget_ != nullptr) {
     introspection_widget_->close();
   }
@@ -1652,64 +1611,85 @@ void OrbitMainWindow::resizeEvent(QResizeEvent* event) {
   UpdateTargetLabelPosition();
 }
 
-void OrbitMainWindow::OnStadiaConnectionError(std::error_code error) {
-  ORBIT_CHECK(std::holds_alternative<StadiaTarget>(target_configuration_));
-  const StadiaTarget& target = std::get<StadiaTarget>(target_configuration_);
-
-  target.GetProcessManager()->SetProcessListUpdateListener(nullptr);
-
+void OrbitMainWindow::OnConnectionError(const QString& error_message) {
   is_connected_ = false;
   target_process_state_ = TargetProcessState::kEnded;
   UpdateProcessConnectionStateDependentWidgets();
-
-  QString error_message = QString("The connection to instance \"%1\" failed with error message: %2")
-                              .arg(target.GetConnection()->GetInstance().display_name)
-                              .arg(QString::fromStdString(error.message()));
 
   target_label_->SetConnectionDead(error_message);
 
   QMessageBox::critical(this, "Connection error", error_message, QMessageBox::Ok);
 }
 
-void OrbitMainWindow::SetTarget(const StadiaTarget& target) {
-  const orbit_session_setup::StadiaConnection* connection = target.GetConnection();
+void OrbitMainWindow::OnSshConnectionError(std::error_code error) {
+  ORBIT_CHECK(std::holds_alternative<SshTarget>(target_configuration_));
+  const SshTarget& target = std::get<SshTarget>(target_configuration_);
+
+  target.GetConnection()->GetProcessManager()->SetProcessListUpdateListener(nullptr);
+
+  QString error_message =
+      QString("The connection to machine \"%1\" failed with error message: %2")
+          .arg(QString::fromStdString(target.GetConnection()->GetAddrAndPort().GetHumanReadable()))
+          .arg(QString::fromStdString(error.message()));
+
+  OnConnectionError(error_message);
+}
+
+void OrbitMainWindow::OnLocalConnectionError(const QString& error_message) {
+  ORBIT_CHECK(std::holds_alternative<LocalTarget>(target_configuration_));
+  const LocalTarget& target = std::get<LocalTarget>(target_configuration_);
+
+  target.GetConnection()->GetProcessManager()->SetProcessListUpdateListener(nullptr);
+
+  OnConnectionError(error_message);
+}
+
+void OrbitMainWindow::SetTarget(const SshTarget& target) {
+  const orbit_session_setup::SshConnection* connection = target.GetConnection();
   ServiceDeployManager* service_deploy_manager = connection->GetServiceDeployManager();
 
   QObject::connect(service_deploy_manager, &ServiceDeployManager::socketErrorOccurred, this,
-                   &OrbitMainWindow::OnStadiaConnectionError, Qt::UniqueConnection);
+                   &OrbitMainWindow::OnSshConnectionError, Qt::UniqueConnection);
 
   app_->SetGrpcChannel(connection->GetGrpcChannel());
-  app_->SetProcessManager(target.GetProcessManager());
+  app_->SetProcessManager(target.GetConnection()->GetProcessManager());
   app_->SetTargetProcess(target.GetProcess());
 
-  target_label_->ChangeToStadiaTarget(target);
+  target_label_->ChangeToSshTarget(target);
 
   using ProcessInfo = orbit_grpc_protos::ProcessInfo;
-  target.GetProcessManager()->SetProcessListUpdateListener([&](std::vector<ProcessInfo> processes) {
-    // This lambda is called from a background-thread, so we use QMetaObject::invokeMethod
-    // to execute our logic on the main thread.
-    QMetaObject::invokeMethod(
-        this, [&, processes = std::move(processes)]() { OnProcessListUpdated(processes); });
-  });
+  target.GetConnection()->GetProcessManager()->SetProcessListUpdateListener(
+      [&](std::vector<ProcessInfo> processes) {
+        // This lambda is called from a background-thread, so we use QMetaObject::invokeMethod
+        // to execute our logic on the main thread.
+        QMetaObject::invokeMethod(
+            this, [&, processes = std::move(processes)]() { OnProcessListUpdated(processes); });
+      });
 
   is_connected_ = true;
 }
 
 void OrbitMainWindow::SetTarget(const LocalTarget& target) {
   const orbit_session_setup::LocalConnection* connection = target.GetConnection();
+
+  QObject::connect(connection->GetOrbitServiceInstance(),
+                   &orbit_session_setup::OrbitServiceInstance::ErrorOccurred, this,
+                   &OrbitMainWindow::OnLocalConnectionError, Qt::UniqueConnection);
+
   app_->SetGrpcChannel(connection->GetGrpcChannel());
-  app_->SetProcessManager(target.GetProcessManager());
+  app_->SetProcessManager(target.GetConnection()->GetProcessManager());
   app_->SetTargetProcess(target.GetProcess());
 
   target_label_->ChangeToLocalTarget(target);
 
   using ProcessInfo = orbit_grpc_protos::ProcessInfo;
-  target.GetProcessManager()->SetProcessListUpdateListener([&](std::vector<ProcessInfo> processes) {
-    // This lambda is called from a background-thread, so we use QMetaObject::invokeMethod
-    // to execute our logic on the main thread.
-    QMetaObject::invokeMethod(
-        this, [&, processes = std::move(processes)]() { OnProcessListUpdated(processes); });
-  });
+  target.GetConnection()->GetProcessManager()->SetProcessListUpdateListener(
+      [&](std::vector<ProcessInfo> processes) {
+        // This lambda is called from a background-thread, so we use QMetaObject::invokeMethod
+        // to execute our logic on the main thread.
+        QMetaObject::invokeMethod(
+            this, [&, processes = std::move(processes)]() { OnProcessListUpdated(processes); });
+      });
 
   is_connected_ = true;
 }
@@ -1720,10 +1700,10 @@ void OrbitMainWindow::SetTarget(const orbit_session_setup::FileTarget& target) {
 }
 
 void OrbitMainWindow::UpdateTargetLabelPosition() {
-  const int kMenuWidth = 300;
-  const int kMaxLabelWidth = width() - kMenuWidth;
+  constexpr int kMenuWidth = 300;
+  const int max_label_width = width() - kMenuWidth;
 
-  target_widget_->setMaximumWidth(kMaxLabelWidth);
+  target_widget_->setMaximumWidth(max_label_width);
   target_widget_->adjustSize();
 
   int target_widget_width = target_widget_->width();
@@ -1731,12 +1711,13 @@ void OrbitMainWindow::UpdateTargetLabelPosition() {
 }
 
 void OrbitMainWindow::OnProcessListUpdated(
-    const std::vector<orbit_grpc_protos::ProcessInfo>& processes) {
+    absl::Span<const orbit_grpc_protos::ProcessInfo> processes) {
   const auto is_current_process = [this](const auto& process) {
     const orbit_client_data::ProcessData* const target_process = app_->GetTargetProcess();
     return target_process != nullptr && process.pid() == app_->GetTargetProcess()->pid();
   };
-  const auto current_process = std::find_if(processes.begin(), processes.end(), is_current_process);
+  const auto* const current_process =
+      std::find_if(processes.begin(), processes.end(), is_current_process);
   const bool process_ended = current_process == processes.end();
 
   if (process_ended) {
@@ -1750,13 +1731,15 @@ void OrbitMainWindow::OnProcessListUpdated(
 }
 
 TargetConfiguration OrbitMainWindow::ClearTargetConfiguration() {
-  if (std::holds_alternative<StadiaTarget>(target_configuration_)) {
-    std::get<StadiaTarget>(target_configuration_)
-        .GetProcessManager()
+  if (std::holds_alternative<SshTarget>(target_configuration_)) {
+    std::get<SshTarget>(target_configuration_)
+        .GetConnection()
+        ->GetProcessManager()
         ->SetProcessListUpdateListener(nullptr);
   } else if (std::holds_alternative<LocalTarget>(target_configuration_)) {
     std::get<LocalTarget>(target_configuration_)
-        .GetProcessManager()
+        .GetConnection()
+        ->GetProcessManager()
         ->SetProcessListUpdateListener(nullptr);
   }
   return std::move(target_configuration_);
@@ -1788,10 +1771,9 @@ void OrbitMainWindow::ShowWarningWithDontShowAgainCheckboxIfNeeded(
   message_box.exec();
 }
 
-void OrbitMainWindow::ShowHistogram(const std::vector<uint64_t>* data,
-                                    const std::string& scope_name,
+void OrbitMainWindow::ShowHistogram(const std::vector<uint64_t>* data, std::string scope_name,
                                     std::optional<ScopeId> scope_id) {
-  ui->liveFunctions->ShowHistogram(data, scope_name, scope_id);
+  ui->liveFunctions->ShowHistogram(data, std::move(scope_name), scope_id);
 }
 
 static std::optional<QString> TryApplyMappingAndReadSourceFile(
@@ -1862,7 +1844,7 @@ void OrbitMainWindow::ShowSourceCode(
   code_viewer_dialog->setWindowTitle(QString::fromStdString(file_path.filename().string()));
 
   auto syntax_highlighter = std::make_unique<orbit_syntax_highlighter::Cpp>();
-  code_viewer_dialog->SetMainContent(std::move(source_code.value()), std::move(syntax_highlighter));
+  code_viewer_dialog->SetMainContent(source_code.value(), std::move(syntax_highlighter));
   constexpr orbit_code_viewer::FontSizeInEm kHeatmapAreaWidth{1.3f};
 
   if (maybe_code_report.has_value()) {
@@ -1879,7 +1861,7 @@ void OrbitMainWindow::ShowSourceCode(
 }
 
 void OrbitMainWindow::ShowDisassembly(const orbit_client_data::FunctionInfo& function_info,
-                                      const std::string& assembly,
+                                      std::string_view assembly,
                                       orbit_code_report::DisassemblyReport report) {
   auto dialog = std::make_unique<orbit_qt::AnnotatingSourceCodeDialog>();
   dialog->setWindowTitle("Orbit Disassembly");
@@ -1887,7 +1869,8 @@ void OrbitMainWindow::ShowDisassembly(const orbit_client_data::FunctionInfo& fun
   dialog->SetHighlightCurrentLine(true);
 
   auto syntax_highlighter = std::make_unique<orbit_syntax_highlighter::X86Assembly>();
-  dialog->SetMainContent(QString::fromStdString(assembly), std::move(syntax_highlighter));
+  dialog->SetMainContent(QString::fromUtf8(assembly.data(), assembly.size()),
+                         std::move(syntax_highlighter));
   uint32_t num_samples = report.GetNumSamples();
   dialog->SetDisassemblyCodeReport(std::move(report));
 
@@ -1904,8 +1887,9 @@ void OrbitMainWindow::ShowDisassembly(const orbit_client_data::FunctionInfo& fun
       OpenAndDeleteOnClose(std::move(dialog));
 
   dialog_ptr->AddAnnotatingSourceCode(
-      function_info, [this](const orbit_symbol_provider::ModuleIdentifier& module_id) {
-        return app_->RetrieveModuleWithDebugInfo(module_id);
+      function_info,
+      [this](const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) {
+        return app_->RetrieveModuleWithDebugInfo(module_path_and_build_id);
       });
 }
 
@@ -1939,26 +1923,22 @@ void OrbitMainWindow::AppendToCaptureLog(CaptureLogSeverity severity, absl::Dura
             severity_name);
 }
 
-void OrbitMainWindow::SetCallstackInspection(std::unique_ptr<CallTreeView> top_down_view,
-                                             std::unique_ptr<CallTreeView> bottom_up_view,
-                                             orbit_data_views::DataView* callstack_data_view,
-                                             std::unique_ptr<class SamplingReport> report) {
-  ui->topDownWidget->SetInspection(std::move(top_down_view));
-  ui->bottomUpWidget->SetInspection(std::move(bottom_up_view));
+void OrbitMainWindow::SetSelection(const SelectionData& selection_data) {
+  SetTopDownView(selection_data.GetTopDownView());
+  SetBottomUpView(selection_data.GetBottomUpView());
+  SetSamplingReport(&selection_data.GetCallstackData(),
+                    &selection_data.GetPostProcessedSamplingData());
 
-  ui->samplingReport->hide();
-  ui->inspectionReport->SetInspection(callstack_data_view, std::move(report));
-  connect(ui->inspectionReport, &OrbitSamplingReport::LeaveCallstackInspectionClicked, this,
-          [this]() { app_->ClearInspection(); });
-  ui->inspectionReport->show();
-}
-
-void OrbitMainWindow::ClearCallstackInspection() {
-  ui->topDownWidget->ClearInspection();
-  ui->bottomUpWidget->ClearInspection();
-  ui->inspectionReport->hide();
-  ui->inspectionReport->Deinitialize();
-  ui->samplingReport->show();
+  if (selection_data.IsInspection()) {
+    ui->topDownWidget->SetInspection();
+    ui->bottomUpWidget->SetInspection();
+    ui->samplingReport->SetInspection();
+    connect(ui->samplingReport, &OrbitSamplingReport::LeaveCallstackInspectionClicked, this,
+            [this]() { app_->ClearInspection(); });
+  } else {
+    ui->topDownWidget->ClearInspection();
+    ui->bottomUpWidget->ClearInspection();
+  }
 }
 
 orbit_gl::MainWindowInterface::SymbolErrorHandlingResult OrbitMainWindow::HandleSymbolError(
@@ -1984,9 +1964,9 @@ OrbitMainWindow::DownloadFileFromInstance(std::filesystem::path path_on_instance
                                           std::filesystem::path local_path,
                                           orbit_base::StopToken stop_token) {
   ORBIT_CHECK(is_connected_);
-  ORBIT_CHECK(std::holds_alternative<StadiaTarget>(target_configuration_));
+  ORBIT_CHECK(std::holds_alternative<SshTarget>(target_configuration_));
   ServiceDeployManager* service_deploy_manager =
-      std::get<StadiaTarget>(target_configuration_).GetConnection()->GetServiceDeployManager();
+      std::get<SshTarget>(target_configuration_).GetConnection()->GetServiceDeployManager();
   ORBIT_CHECK(service_deploy_manager != nullptr);
 
   return service_deploy_manager->CopyFileToLocal(std::move(path_on_instance), std::move(local_path),
@@ -2001,18 +1981,40 @@ orbit_base::CanceledOr<void> OrbitMainWindow::DisplayStopDownloadDialog(
   StopSymbolDownloadDialog dialog{module};
   Result dialog_result = dialog.Exec();
 
-  orbit_base::CanceledOr<void> return_canceled_or;
   switch (dialog_result) {
     case Result::kCancel:
-      return_canceled_or = orbit_base::Canceled{};
-      break;
-    case Result::kStopAndDisable: {
+      return orbit_base::Canceled{};
+    case Result::kStopAndDisable:
       app_->DisableDownloadForModule(module->file_path());
-      break;
-    }
+      return outcome::success();
     case Result::kStop:
-      break;
+      return outcome::success();
   }
 
-  return return_canceled_or;
+  ORBIT_UNREACHABLE();
 }
+
+void OrbitMainWindow::SetLiveTabScopeStatsCollection(
+    std::shared_ptr<const orbit_client_data::ScopeStatsCollection> scope_collection) {
+  ui->liveFunctions->SetScopeStatsCollection(std::move(scope_collection));
+}
+
+void OrbitMainWindow::SetErrorMessage(std::string_view title, std::string_view text) {
+  QMessageBox::critical(this, QString::fromUtf8(title.data(), title.size()),
+                        QString::fromUtf8(text.data(), text.size()));
+}
+
+void OrbitMainWindow::SetWarningMessage(std::string_view title, std::string_view text) {
+  QMessageBox::warning(this, QString::fromUtf8(title.data(), title.size()),
+                       QString::fromUtf8(text.data(), text.size()));
+}
+
+void OrbitMainWindow::RefreshDataView(DataViewType type) {
+  if (type == DataViewType::kAll || type == DataViewType::kLiveFunctions) {
+    ui->liveFunctions->OnDataChanged();
+  }
+  OnRefreshDataViewPanels(type);
+}
+
+void OrbitMainWindow::SelectLiveTab() { ui->RightTabWidget->setCurrentWidget(ui->liveTab); }
+void OrbitMainWindow::SelectTopDownTab() { ui->RightTabWidget->setCurrentWidget(ui->topDownTab); }

@@ -6,20 +6,21 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <absl/meta/type_traits.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_join.h>
 #include <absl/synchronization/mutex.h>
-#include <stddef.h>
+#include <absl/types/span.h>
 #include <string.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <type_traits>
 #include <utility>
 
 #include "ApiInterface/Orbit.h"
@@ -36,8 +37,10 @@
 #include "ModuleUtils/ReadLinuxModules.h"
 #include "OrbitBase/GetProcessIds.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 #include "OrbitBase/ThreadUtils.h"
 #include "PerfEventOpen.h"
+#include "PerfEventOrderedStream.h"
 #include "PerfEventReaders.h"
 #include "PerfEventRecords.h"
 
@@ -182,7 +185,7 @@ void TracerImpl::ProcessFunctionExit(const orbit_grpc_protos::FunctionExit& func
   DeferEvent(event);
 }
 
-static void CloseFileDescriptors(const std::vector<int>& fds) {
+static void CloseFileDescriptors(absl::Span<const int> fds) {
   for (int fd : fds) {
     close(fd);
   }
@@ -239,13 +242,13 @@ void TracerImpl::InitUprobesEventVisitor() {
 }
 
 bool TracerImpl::OpenUprobes(const orbit_grpc_protos::InstrumentedFunction& function,
-                             const std::vector<int32_t>& cpus,
+                             absl::Span<const int32_t> cpus,
                              absl::flat_hash_map<int32_t, int>* fds_per_cpu) {
   ORBIT_SCOPE_FUNCTION;
   const char* module = function.file_path().c_str();
   const uint64_t offset = function.file_offset();
   for (int32_t cpu : cpus) {
-    int fd;
+    int fd{};
     if (function.record_arguments()) {
       fd = uprobes_retaddr_args_event_open(module, offset, /*pid=*/-1, cpu);
     } else {
@@ -262,13 +265,13 @@ bool TracerImpl::OpenUprobes(const orbit_grpc_protos::InstrumentedFunction& func
 }
 
 bool TracerImpl::OpenUretprobes(const orbit_grpc_protos::InstrumentedFunction& function,
-                                const std::vector<int32_t>& cpus,
+                                absl::Span<const int32_t> cpus,
                                 absl::flat_hash_map<int32_t, int>* fds_per_cpu) {
   ORBIT_SCOPE_FUNCTION;
   const char* module = function.file_path().c_str();
   const uint64_t offset = function.file_offset();
   for (int32_t cpu : cpus) {
-    int fd;
+    int fd{};
     if (function.record_return_value()) {
       fd = uretprobes_retval_event_open(module, offset, /*pid=*/-1, cpu);
     } else {
@@ -296,7 +299,7 @@ void TracerImpl::AddUprobesFileDescriptors(
     } else {
       uprobes_ids_.insert(stream_id);
     }
-    tracing_fds_.push_back(fd);
+    tracing_fds_by_type_["uprobe"].push_back(fd);
   }
 }
 
@@ -312,11 +315,11 @@ void TracerImpl::AddUretprobesFileDescriptors(
     } else {
       uretprobes_ids_.insert(stream_id);
     }
-    tracing_fds_.push_back(fd);
+    tracing_fds_by_type_["uretprobe"].push_back(fd);
   }
 }
 
-bool TracerImpl::OpenUserSpaceProbes(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenUserSpaceProbes(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   bool uprobes_event_open_errors = false;
 
@@ -340,10 +343,10 @@ bool TracerImpl::OpenUserSpaceProbes(const std::vector<int32_t>& cpus) {
     AddUprobesFileDescriptors(uprobes_fds_per_cpu, function);
 
     OpenRingBuffersOrRedirectOnExisting(uretprobes_fds_per_cpu, &fds_per_cpu_for_redirection,
-                                        &ring_buffers_, UPROBES_RING_BUFFER_SIZE_KB,
+                                        &ring_buffers_, kUprobesRingBufferSizeKb,
                                         "uprobes_uretprobes");
     OpenRingBuffersOrRedirectOnExisting(uprobes_fds_per_cpu, &fds_per_cpu_for_redirection,
-                                        &ring_buffers_, UPROBES_RING_BUFFER_SIZE_KB,
+                                        &ring_buffers_, kUprobesRingBufferSizeKb,
                                         "uprobes_uretprobes");
   }
 
@@ -352,7 +355,7 @@ bool TracerImpl::OpenUserSpaceProbes(const std::vector<int32_t>& cpus) {
 
 bool TracerImpl::OpenUprobesWithStack(
     const orbit_grpc_protos::FunctionToRecordAdditionalStackOn& function,
-    const std::vector<int32_t>& cpus, absl::flat_hash_map<int32_t, int>* fds_per_cpu) {
+    absl::Span<const int32_t> cpus, absl::flat_hash_map<int32_t, int>* fds_per_cpu) const {
   ORBIT_SCOPE_FUNCTION;
   const char* module = function.file_path().c_str();
   const uint64_t offset = function.file_offset();
@@ -369,7 +372,7 @@ bool TracerImpl::OpenUprobesWithStack(
   return true;
 }
 
-bool TracerImpl::OpenUprobesToRecordAdditionalStackOn(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenUprobesToRecordAdditionalStackOn(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   bool uprobes_event_open_errors = false;
   absl::flat_hash_map<int32_t, int> fds_per_cpu_for_redirection{};
@@ -386,25 +389,24 @@ bool TracerImpl::OpenUprobesToRecordAdditionalStackOn(const std::vector<int32_t>
     for (const auto [cpu, fd] : uprobes_fds_per_cpu) {
       uint64_t stream_id = perf_event_get_id(fd);
       uprobes_with_stack_ids_.insert(stream_id);
-      tracing_fds_.push_back(fd);
+      tracing_fds_by_type_["uprobe_additional_stack"].push_back(fd);
     }
     OpenRingBuffersOrRedirectOnExisting(uprobes_fds_per_cpu, &fds_per_cpu_for_redirection,
-                                        &ring_buffers_, UPROBES_WITH_STACK_RING_BUFFER_SIZE_KB,
+                                        &ring_buffers_, kUprobesWithStackRingBufferSizeKb,
                                         "uprobes_with_stack");
   }
 
   return !uprobes_event_open_errors;
 }
 
-bool TracerImpl::OpenMmapTask(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenMmapTask(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   std::vector<int> mmap_task_tracing_fds;
   std::vector<PerfEventRingBuffer> mmap_task_ring_buffers;
   for (int32_t cpu : cpus) {
     int mmap_task_fd = mmap_task_event_open(-1, cpu);
     std::string buffer_name = absl::StrFormat("mmap_task_%d", cpu);
-    PerfEventRingBuffer mmap_task_ring_buffer{mmap_task_fd, MMAP_TASK_RING_BUFFER_SIZE_KB,
-                                              buffer_name};
+    PerfEventRingBuffer mmap_task_ring_buffer{mmap_task_fd, kMmapTaskRingBufferSizeKb, buffer_name};
     if (mmap_task_ring_buffer.IsOpen()) {
       mmap_task_tracing_fds.push_back(mmap_task_fd);
       mmap_task_ring_buffers.push_back(std::move(mmap_task_ring_buffer));
@@ -416,7 +418,7 @@ bool TracerImpl::OpenMmapTask(const std::vector<int32_t>& cpus) {
   }
 
   for (int fd : mmap_task_tracing_fds) {
-    tracing_fds_.push_back(fd);
+    tracing_fds_by_type_["mmap_task"].push_back(fd);
   }
   for (PerfEventRingBuffer& buffer : mmap_task_ring_buffers) {
     ring_buffers_.emplace_back(std::move(buffer));
@@ -424,7 +426,7 @@ bool TracerImpl::OpenMmapTask(const std::vector<int32_t>& cpus) {
   return true;
 }
 
-bool TracerImpl::OpenSampling(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenSampling(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   ORBIT_CHECK(sampling_period_ns_.has_value());
   ORBIT_CHECK(unwinding_method_ == CaptureOptions::kFramePointers ||
@@ -433,7 +435,7 @@ bool TracerImpl::OpenSampling(const std::vector<int32_t>& cpus) {
   std::vector<int> sampling_tracing_fds;
   std::vector<PerfEventRingBuffer> sampling_ring_buffers;
   for (int32_t cpu : cpus) {
-    int sampling_fd;
+    int sampling_fd{};
     switch (unwinding_method_) {
       case CaptureOptions::kFramePointers:
         sampling_fd =
@@ -451,8 +453,7 @@ bool TracerImpl::OpenSampling(const std::vector<int32_t>& cpus) {
     }
 
     std::string buffer_name = absl::StrFormat("sampling_%d", cpu);
-    PerfEventRingBuffer sampling_ring_buffer{sampling_fd, SAMPLING_RING_BUFFER_SIZE_KB,
-                                             buffer_name};
+    PerfEventRingBuffer sampling_ring_buffer{sampling_fd, kSamplingRingBufferSizeKb, buffer_name};
     if (sampling_ring_buffer.IsOpen()) {
       sampling_tracing_fds.push_back(sampling_fd);
       sampling_ring_buffers.push_back(std::move(sampling_ring_buffer));
@@ -464,7 +465,7 @@ bool TracerImpl::OpenSampling(const std::vector<int32_t>& cpus) {
   }
 
   for (int fd : sampling_tracing_fds) {
-    tracing_fds_.push_back(fd);
+    tracing_fds_by_type_["sampling"].push_back(fd);
     uint64_t stream_id = perf_event_get_id(fd);
     if (unwinding_method_ == CaptureOptions::kDwarf) {
       stack_sampling_ids_.insert(stream_id);
@@ -495,8 +496,9 @@ struct TracepointToOpen {
 }  // namespace
 
 static bool OpenFileDescriptorsAndRingBuffersForAllTracepoints(
-    const std::vector<TracepointToOpen>& tracepoints_to_open, const std::vector<int32_t>& cpus,
-    std::vector<int>* tracing_fds, uint64_t ring_buffer_size_kb,
+    absl::Span<const TracepointToOpen> tracepoints_to_open, absl::Span<const int32_t> cpus,
+    absl::flat_hash_map<std::string, std::vector<int>>* tracing_fds_by_type,
+    uint64_t ring_buffer_size_kb,
     absl::flat_hash_map<int32_t, int>* tracepoint_ring_buffer_fds_per_cpu_for_redirection,
     std::vector<PerfEventRingBuffer>* ring_buffers, uint32_t stack_dump_size = 0,
     const CaptureOptions::ThreadStateChangeCallStackCollection
@@ -552,7 +554,7 @@ static bool OpenFileDescriptorsAndRingBuffersForAllTracepoints(
         tracepoints_to_open[tracepoint_index].tracepoint_stream_ids;
 
     for (const auto& cpu_and_fd : index_and_tracepoint_fds_per_cpu.second) {
-      tracing_fds->push_back(cpu_and_fd.second);
+      (*tracing_fds_by_type)["tracepoint"].push_back(cpu_and_fd.second);
       tracepoint_stream_ids->insert(perf_event_get_id(cpu_and_fd.second));
     }
   }
@@ -572,12 +574,12 @@ static bool OpenFileDescriptorsAndRingBuffersForAllTracepoints(
   return true;
 }
 
-bool TracerImpl::OpenThreadNameTracepoints(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenThreadNameTracepoints(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   absl::flat_hash_map<int32_t, int> thread_name_tracepoint_ring_buffer_fds_per_cpu;
   return OpenFileDescriptorsAndRingBuffersForAllTracepoints(
       {{"task", "task_newtask", &task_newtask_ids_}, {"task", "task_rename", &task_rename_ids_}},
-      cpus, &tracing_fds_, THREAD_NAMES_RING_BUFFER_SIZE_KB,
+      cpus, &tracing_fds_by_type_, kThreadNamesRingBufferSizeKb,
       &thread_name_tracepoint_ring_buffer_fds_per_cpu, &ring_buffers_);
 }
 
@@ -588,17 +590,17 @@ void TracerImpl::InitSwitchesStatesNamesVisitor() {
   if (trace_thread_state_) {
     // Filter thread states using target process id. We also send OrbitService's thread states when
     // introspection is enabled for more context on what our own threads are doing when capturing.
-    std::set<pid_t> pids = {target_pid_};
+    absl::flat_hash_set<pid_t> pids = {target_pid_};
     if (introspection_enabled_) {
       pids.insert(orbit_base::GetCurrentProcessIdNative());
     }
-    switches_states_names_visitor_->SetThreadStatePidFilters(pids);
+    switches_states_names_visitor_->SetThreadStatePidFilters(std::move(pids));
   }
   switches_states_names_visitor_->SetThreadStateCounter(&stats_.thread_state_count);
   event_processor_.AddVisitor(switches_states_names_visitor_.get());
 }
 
-bool TracerImpl::OpenContextSwitchAndThreadStateTracepoints(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenContextSwitchAndThreadStateTracepoints(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   std::vector<TracepointToOpen> tracepoints_to_open;
   absl::flat_hash_set<uint64_t>* current_sched_switch_ids = &sched_switch_ids_;
@@ -626,15 +628,15 @@ bool TracerImpl::OpenContextSwitchAndThreadStateTracepoints(const std::vector<in
   }
 
   absl::flat_hash_map<int32_t, int> thread_state_tracepoint_ring_buffer_fds_per_cpu;
-  uint64_t ring_buffer_size;
+  uint64_t ring_buffer_size{};
   if (thread_state_change_callstack_collection_ ==
       CaptureOptions::kThreadStateChangeCallStackCollection) {
-    ring_buffer_size = CONTEXT_SWITCHES_AND_THREAD_STATE_WITH_STACKS_RING_BUFFER_SIZE_KB;
+    ring_buffer_size = kContextSwitchesAndThreadStateWithStacksRingBufferSizeKb;
   } else {
-    ring_buffer_size = CONTEXT_SWITCHES_AND_THREAD_STATE_RING_BUFFER_SIZE_KB;
+    ring_buffer_size = kContextSwitchesAndThreadStateRingBufferSizeKb;
   }
   return OpenFileDescriptorsAndRingBuffersForAllTracepoints(
-      tracepoints_to_open, cpus, &tracing_fds_, ring_buffer_size,
+      tracepoints_to_open, cpus, &tracing_fds_by_type_, ring_buffer_size,
       &thread_state_tracepoint_ring_buffer_fds_per_cpu, &ring_buffers_,
       thread_state_change_callstack_stack_dump_size_, thread_state_change_callstack_collection_,
       unwinding_method_);
@@ -658,18 +660,18 @@ void TracerImpl::InitGpuTracepointEventVisitor() {
 // same timeline, context, and seqno.
 // We have to record events system-wide (per CPU) to ensure we record all relevant events.
 // This method returns true on success, otherwise false.
-bool TracerImpl::OpenGpuTracepoints(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenGpuTracepoints(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   absl::flat_hash_map<int32_t, int> gpu_tracepoint_ring_buffer_fds_per_cpu;
   return OpenFileDescriptorsAndRingBuffersForAllTracepoints(
       {{"amdgpu", "amdgpu_cs_ioctl", &amdgpu_cs_ioctl_ids_},
        {"amdgpu", "amdgpu_sched_run_job", &amdgpu_sched_run_job_ids_},
        {"dma_fence", "dma_fence_signaled", &dma_fence_signaled_ids_}},
-      cpus, &tracing_fds_, GPU_TRACING_RING_BUFFER_SIZE_KB, &gpu_tracepoint_ring_buffer_fds_per_cpu,
-      &ring_buffers_);
+      cpus, &tracing_fds_by_type_, kGpuTracingRingBufferSizeKb,
+      &gpu_tracepoint_ring_buffer_fds_per_cpu, &ring_buffers_);
 }
 
-bool TracerImpl::OpenInstrumentedTracepoints(const std::vector<int32_t>& cpus) {
+bool TracerImpl::OpenInstrumentedTracepoints(absl::Span<const int32_t> cpus) {
   ORBIT_SCOPE_FUNCTION;
   bool tracepoint_event_open_errors = false;
   absl::flat_hash_map<int32_t, int> tracepoint_ring_buffer_fds_per_cpu;
@@ -678,7 +680,7 @@ bool TracerImpl::OpenInstrumentedTracepoints(const std::vector<int32_t>& cpus) {
     absl::flat_hash_set<uint64_t> stream_ids;
     tracepoint_event_open_errors |= !OpenFileDescriptorsAndRingBuffersForAllTracepoints(
         {{selected_tracepoint.category().c_str(), selected_tracepoint.name().c_str(), &stream_ids}},
-        cpus, &tracing_fds_, INSTRUMENTED_TRACEPOINTS_RING_BUFFER_SIZE_KB,
+        cpus, &tracing_fds_by_type_, kInstrumentedTracepointsRingBufferSizeKb,
         &tracepoint_ring_buffer_fds_per_cpu, &ring_buffers_);
 
     for (const auto& stream_id : stream_ids) {
@@ -840,8 +842,10 @@ void TracerImpl::Startup() {
   }
 
   // Start recording events.
-  for (int fd : tracing_fds_) {
-    perf_event_enable(fd);
+  for (const auto& [unused_name, fds] : tracing_fds_by_type_) {
+    for (int fd : fds) {
+      perf_event_enable(fd);
+    }
   }
 
   effective_capture_start_timestamp_ns_ = orbit_base::CaptureTimestampNs();
@@ -905,8 +909,12 @@ void TracerImpl::Shutdown() {
   }
 
   // Stop recording.
-  for (int fd : tracing_fds_) {
-    perf_event_disable(fd);
+  size_t num_fds = 0;
+  for (const auto& [unused_fd_type, fds] : tracing_fds_by_type_) {
+    for (int fd : fds) {
+      perf_event_disable(fd);
+      ++num_fds;
+    }
   }
 
   // Close the ring buffers.
@@ -916,12 +924,13 @@ void TracerImpl::Shutdown() {
   }
 
   // Close the file descriptors.
-  {
-    ORBIT_SCOPE_WITH_COLOR(
-        absl::StrFormat("Closing %d file descriptors", tracing_fds_.size()).c_str(),
-        kOrbitColorRed);
-    ORBIT_SCOPED_TIMED_LOG("Closing %d file descriptors", tracing_fds_.size());
-    for (int fd : tracing_fds_) {
+  ORBIT_SCOPE_WITH_COLOR(absl::StrFormat("Closing %d file descriptors", num_fds).c_str(),
+                         kOrbitColorRed);
+  for (auto& [fd_type, fds] : tracing_fds_by_type_) {
+    std::string msg = absl::StrFormat("Closing %d %s file descriptors", fds.size(), fd_type);
+    ORBIT_SCOPE(msg.c_str());
+    ORBIT_SCOPED_TIMED_LOG("%s", msg);
+    for (int fd : fds) {
       ORBIT_SCOPE("Closing fd");
       close(fd);
     }
@@ -996,7 +1005,7 @@ void TracerImpl::Run() {
       // not constantly polling. Don't sleep so long that ring buffers overflow.
       {
         ORBIT_SCOPE("Sleep");
-        usleep(IDLE_TIME_ON_EMPTY_RING_BUFFERS_US);
+        usleep(kIdleTimeOnEmptyRingBuffersUs);
       }
     }
 
@@ -1014,8 +1023,8 @@ void TracerImpl::Run() {
       // TODO: Some event types (e.g., stack samples) have a much longer
       //  processing time but are less frequent than others (e.g., context
       //  switches). Take this into account in our scheduling algorithm.
-      for (int32_t read_from_this_buffer = 0;
-           read_from_this_buffer < ROUND_ROBIN_POLLING_BATCH_SIZE; ++read_from_this_buffer) {
+      for (int32_t read_from_this_buffer = 0; read_from_this_buffer < kRoundRobinPollingBatchSize;
+           ++read_from_this_buffer) {
         if (stop_run_thread_) {
           break;
         }
@@ -1039,7 +1048,7 @@ void TracerImpl::Run() {
 
 uint64_t TracerImpl::ProcessForkEventAndReturnTimestamp(const perf_event_header& header,
                                                         PerfEventRingBuffer* ring_buffer) {
-  perf_event_fork_exit ring_buffer_record;
+  RingBufferForkExit ring_buffer_record;
   ring_buffer->ConsumeRecord(header, &ring_buffer_record);
   ForkPerfEvent event{
       .timestamp = ring_buffer_record.time,
@@ -1061,7 +1070,7 @@ uint64_t TracerImpl::ProcessForkEventAndReturnTimestamp(const perf_event_header&
 
 uint64_t TracerImpl::ProcessExitEventAndReturnTimestamp(const perf_event_header& header,
                                                         PerfEventRingBuffer* ring_buffer) {
-  perf_event_fork_exit ring_buffer_record;
+  RingBufferForkExit ring_buffer_record;
   ring_buffer->ConsumeRecord(header, &ring_buffer_record);
   ExitPerfEvent event{
       .timestamp = ring_buffer_record.time,
@@ -1143,8 +1152,8 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
   int fd = ring_buffer->GetFileDescriptor();
 
   if (is_uprobe) {
-    ORBIT_CHECK(header.size == sizeof(perf_event_sp_ip_8bytes_sample));
-    perf_event_sp_ip_8bytes_sample ring_buffer_record;
+    ORBIT_CHECK(header.size == sizeof(RingBufferSpIp8bytesSample));
+    RingBufferSpIp8bytesSample ring_buffer_record;
     ring_buffer->ConsumeRecord(header, &ring_buffer_record);
 
     if (static_cast<pid_t>(ring_buffer_record.sample_id.pid) != target_pid_) {
@@ -1172,7 +1181,7 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
 
   } else if (is_uprobe_with_stack) {
     pid_t pid = ReadSampleRecordPid(ring_buffer);
-    const size_t size_of_uprobe_sample = sizeof(perf_event_sp_stack_user_sample_fixed) +
+    const size_t size_of_uprobe_sample = sizeof(RingBufferSpStackUserSampleFixed) +
                                          2 * sizeof(uint64_t) /*size and dyn_size*/ +
                                          stack_dump_size_ /*data*/;
     if (header.size != size_of_uprobe_sample) {
@@ -1188,8 +1197,8 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
     DeferEvent(std::move(event));
     ++stats_.uprobes_with_stack_count;
   } else if (is_uprobe_with_args) {
-    ORBIT_CHECK(header.size == sizeof(perf_event_sp_ip_arguments_8bytes_sample));
-    perf_event_sp_ip_arguments_8bytes_sample ring_buffer_record;
+    ORBIT_CHECK(header.size == sizeof(RingBufferSpIpArguments8bytesSample));
+    RingBufferSpIpArguments8bytesSample ring_buffer_record;
     ring_buffer->ConsumeRecord(header, &ring_buffer_record);
 
     if (static_cast<pid_t>(ring_buffer_record.sample_id.pid) != target_pid_) {
@@ -1215,8 +1224,8 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
     ++stats_.uprobes_count;
 
   } else if (is_uretprobe) {
-    ORBIT_CHECK(header.size == sizeof(perf_event_empty_sample));
-    perf_event_empty_sample ring_buffer_record;
+    ORBIT_CHECK(header.size == sizeof(RingBufferEmptySample));
+    RingBufferEmptySample ring_buffer_record;
     ring_buffer->ConsumeRecord(header, &ring_buffer_record);
 
     if (static_cast<pid_t>(ring_buffer_record.sample_id.pid) != target_pid_) {
@@ -1237,8 +1246,8 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
     ++stats_.uprobes_count;
 
   } else if (is_uretprobe_with_retval) {
-    ORBIT_CHECK(header.size == sizeof(perf_event_ax_sample));
-    perf_event_ax_sample ring_buffer_record;
+    ORBIT_CHECK(header.size == sizeof(RingBufferAxSample));
+    RingBufferAxSample ring_buffer_record;
     ring_buffer->ConsumeRecord(header, &ring_buffer_record);
 
     if (static_cast<pid_t>(ring_buffer_record.sample_id.pid) != target_pid_) {
@@ -1261,7 +1270,7 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
   } else if (is_stack_sample) {
     pid_t pid = ReadSampleRecordPid(ring_buffer);
 
-    const size_t size_of_stack_sample = sizeof(perf_event_stack_sample_fixed) +
+    const size_t size_of_stack_sample = sizeof(RingBufferStackSampleFixed) +
                                         2 * sizeof(uint64_t) /*size and dyn_size*/ +
                                         stack_dump_size_ /*data*/;
 
@@ -1300,8 +1309,8 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
     ++stats_.sample_count;
 
   } else if (is_task_newtask) {
-    ORBIT_CHECK(header.size == sizeof(perf_event_raw_sample<task_newtask_tracepoint>));
-    perf_event_raw_sample<task_newtask_tracepoint> ring_buffer_record;
+    ORBIT_CHECK(header.size == sizeof(RingBufferRawSample<TaskNewtaskTracepointData>));
+    RingBufferRawSample<TaskNewtaskTracepointData> ring_buffer_record;
     ring_buffer->ConsumeRecord(header, &ring_buffer_record);
     TaskNewtaskPerfEvent event{
         .timestamp = ring_buffer_record.sample_id.time,
@@ -1322,8 +1331,8 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
     DeferEvent(event);
 
   } else if (is_task_rename) {
-    ORBIT_CHECK(header.size == sizeof(perf_event_raw_sample<task_rename_tracepoint>));
-    perf_event_raw_sample<task_rename_tracepoint> ring_buffer_record;
+    ORBIT_CHECK(header.size == sizeof(RingBufferRawSample<TaskRenameTracepointData>));
+    RingBufferRawSample<TaskRenameTracepointData> ring_buffer_record;
     ring_buffer->ConsumeRecord(header, &ring_buffer_record);
 
     TaskRenamePerfEvent event{
@@ -1341,8 +1350,8 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
     DeferEvent(event);
 
   } else if (is_sched_switch) {
-    ORBIT_CHECK(header.size == sizeof(perf_event_raw_sample<sched_switch_tracepoint>));
-    perf_event_raw_sample<sched_switch_tracepoint> ring_buffer_record;
+    ORBIT_CHECK(header.size == sizeof(RingBufferRawSample<SchedSwitchTracepointData>));
+    RingBufferRawSample<SchedSwitchTracepointData> ring_buffer_record;
     ring_buffer->ConsumeRecord(header, &ring_buffer_record);
 
     SchedSwitchPerfEvent event{
@@ -1445,7 +1454,7 @@ uint64_t TracerImpl::ProcessSampleEventAndReturnTimestamp(const perf_event_heade
 
 uint64_t TracerImpl::ProcessLostEventAndReturnTimestamp(const perf_event_header& header,
                                                         PerfEventRingBuffer* ring_buffer) {
-  perf_event_lost ring_buffer_record;
+  RingBufferLost ring_buffer_record;
   ring_buffer->ConsumeRecord(header, &ring_buffer_record);
   uint64_t timestamp = ring_buffer_record.sample_id.time;
 
@@ -1525,7 +1534,7 @@ void TracerImpl::ProcessDeferredEvents() {
 
     if (deferred_events_to_process_.empty()) {
       ORBIT_SCOPE("Sleep");
-      usleep(IDLE_TIME_ON_EMPTY_DEFERRED_EVENTS_US);
+      usleep(kIdleTimeOnEmptyDeferredEventsUs);
       continue;
     }
 
@@ -1567,7 +1576,7 @@ void TracerImpl::RetrieveInitialThreadStatesOfTarget() {
 
 void TracerImpl::Reset() {
   ORBIT_SCOPE_FUNCTION;
-  tracing_fds_.clear();
+  tracing_fds_by_type_.clear();
   ring_buffers_.clear();
   fds_to_last_timestamp_ns_.clear();
 
@@ -1610,12 +1619,12 @@ void TracerImpl::Reset() {
 void TracerImpl::PrintStatsIfTimerElapsed() {
   ORBIT_SCOPE_FUNCTION;
   uint64_t timestamp_ns = orbit_base::CaptureTimestampNs();
-  if (stats_.event_count_begin_ns + EVENT_STATS_WINDOW_S * NS_PER_SECOND >= timestamp_ns) {
+  if (stats_.event_count_begin_ns + kEventStatsWindowS * kNsPerSecond >= timestamp_ns) {
     return;
   }
 
   double actual_window_s =
-      static_cast<double>(timestamp_ns - stats_.event_count_begin_ns) / NS_PER_SECOND;
+      static_cast<double>(timestamp_ns - stats_.event_count_begin_ns) / kNsPerSecond;
   ORBIT_CHECK(actual_window_s > 0.0);
 
   ORBIT_LOG("Events per second (and total) last %.3f s:", actual_window_s);

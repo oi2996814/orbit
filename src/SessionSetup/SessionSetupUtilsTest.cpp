@@ -3,34 +3,15 @@
 // found in the LICENSE file.
 
 #include <gtest/gtest.h>
+#include <stdint.h>
 
-#include <QString>
-#include <filesystem>
+#include <optional>
+#include <vector>
 
 #include "GrpcProtos/process.pb.h"
-#include "OrbitGgp/SshInfo.h"
-#include "OrbitSsh/Credentials.h"
 #include "SessionSetup/SessionSetupUtils.h"
 
 namespace orbit_session_setup {
-
-TEST(SessionSetupUtils, CredentialsFromSshInfoWorksCorrectly) {
-  orbit_ggp::SshInfo info;
-  info.host = "127.0.0.1";
-  info.key_path = "invalid/key/path";
-  info.known_hosts_path = "invalid/known/hosts/path";
-  info.port = 123;
-  info.user = "some_user";
-
-  orbit_ssh::Credentials credentials = CredentialsFromSshInfo(info);
-
-  EXPECT_EQ(info.host.toStdString(), credentials.addr_and_port.addr);
-  EXPECT_EQ(info.port, credentials.addr_and_port.port);
-  EXPECT_EQ(std::filesystem::path{info.key_path.toStdString()}, credentials.key_path);
-  EXPECT_EQ(std::filesystem::path{info.known_hosts_path.toStdString()},
-            credentials.known_hosts_path);
-  EXPECT_EQ(info.user.toStdString(), credentials.user);
-}
 
 // Tests below need to be adjusted if the name changes, they are conveniently set up
 // for process names that are exactly at the length limit
@@ -96,74 +77,7 @@ TEST(SessionSetupUtils, TryToFindProcessDataFindsProcessByPath) {
 TEST(SessionSetupUtils, TryToFindProcessDataReturnsNullOnFailure) {
   std::vector<orbit_grpc_protos::ProcessInfo> processes = SetupTestProcessList();
 
-  EXPECT_EQ(nullptr, TryToFindProcessData(processes, "nonexisting_process"));
-}
-
-QString BuildCustomProtocolUri(QString instance, QString process) {
-  return QString("%1%2%3?%4").arg(kCustomProtocol, kCustomProtocolDelimiter, instance, process);
-}
-
-TEST(SessionSetupUtils, SplitTargetUriWorksForShortProcessNames) {
-  const QString kInstanceName = "somename-1";
-  const QString valid_uri = BuildCustomProtocolUri(kInstanceName, kShortProcessName);
-
-  std::optional<ConnectionTarget> maybe_target = SplitTargetUri(valid_uri);
-  EXPECT_TRUE(maybe_target.has_value());
-  EXPECT_EQ(maybe_target->process_name_or_path, kShortProcessName);
-  EXPECT_EQ(maybe_target->instance_name_or_id, kInstanceName);
-}
-
-TEST(SessionSetupUtils, SplitTargetUriWorksForPaths) {
-  const QString kInstanceName = "full/instance/id";
-  const QString valid_uri = BuildCustomProtocolUri(kInstanceName, kProcessPath);
-
-  std::optional<ConnectionTarget> maybe_target = SplitTargetUri(valid_uri);
-  EXPECT_TRUE(maybe_target.has_value());
-  EXPECT_EQ(maybe_target->process_name_or_path, kProcessPath);
-  EXPECT_EQ(maybe_target->instance_name_or_id, kInstanceName);
-}
-
-TEST(SessionSetupUtils, SplitTargetUriWorksForPathsWithSpaces) {
-  const QString kInstanceName = "full/instance/id";
-  const QString kLocalProcessPath = "/path/to/some user/process";
-
-  const QString valid_uri = BuildCustomProtocolUri(kInstanceName, kLocalProcessPath);
-
-  std::optional<ConnectionTarget> maybe_target = SplitTargetUri(valid_uri);
-  EXPECT_TRUE(maybe_target.has_value());
-  EXPECT_EQ(maybe_target->process_name_or_path, kLocalProcessPath);
-  EXPECT_EQ(maybe_target->instance_name_or_id, kInstanceName);
-}
-
-TEST(SessionSetupUtils, SplitTargetUriWorksForEncodedPaths) {
-  const QString kInstanceName = "full/instance/id";
-  const QString kLocalProcessPathEncoded = "/path/to/some%20user/process";
-  const QString kLocalProcessPath = "/path/to/some user/process";
-
-  const QString valid_uri = BuildCustomProtocolUri(kInstanceName, kLocalProcessPathEncoded);
-
-  std::optional<ConnectionTarget> maybe_target = SplitTargetUri(valid_uri);
-  EXPECT_TRUE(maybe_target.has_value());
-  EXPECT_EQ(maybe_target->process_name_or_path, kLocalProcessPath);
-  EXPECT_EQ(maybe_target->instance_name_or_id, kInstanceName);
-}
-
-TEST(SessionSetupUtils, SplitTargetUriHandlesInvalidInputs) {
-  QString invalid_uri = "instance?process";
-  std::optional<ConnectionTarget> maybe_target = SplitTargetUri(invalid_uri);
-  EXPECT_FALSE(maybe_target.has_value());
-
-  invalid_uri = QString("invalid_protocol") + kCustomProtocolDelimiter + "instance?process";
-  maybe_target = SplitTargetUri(invalid_uri);
-  EXPECT_FALSE(maybe_target.has_value());
-
-  invalid_uri = kCustomProtocol + kCustomProtocolDelimiter + "instance_without_process?";
-  maybe_target = SplitTargetUri(invalid_uri);
-  EXPECT_FALSE(maybe_target.has_value());
-
-  invalid_uri = kCustomProtocol + kCustomProtocolDelimiter + "?process_without_instance";
-  maybe_target = SplitTargetUri(invalid_uri);
-  EXPECT_FALSE(maybe_target.has_value());
+  EXPECT_EQ(std::nullopt, TryToFindProcessData(processes, "nonexisting_process"));
 }
 
 }  // namespace orbit_session_setup

@@ -4,11 +4,12 @@
 
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include <memory>
-#include <variant>
 
 #include "PerfEvent.h"
+#include "PerfEventOrderedStream.h"
 #include "PerfEventQueue.h"
 
 namespace orbit_linux_tracing {
@@ -97,8 +98,6 @@ TEST(PerfEventQueue, TidWithDecreasingTimestamps) {
 
 TEST(PerfEventQueue, MultipleFd) {
   PerfEventQueue event_queue;
-  uint64_t current_oldest_timestamp;
-
   EXPECT_FALSE(event_queue.HasEvent());
 
   event_queue.PushEvent(MakeTestEventOrderedInFd(11, 103));
@@ -108,7 +107,7 @@ TEST(PerfEventQueue, MultipleFd) {
   event_queue.PushEvent(MakeTestEventOrderedInFd(22, 102));
 
   ASSERT_TRUE(event_queue.HasEvent());
-  current_oldest_timestamp = 101;
+  uint64_t current_oldest_timestamp = 101;
   EXPECT_EQ(event_queue.TopEvent().timestamp, current_oldest_timestamp);
   event_queue.PopEvent();
 
@@ -141,7 +140,6 @@ TEST(PerfEventQueue, MultipleFd) {
 
 TEST(PerfEventQueue, MultipleTids) {
   PerfEventQueue event_queue;
-  uint64_t current_oldest_timestamp;
 
   EXPECT_FALSE(event_queue.HasEvent());
 
@@ -152,7 +150,7 @@ TEST(PerfEventQueue, MultipleTids) {
   event_queue.PushEvent(MakeTestEventOrderedInTid(22, 102));
 
   ASSERT_TRUE(event_queue.HasEvent());
-  current_oldest_timestamp = 101;
+  uint64_t current_oldest_timestamp = 101;
   EXPECT_EQ(event_queue.TopEvent().timestamp, current_oldest_timestamp);
   event_queue.PopEvent();
 

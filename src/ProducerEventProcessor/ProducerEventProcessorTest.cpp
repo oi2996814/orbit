@@ -3,14 +3,23 @@
 // found in the LICENSE file.
 
 #include <gmock/gmock.h>
+#include <google/protobuf/stubs/port.h>
 #include <google/protobuf/util/message_differencer.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
 
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "GrpcProtos/Constants.h"
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
+#include "GrpcProtos/tracepoint.pb.h"
+#include "ProducerEventProcessor/ClientCaptureEventCollector.h"
 #include "ProducerEventProcessor/ProducerEventProcessor.h"
 
 using orbit_grpc_protos::AddressInfo;
@@ -398,11 +407,11 @@ TEST(ProducerEventProcessor, TwoInternedCallstacksDifferentProducersSameIntern) 
   EXPECT_EQ(sample2.callstack_id(), actual_interned_callstack.key());
 }
 
-static ProducerCaptureEvent CreateInternedStringEvent(uint64_t key, const std::string& str) {
+static ProducerCaptureEvent CreateInternedStringEvent(uint64_t key, std::string str) {
   ProducerCaptureEvent interned_string_event;
   InternedString* interned_string = interned_string_event.mutable_interned_string();
   interned_string->set_key(key);
-  interned_string->set_intern(str);
+  interned_string->set_intern(std::move(str));
   return interned_string_event;
 }
 
@@ -2272,7 +2281,7 @@ TEST(ProducerEventProcessor, WarningInstrumentingWithUserSpaceInstrumentationEve
   warning_event->set_timestamp_ns(kTimestampNs1);
   constexpr int kFunctionId = 42;
   constexpr const char* kErrorMessage = "error message";
-  auto function = warning_event->add_functions_that_failed_to_instrument();
+  auto* function = warning_event->add_functions_that_failed_to_instrument();
   function->set_function_id(kFunctionId);
   function->set_error_message(kErrorMessage);
 

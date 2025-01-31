@@ -2,22 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "LiveFunctionsController.h"
+#include "OrbitGl/LiveFunctionsController.h"
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <absl/meta/type_traits.h>
 
 #include <algorithm>
 #include <limits>
-#include <type_traits>
+#include <memory>
 #include <utility>
 
-#include "App.h"
 #include "ClientData/CaptureData.h"
 #include "ClientData/ScopeId.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "GrpcProtos/Constants.h"
-#include "TimeGraph.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/Typedef.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/TimeGraph.h"
+#include "OrbitGl/TrackContainer.h"
 
 using orbit_client_data::FunctionInfo;
 using orbit_client_data::ScopeId;
@@ -261,4 +265,9 @@ std::optional<ScopeId> LiveFunctionsController::FunctionIdToScopeId(uint64_t fun
   ORBIT_CHECK(app_ != nullptr);
   ORBIT_CHECK(app_->HasCaptureData());
   return app_->GetCaptureData().FunctionIdToScopeId(function_id);
+}
+
+void LiveFunctionsController::SetScopeStatsCollection(
+    std::shared_ptr<const orbit_client_data::ScopeStatsCollection> scope_collection) {
+  live_functions_data_view_.SetScopeStatsCollection(std::move(scope_collection));
 }

@@ -2,22 +2,38 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/ascii.h>
+#include <absl/strings/str_format.h>
 #include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <iterator>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "ClientData/CaptureData.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifierProvider.h"
 #include "ClientData/ModuleManager.h"
 #include "ClientData/ProcessData.h"
 #include "DataViewTestUtils.h"
 #include "DataViews/DataView.h"
 #include "DataViews/FunctionsDataView.h"
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
 #include "GrpcProtos/process.pb.h"
+#include "GrpcProtos/symbol.pb.h"
 #include "MockAppInterface.h"
 
 using orbit_client_data::CaptureData;
@@ -45,21 +61,36 @@ struct FunctionsDataViewTest : public testing::Test {
  public:
   explicit FunctionsDataViewTest() : view_{&app_} {
     view_.Init();
-    FunctionInfo function0{"/path/to/module", "buildid", 12, 16, "foo()"};
+    FunctionInfo function0{"/path/to/module", "buildid", /*address=*/12,
+                           /*size=*/16,       "foo()",   /*is_hotpatchable=*/false};
     functions_.emplace_back(std::move(function0));
 
-    FunctionInfo function1{"path/to/other", "buildid1", 0x100, 42, "main(int, char**)"};
+    FunctionInfo function1{"path/to/other", "buildid1",          /*address=*/0x100,
+                           /*size=*/42,     "main(int, char**)", /*is_hotpatchable=*/false};
     functions_.emplace_back(std::move(function1));
 
-    FunctionInfo function2{"/somewhere/else/module", "buildid2", 0x330, 66,
-                           "operator==(A const&, A const&)"};
+    FunctionInfo function2{"/somewhere/else/module",
+                           "buildid2",
+                           /*address=*/0x330,
+                           /*size=*/66,
+                           "operator==(A const&, A const&)",
+                           /*is_hotpatchable=*/false};
     functions_.emplace_back(std::move(function2));
 
-    FunctionInfo function3{"/somewhere/else/CapitalizedModule", "buildid3", 0x33, 66, "ffind(int)"};
+    FunctionInfo function3{"/somewhere/else/CapitalizedModule",
+                           "buildid3",
+                           /*address=*/0x33,
+                           /*size=*/66,
+                           "ffind(int)",
+                           /*is_hotpatchable=*/false};
     functions_.emplace_back(std::move(function3));
 
-    FunctionInfo function4{"/somewhere/else/UPPERCASEMODULE", "buildid4", 0x33, 66,
-                           "bar(const char*)"};
+    FunctionInfo function4{"/somewhere/else/UPPERCASEMODULE",
+                           "buildid4",
+                           /*address=*/0x33,
+                           /*size=*/66,
+                           "bar(const char*)",
+                           /*is_hotpatchable=*/false};
     functions_.emplace_back(std::move(function4));
 
     ModuleInfo module_info0{};
@@ -85,6 +116,8 @@ struct FunctionsDataViewTest : public testing::Test {
     module_info2.set_load_bias(0x6000);
     module_info2.set_address_start(0x3456);
     module_infos_.emplace_back(std::move(module_info2));
+
+    view_.OnDataChanged();
   }
 
  protected:
@@ -130,12 +163,14 @@ TEST_F(FunctionsDataViewTest, FunctionNameIsDisplayName) {
       .WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
   EXPECT_EQ(view_.GetValue(0, 1), functions_[0].pretty_name());
 }
 
 TEST_F(FunctionsDataViewTest, InvalidColumnAndRowNumbersReturnEmptyString) {
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
   EXPECT_EQ(view_.GetValue(1, 0), "");    // Invalid row index
   EXPECT_EQ(view_.GetValue(0, 25), "");   // Invalid column index
@@ -148,6 +183,7 @@ TEST_F(FunctionsDataViewTest, ViewHandlesMultipleElements) {
       .WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0], &functions_[1], &functions_[2]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 3);
 
   // We don't expect the view to be in any particular order at this point.
@@ -163,6 +199,7 @@ TEST_F(FunctionsDataViewTest, ClearFunctionsRemovesAllElements) {
       .WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0], &functions_[1], &functions_[2]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 3);
 
   view_.ClearFunctions();
@@ -172,9 +209,11 @@ TEST_F(FunctionsDataViewTest, ClearFunctionsRemovesAllElements) {
 TEST_F(FunctionsDataViewTest, RemoveFunctionsOfModule) {
   view_.AddFunctions(
       {&functions_[0], &functions_[1], &functions_[2], &functions_[3], &functions_[4]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 5);
 
   view_.RemoveFunctionsOfModule(functions_[2].module_path());
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 4);
   EXPECT_THAT(
       (std::array{view_.GetValue(0, 1), view_.GetValue(1, 1), view_.GetValue(2, 1),
@@ -183,6 +222,7 @@ TEST_F(FunctionsDataViewTest, RemoveFunctionsOfModule) {
                                     functions_[3].pretty_name(), functions_[4].pretty_name()));
 
   view_.RemoveFunctionsOfModule(functions_[3].module_path());
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 3);
   EXPECT_THAT(
       (std::array{view_.GetValue(0, 1), view_.GetValue(1, 1), view_.GetValue(2, 1)}),
@@ -190,6 +230,7 @@ TEST_F(FunctionsDataViewTest, RemoveFunctionsOfModule) {
                                     functions_[4].pretty_name()));
 
   view_.RemoveFunctionsOfModule(functions_[3].module_path());  // Should do nothing.
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 3);
 }
 
@@ -212,6 +253,7 @@ TEST_F(FunctionsDataViewTest, FunctionSelectionAppearsInFirstColumn) {
   EXPECT_CALL(app_, HasCaptureData).WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
 
   function_selected = false;
@@ -246,6 +288,7 @@ TEST_F(FunctionsDataViewTest, FrameTrackSelectionAppearsInFirstColumn) {
   EXPECT_CALL(app_, HasCaptureData).WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
 
   function_selected = false;
@@ -267,7 +310,8 @@ TEST_F(FunctionsDataViewTest, FrameTrackSelectionAppearsInFirstColumnWhenACaptur
   // Since CaptureData is entangled with ModuleManager the test needs to create a lot of empty
   // data structures and manager objects.
 
-  orbit_client_data::ModuleManager module_manager{};
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider;
+  orbit_client_data::ModuleManager module_manager{&module_identifier_provider};
   EXPECT_CALL(app_, GetModuleManager()).WillRepeatedly(Return(&module_manager));
   (void)module_manager.AddOrUpdateModules({module_infos_[0]});
   ASSERT_EQ(module_manager.GetAllModuleData().size(), 1);
@@ -279,7 +323,9 @@ TEST_F(FunctionsDataViewTest, FrameTrackSelectionAppearsInFirstColumnWhenACaptur
   orbit_grpc_protos::ModuleSymbols module_symbols;
   module_symbols.mutable_symbol_infos()->Add(std::move(symbol_info));
   orbit_client_data::ModuleData* module_data =
-      module_manager.GetMutableModuleByModuleIdentifier(functions_[0].module_id());
+      module_manager.GetMutableModuleByModulePathAndBuildId(
+          {.module_path = functions_[0].module_path(),
+           .build_id = functions_[0].module_build_id()});
   module_data->AddSymbols(module_symbols);
 
   orbit_grpc_protos::CaptureStarted capture_started{};
@@ -302,8 +348,11 @@ TEST_F(FunctionsDataViewTest, FrameTrackSelectionAppearsInFirstColumnWhenACaptur
 
   EXPECT_CALL(app_, HasCaptureData).Times(2).WillRepeatedly(testing::Return(true));
 
-  CaptureData capture_data{
-      capture_started, std::nullopt, {}, CaptureData::DataSource::kLiveCapture};
+  CaptureData capture_data{capture_started,
+                           std::nullopt,
+                           {},
+                           CaptureData::DataSource::kLiveCapture,
+                           &module_identifier_provider};
   EXPECT_CALL(app_, GetCaptureData).Times(2).WillRepeatedly(testing::ReturnPointee(&capture_data));
 
   // Note that `CaptureData` also keeps a list of enabled frame track function ids, but this list is
@@ -316,6 +365,7 @@ TEST_F(FunctionsDataViewTest, FrameTrackSelectionAppearsInFirstColumnWhenACaptur
       .WillRepeatedly(testing::ReturnPointee(&frame_track_enabled));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
 
   frame_track_enabled = true;
@@ -331,6 +381,7 @@ TEST_F(FunctionsDataViewTest, FunctionSizeAppearsInThirdColumn) {
       .WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
   EXPECT_EQ(view_.GetValue(0, 2), std::to_string(functions_[0].size()));
 }
@@ -341,6 +392,7 @@ TEST_F(FunctionsDataViewTest, ModuleColumnShowsFilenameOfModule) {
       .WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
   EXPECT_EQ(view_.GetValue(0, 3),
             std::filesystem::path{functions_[0].module_path()}.filename().string());
@@ -348,6 +400,7 @@ TEST_F(FunctionsDataViewTest, ModuleColumnShowsFilenameOfModule) {
 
 TEST_F(FunctionsDataViewTest, AddressColumnShowsAddress) {
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
   ASSERT_EQ(view_.GetNumElements(), 1);
 
   // We expect the address to be in hex - indicated by "0x"
@@ -376,8 +429,9 @@ TEST_F(FunctionsDataViewTest, ContextMenuEntriesChangeOnFunctionState) {
       });
 
   view_.AddFunctions({&functions_[0], &functions_[1], &functions_[2]});
+  view_.OnDataChanged();
 
-  auto verify_context_menu_action_availability = [&](const std::vector<int>& selected_indices) {
+  auto verify_context_menu_action_availability = [&](absl::Span<const int> selected_indices) {
     FlattenContextMenu context_menu = FlattenContextMenuWithGroupingAndCheckOrder(
         view_.GetContextMenuWithGrouping(0, selected_indices));
 
@@ -440,6 +494,7 @@ TEST_F(FunctionsDataViewTest, GenericDataExportFunctionShowCorrectData) {
       .WillRepeatedly(testing::Return(false));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
 
   FlattenContextMenu context_menu =
       FlattenContextMenuWithGroupingAndCheckOrder(view_.GetContextMenuWithGrouping(0, {0}));
@@ -496,6 +551,7 @@ TEST_F(FunctionsDataViewTest, ColumnSorting) {
   std::vector<FunctionInfo> functions = functions_;
   view_.AddFunctions(
       {&functions_[0], &functions_[1], &functions_[2], &functions_[3], &functions_[4]});
+  view_.OnDataChanged();
 
   const auto verify_correct_sorting = [&]() {
     // We won't check all columns because we control the test data and know that checking address
@@ -568,12 +624,15 @@ TEST_F(FunctionsDataViewTest, ContextMenuActionsCallCorrespondingFunctionsInAppI
       .Times(testing::AnyNumber())
       .WillRepeatedly(testing::Return(false));
 
-  CaptureData capture_data{{}, std::nullopt, {}, CaptureData::DataSource::kLiveCapture};
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider;
+  CaptureData capture_data{
+      {}, std::nullopt, {}, CaptureData::DataSource::kLiveCapture, &module_identifier_provider};
   EXPECT_CALL(app_, GetCaptureData).WillRepeatedly(testing::ReturnPointee(&capture_data));
   EXPECT_CALL(app_, IsCaptureConnected).WillRepeatedly(testing::Return(true));
   EXPECT_CALL(app_, HasCaptureData).WillRepeatedly(testing::Return(true));
 
   view_.AddFunctions({&functions_[0]});
+  view_.OnDataChanged();
 
   const auto match_function = [&](const FunctionInfo& function) {
     EXPECT_EQ(function.address(), functions_[0].address());
@@ -606,7 +665,7 @@ TEST_F(FunctionsDataViewTest, ContextMenuActionsCallCorrespondingFunctionsInAppI
   constexpr int kRandomPid = 4242;
   orbit_grpc_protos::ProcessInfo process_info{};
   process_info.set_pid(kRandomPid);
-  orbit_client_data::ProcessData process_data{process_info};
+  orbit_client_data::ProcessData process_data{process_info, &module_identifier_provider};
 
   EXPECT_CALL(app_, GetTargetProcess).Times(1).WillRepeatedly(testing::Return(&process_data));
   EXPECT_CALL(app_, Disassemble)
@@ -639,6 +698,7 @@ TEST_F(FunctionsDataViewTest, FilteringByFunctionName) {
 
   view_.AddFunctions(
       {&functions_[0], &functions_[1], &functions_[2], &functions_[3], &functions_[4]});
+  view_.OnDataChanged();
 
   // Filtering by an empty string should result in all functions listed -> No filtering.
   view_.OnFilter("");
@@ -694,6 +754,7 @@ TEST_F(FunctionsDataViewTest, FilteringByModuleName) {
 
   view_.AddFunctions(
       {&functions_[0], &functions_[1], &functions_[2], &functions_[3], &functions_[4]});
+  view_.OnDataChanged();
 
   // Only the filename is considered when filtering, so searching for the full file path results in
   // an empty search result.
@@ -728,6 +789,7 @@ TEST_F(FunctionsDataViewTest, FilteringByFunctionAndModuleName) {
 
   view_.AddFunctions(
       {&functions_[0], &functions_[1], &functions_[2], &functions_[3], &functions_[4]});
+  view_.OnDataChanged();
 
   // ffind is the name of the function while CapitalizedModule is the filename of its module.
   view_.OnFilter("ffind CapitalizedModule");

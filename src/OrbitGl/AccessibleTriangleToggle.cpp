@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "AccessibleTriangleToggle.h"
+#include "OrbitGl/AccessibleTriangleToggle.h"
 
-#include "AccessibleCaptureViewElement.h"
-#include "TriangleToggle.h"
+#include <string>
+
+#include "OrbitGl/AccessibleCaptureViewElement.h"
+#include "OrbitGl/TriangleToggle.h"
 
 namespace orbit_gl {
 
@@ -16,9 +18,9 @@ AccessibleTriangleToggle::AccessibleTriangleToggle(TriangleToggle* triangle_togg
 
 orbit_accessibility::AccessibilityState AccessibleTriangleToggle::AccessibleState() const {
   if (triangle_toggle_->IsCollapsible()) {
-    return orbit_accessibility::AccessibilityState::Normal;
+    return orbit_accessibility::AccessibilityState::kNormal;
   }
-  return orbit_accessibility::AccessibilityState::Disabled;
+  return orbit_accessibility::AccessibilityState::kDisabled;
 }
 
 }  // namespace orbit_gl

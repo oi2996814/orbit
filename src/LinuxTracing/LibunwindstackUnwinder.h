@@ -5,7 +5,9 @@
 #ifndef LINUX_TRACING_LIBUNWINDSTACK_UNWINDER_H_
 #define LINUX_TRACING_LIBUNWINDSTACK_UNWINDER_H_
 
+#include <absl/types/span.h>
 #include <asm/perf_regs.h>
+#include <sys/types.h>
 #include <unwindstack/Error.h>
 #include <unwindstack/MachineX86_64.h>
 #include <unwindstack/Maps.h>
@@ -15,7 +17,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,9 +32,9 @@ namespace orbit_linux_tracing {
 class LibunwindstackResult {
  public:
   explicit LibunwindstackResult(
-      std::vector<unwindstack::FrameData> frames, unwindstack::RegsX86_64 regs,
+      std::vector<unwindstack::FrameData> frames, const unwindstack::RegsX86_64& regs,
       unwindstack::ErrorCode error_code = unwindstack::ErrorCode::ERROR_NONE)
-      : frames_{std::move(frames)}, regs_{std::move(regs)}, error_code_{error_code} {}
+      : frames_{std::move(frames)}, regs_{regs}, error_code_{error_code} {}
 
   [[nodiscard]] const std::vector<unwindstack::FrameData>& frames() const { return frames_; }
 
@@ -52,7 +56,7 @@ class LibunwindstackUnwinder {
 
   virtual LibunwindstackResult Unwind(pid_t pid, unwindstack::Maps* maps,
                                       const std::array<uint64_t, PERF_REG_X86_64_MAX>& perf_regs,
-                                      const std::vector<StackSliceView>& stack_slices,
+                                      absl::Span<const StackSliceView> stack_slices,
                                       bool offline_memory_only = false,
                                       size_t max_frames = kDefaultMaxFrames) = 0;
 

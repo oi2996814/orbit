@@ -2,18 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
-#include <numeric>
+#include <iterator>
 #include <string>
 #include <string_view>
 
 #include "DataViewTestUtils.h"
 #include "DataViews/DataView.h"
 #include "OrbitBase/ReadFileToString.h"
-#include "OrbitBase/TemporaryFile.h"
+#include "OrbitBase/Result.h"
+#include "TestUtils/TemporaryFile.h"
 #include "TestUtils/TestUtils.h"
 
 using orbit_data_views::FormatValueForCsv;
@@ -24,7 +29,7 @@ const std::array<std::string, kValuesNum> kValues = {"a", "b", "c", "d", "e"};
 const std::array<std::string, kValuesNum> kCsvFormattedValues = [] {
   std::array<std::string, kValuesNum> result;
   std::transform(std::begin(kValues), std::end(kValues), std::begin(result),
-                 [](const std::string& value) { return FormatValueForCsv(value); });
+                 [](std::string_view value) { return FormatValueForCsv(value); });
   return result;
 }();
 
@@ -46,7 +51,8 @@ TEST(DataView, FormatValueForCsvEscapesQuotesInString) {
 }
 
 TEST(DataView, WriteLineToCsvIsCorrect) {
-  orbit_base::TemporaryFile temporary_file = orbit_data_views::GetTemporaryFilePath();
+  orbit_test_utils::TemporaryFile temporary_file = orbit_data_views::GetTemporaryFile();
+
   EXPECT_THAT(orbit_data_views::WriteLineToCsv(temporary_file.fd(), kValues),
               orbit_test_utils::HasNoError());
 

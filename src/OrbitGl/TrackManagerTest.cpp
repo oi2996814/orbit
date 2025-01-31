@@ -2,15 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include <gtest/gtest.h>
+#include <stddef.h>
+
+#include <initializer_list>
+#include <memory>
+#include <set>
+#include <vector>
 
 #include "ClientData/CaptureData.h"
-#include "ClientData/ModuleManager.h"
 #include "ClientProtos/capture_data.pb.h"
-#include "GrpcProtos/capture.pb.h"
-#include "TimeGraph.h"
-#include "Track.h"
-#include "TrackManager.h"
-#include "TrackTestData.h"
+#include "OrbitGl/SchedulerTrack.h"
+#include "OrbitGl/StaticTimeGraphLayout.h"
+#include "OrbitGl/ThreadTrack.h"
+#include "OrbitGl/Track.h"
+#include "OrbitGl/TrackManager.h"
+#include "OrbitGl/TrackTestData.h"
 
 using orbit_client_protos::TimerInfo;
 
@@ -54,7 +60,7 @@ class TrackManagerTest : public ::testing::Test {
     capture_data_->UpdateScopeStats(timer);
   }
 
-  TimeGraphLayout layout_;
+  orbit_gl::StaticTimeGraphLayout layout_;
   std::unique_ptr<orbit_client_data::CaptureData> capture_data_;
   TrackManager track_manager_;
 };

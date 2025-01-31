@@ -3,6 +3,15 @@
 // found in the LICENSE file.
 
 #include <ClientData/ScopeTreeTimerData.h>
+#include <absl/container/btree_map.h>
+
+#include <algorithm>
+#include <utility>
+
+#include "ApiInterface/Orbit.h"
+#include "ClientData/FastRenderingUtils.h"
+#include "ClientData/TimerData.h"
+#include "OrbitBase/Logging.h"
 
 namespace orbit_client_data {
 
@@ -35,7 +44,7 @@ void ScopeTreeTimerData::OnCaptureComplete() {
 }
 
 std::vector<const orbit_client_protos::TimerInfo*> ScopeTreeTimerData::GetTimers(
-    uint64_t start_ns, uint64_t end_ns) const {
+    uint64_t start_ns, uint64_t end_ns, bool exclusive) const {
   ORBIT_SCOPE_WITH_COLOR("GetTimers", kOrbitColorAmber);
   // The query is for the interval [start_ns, end_ns], but it's easier to work with the close-open
   // interval [start_ns, end_ns+1). We have to be careful with overflowing.
@@ -44,11 +53,33 @@ std::vector<const orbit_client_protos::TimerInfo*> ScopeTreeTimerData::GetTimers
 
   for (uint32_t depth = 0; depth < GetDepth(); ++depth) {
     std::vector<const orbit_client_protos::TimerInfo*> timers_at_depth =
-        GetTimersAtDepth(depth, start_ns, end_ns);
+        exclusive ? GetTimersAtDepthExclusive(depth, start_ns, end_ns)
+                  : GetTimersAtDepth(depth, start_ns, end_ns);
     all_timers.insert(all_timers.end(), timers_at_depth.begin(), timers_at_depth.end());
   }
 
   return all_timers;
+}
+
+std::vector<const orbit_client_protos::TimerInfo*> ScopeTreeTimerData::GetTimersAtDepthExclusive(
+    uint32_t depth, uint64_t start_ns, uint64_t end_ns) const {
+  ORBIT_SCOPE_WITH_COLOR("GetTimersAtDepthExclusive", kOrbitColorGreen);
+  std::vector<const orbit_client_protos::TimerInfo*> all_timers_at_depth;
+  absl::MutexLock lock(&scope_tree_mutex_);
+
+  const auto& ordered_nodes = scope_tree_.GetOrderedNodesAtDepth(depth);
+  if (ordered_nodes.empty()) return all_timers_at_depth;
+
+  auto node_it = ordered_nodes.upper_bound(start_ns);
+  // Include node if node.start() == start_ns.
+  if (node_it != ordered_nodes.begin()) --node_it;
+  if (node_it->second->GetScope()->start() < start_ns) ++node_it;
+
+  for (auto it = node_it; it != ordered_nodes.end() && it->second->End() < end_ns; ++it) {
+    all_timers_at_depth.push_back(it->second->GetScope());
+  }
+
+  return all_timers_at_depth;
 }
 
 std::vector<const orbit_client_protos::TimerInfo*> ScopeTreeTimerData::GetTimersAtDepth(
@@ -56,7 +87,7 @@ std::vector<const orbit_client_protos::TimerInfo*> ScopeTreeTimerData::GetTimers
   std::vector<const orbit_client_protos::TimerInfo*> all_timers_at_depth;
   absl::MutexLock lock(&scope_tree_mutex_);
 
-  auto& ordered_nodes = scope_tree_.GetOrderedNodesAtDepth(depth);
+  const auto& ordered_nodes = scope_tree_.GetOrderedNodesAtDepth(depth);
   if (ordered_nodes.empty()) return all_timers_at_depth;
 
   auto first_node_to_draw = ordered_nodes.upper_bound(start_ns);
@@ -75,6 +106,7 @@ std::vector<const orbit_client_protos::TimerInfo*> ScopeTreeTimerData::GetTimers
 std::vector<const orbit_client_protos::TimerInfo*> ScopeTreeTimerData::GetTimersAtDepthDiscretized(
     uint32_t depth, uint32_t resolution, uint64_t start_ns, uint64_t end_ns) const {
   ORBIT_SCOPE_WITH_COLOR("GetTimersAtDepthDiscretized", kOrbitColorAmber);
+  if (resolution == 0) return {};
   absl::MutexLock lock(&scope_tree_mutex_);
   // The query is for the interval [start_ns, end_ns], but it's easier to work with the close-open
   // interval [start_ns, end_ns+1). We have to be careful with overflowing.

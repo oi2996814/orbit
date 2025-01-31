@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "TimerTrack.h"
+#include "OrbitGl/TimerTrack.h"
 
 #include <GteVector.h>
-#include <absl/flags/declare.h>
-#include <absl/synchronization/mutex.h>
+#include <absl/flags/flag.h>
+#include <absl/hash/hash.h>
+#include <absl/strings/str_format.h>
+#include <absl/time/time.h>
 #include <stddef.h>
 
 #include <algorithm>
@@ -14,19 +16,23 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "ApiInterface/Orbit.h"
-#include "App.h"
 #include "ClientData/ScopeId.h"
+#include "ClientData/TimerChain.h"
 #include "ClientFlags/ClientFlags.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "GlCanvas.h"
-#include "PrimitiveAssembler.h"
-#include "TimeGraphLayout.h"
-#include "Viewport.h"
-#include "absl/flags/flag.h"
-#include "absl/strings/str_format.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/Typedef.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/TrackHeader.h"
+#include "OrbitGl/Viewport.h"
 
 using orbit_client_data::ScopeId;
 using orbit_client_data::TimerChain;
@@ -49,7 +55,7 @@ TimerTrack::TimerTrack(CaptureViewElement* parent,
       app_{app},
       timer_data_{timer_data} {}
 
-std::string TimerTrack::GetExtraInfo(const TimerInfo& timer_info) const {
+std::string TimerTrack::GetExtraInfo(const TimerInfo& timer_info) {
   std::string info;
   static bool show_return_value = absl::GetFlag(FLAGS_show_return_values);
   if (show_return_value && timer_info.type() == TimerInfo::kNone) {
@@ -87,7 +93,7 @@ WorldXInfo ToWorldX(double start_us, double end_us, double inv_time_window, floa
 
 }  // namespace
 
-std::string TimerTrack::GetDisplayTime(const TimerInfo& timer) const {
+std::string TimerTrack::GetDisplayTime(const TimerInfo& timer) {
   return orbit_display_formats::GetDisplayTime(absl::Nanoseconds(timer.end() - timer.start()));
 }
 
@@ -98,11 +104,11 @@ void TimerTrack::DrawTimesliceText(TextRenderer& text_renderer,
 
   const std::string elapsed_time = GetDisplayTime(timer);
   const auto elapsed_time_length = elapsed_time.length();
-  const Color kTextWhite(255, 255, 255, 255);
+  const Color text_white(255, 255, 255, 255);
   float pos_x = std::max(box_pos[0], min_x);
   float max_size = box_pos[0] + box_size[0] - pos_x;
 
-  TextRenderer::TextFormatting formatting{layout_->GetFontSize(), kTextWhite, max_size};
+  TextRenderer::TextFormatting formatting{layout_->GetFontSize(), text_white, max_size};
   formatting.valign = TextRenderer::VAlign::Bottom;
 
   text_renderer.AddTextTrailingCharsPrioritized(
@@ -188,7 +194,7 @@ bool TimerTrack::DrawTimer(TextRenderer& text_renderer, const TimerInfo* prev_ti
     }
   }
 
-  std::optional<ScopeId> scope_id = app_->GetCaptureData().ProvideScopeId(*current_timer_info);
+  std::optional<ScopeId> scope_id = app_->ProvideScopeId(*current_timer_info);
   uint64_t group_id = current_timer_info->group_id();
 
   bool is_selected = current_timer_info == draw_data.selected_timer;
@@ -276,8 +282,8 @@ void TimerTrack::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
   draw_data.primitive_assembler = &primitive_assembler;
   draw_data.viewport = viewport_;
 
-  draw_data.track_start_x = GetPos()[0];
-  draw_data.track_width = GetWidth();
+  draw_data.track_start_x = GetPos()[0] + header_->GetWidth();
+  draw_data.track_width = GetWidth() - header_->GetWidth();
   draw_data.inv_time_window = 1.0 / timeline_info_->GetTimeWindowUs();
   draw_data.is_collapsed = IsCollapsed();
 
@@ -292,9 +298,9 @@ void TimerTrack::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
   // events that would just draw over an already drawn line. When zoomed in
   // enough that all events are drawn as boxes, this has no effect. When zoomed
   // out, many events will be discarded quickly.
-  uint64_t time_window_ns = static_cast<uint64_t>(1000 * timeline_info_->GetTimeWindowUs());
-  draw_data.ns_per_pixel =
-      static_cast<double>(time_window_ns) / viewport_->WorldToScreen({GetWidth(), 0})[0];
+  auto time_window_ns = static_cast<uint64_t>(1000 * timeline_info_->GetTimeWindowUs());
+  draw_data.ns_per_pixel = static_cast<double>(time_window_ns) /
+                           viewport_->WorldToScreen({GetWidth() - header_->GetWidth(), 0})[0];
   draw_data.min_timegraph_tick = timeline_info_->GetTickFromUs(timeline_info_->GetMinTimeUs());
   draw_data.histogram_selection_range = app_->GetHistogramSelectionRange();
 
@@ -373,9 +379,7 @@ std::string TimerTrack::GetBoxTooltip(const PrimitiveAssembler& /*primitive_asse
   return "";
 }
 
-float TimerTrack::GetHeightAboveTimers() const {
-  return header_->GetHeight() + layout_->GetTrackContentTopMargin();
-}
+float TimerTrack::GetHeightAboveTimers() const { return layout_->GetTrackContentTopMargin(); }
 
 internal::DrawData TimerTrack::GetDrawData(
     uint64_t min_tick, uint64_t max_tick, float track_pos_x, float track_width,
@@ -399,7 +403,7 @@ internal::DrawData TimerTrack::GetDrawData(
   draw_data.highlighted_group_id = highlighted_group_id;
   draw_data.histogram_selection_range = histogram_selection_range;
 
-  uint64_t time_window_ns = static_cast<uint64_t>(1000 * timeline_info->GetTimeWindowUs());
+  auto time_window_ns = static_cast<uint64_t>(1000 * timeline_info->GetTimeWindowUs());
   draw_data.ns_per_pixel =
       static_cast<double>(time_window_ns) / viewport->WorldToScreen({track_width, 0})[0];
   draw_data.min_timegraph_tick = timeline_info->GetTickFromUs(timeline_info->GetMinTimeUs());
@@ -416,7 +420,7 @@ bool TimerTrack::ShouldHaveBorder(
     const TimerInfo* timer, const std::optional<orbit_statistics::HistogramSelectionRange>& range,
     float width) const {
   if ((!range.has_value() || width < kMinimalWidthToHaveBorder || !app_->HasCaptureData()) ||
-      (app_->GetCaptureData().ProvideScopeId(*timer) != app_->GetHighlightedScopeId())) {
+      (app_->ProvideScopeId(*timer) != app_->GetHighlightedScopeId())) {
     return false;
   }
   const uint64_t duration = timer->end() - timer->start();

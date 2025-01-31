@@ -4,22 +4,26 @@
 
 #include "CaptureClient/CaptureClient.h"
 
-#include <absl/container/flat_hash_set.h>
-#include <absl/flags/declare.h>
-#include <absl/flags/flag.h>
+#include <absl/container/flat_hash_map.h>
 #include <absl/strings/str_format.h>
 #include <absl/time/time.h>
+#include <stddef.h>
 
-#include <cstdint>
+#include <algorithm>
+#include <map>
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
+#include "ApiInterface/Orbit.h"
 #include "ApiUtils/GetFunctionTableAddressPrefix.h"
 #include "CaptureClient/CaptureEventProcessor.h"
 #include "CaptureClient/CaptureListener.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleInMemory.h"
+#include "ClientData/TracepointCustom.h"
 #include "GrpcProtos/tracepoint.pb.h"
 #include "Introspection/Introspection.h"
 #include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
@@ -124,7 +128,8 @@ std::vector<ApiFunction> FindApiFunctions(const orbit_client_data::ModuleManager
   for (const auto& [function_id, function] : options.selected_functions) {
     InstrumentedFunction* instrumented_function = capture_options.add_instrumented_functions();
     instrumented_function->set_file_path(function.module_path());
-    const ModuleData* module = module_manager.GetModuleByModuleIdentifier(function.module_id());
+    const ModuleData* module = module_manager.GetModuleByModulePathAndBuildId(
+        {.module_path = function.module_path(), .build_id = function.module_build_id()});
     ORBIT_CHECK(module != nullptr);
     instrumented_function->set_file_offset(function.ComputeFileOffset(*module));
     instrumented_function->set_file_build_id(function.module_build_id());
@@ -132,6 +137,7 @@ std::vector<ApiFunction> FindApiFunctions(const orbit_client_data::ModuleManager
     instrumented_function->set_function_virtual_address(function.address());
     instrumented_function->set_function_size(function.size());
     instrumented_function->set_function_name(function.pretty_name());
+    instrumented_function->set_is_hotpatchable(function.IsHotpatchable());
     instrumented_function->set_record_arguments(options.record_arguments);
     instrumented_function->set_record_return_value(options.record_return_values);
   }
@@ -141,7 +147,8 @@ std::vector<ApiFunction> FindApiFunctions(const orbit_client_data::ModuleManager
         capture_options.add_functions_to_record_additional_stack_on();
 
     function_to_record_stack_on->set_file_path(function.module_path());
-    const ModuleData* module = module_manager.GetModuleByModuleIdentifier(function.module_id());
+    const ModuleData* module = module_manager.GetModuleByModulePathAndBuildId(
+        {.module_path = function.module_path(), .build_id = function.module_build_id()});
     ORBIT_CHECK(module != nullptr);
     function_to_record_stack_on->set_file_offset(function.ComputeFileOffset(*module));
   }
@@ -217,7 +224,7 @@ ErrorMessageOr<CaptureListener::CaptureOutcome> CaptureClient::CaptureSync(
   CaptureRequest request;
   *request.mutable_capture_options() = std::move(capture_options);
 
-  bool request_write_succeeded;
+  bool request_write_succeeded{};
   {
     absl::ReaderMutexLock lock{&context_and_stream_mutex_};
     request_write_succeeded = reader_writer_->Write(request);
@@ -237,7 +244,7 @@ ErrorMessageOr<CaptureListener::CaptureOutcome> CaptureClient::CaptureSync(
 
   while (!writes_done_failed_ && !try_abort_) {
     CaptureResponse response;
-    bool read_succeeded;
+    bool read_succeeded{};
     {
       absl::ReaderMutexLock lock{&context_and_stream_mutex_};
       read_succeeded = reader_writer_->Read(&response);
@@ -290,7 +297,7 @@ bool CaptureClient::StopCapture() {
     ORBIT_LOG("State is now kStopping");
   }
 
-  bool writes_done_succeeded;
+  bool writes_done_succeeded = false;
   {
     absl::ReaderMutexLock lock{&context_and_stream_mutex_};
     ORBIT_CHECK(reader_writer_ != nullptr);

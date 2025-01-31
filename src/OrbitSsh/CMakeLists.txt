@@ -27,7 +27,9 @@ target_sources(
   OrbitSsh
   PRIVATE Channel.cpp
           Context.cpp
+          Credentials.cpp
           Error.cpp
+          HomeEnvironmentVariable.h
           KnownHostsError.cpp
           LibSsh2Utils.cpp
           Session.cpp
@@ -44,7 +46,7 @@ endif()
 target_link_libraries(
   OrbitSsh
   PUBLIC OrbitBase
-         CONAN_PKG::libssh2)
+         Libssh2::libssh2)
 
 if(WIN32)
   target_compile_definitions(OrbitSsh PUBLIC WIN32_LEAN_AND_MEAN)
@@ -52,11 +54,15 @@ if(WIN32)
   target_compile_definitions(OrbitSsh PUBLIC -DNTDDI_VERSION=0x06030000)
 endif()
 
-# tests
 add_executable(OrbitSshTests)
-target_sources(OrbitSshTests PRIVATE SocketTests.cpp ContextTests.cpp)
+target_sources(OrbitSshTests PRIVATE
+  ContextTests.cpp
+  CredentialsTest.cpp
+  SocketTests.cpp)
 
-target_link_libraries(OrbitSshTests PRIVATE OrbitSsh CONAN_PKG::libssh2
-                                            GTest::Main)
+target_link_libraries(OrbitSshTests PRIVATE
+  OrbitSsh
+  TestUtils
+  GTest::Main)
 
 register_test(OrbitSshTests PROPERTIES TIMEOUT 10)

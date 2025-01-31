@@ -6,13 +6,16 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/strings/numbers.h>
+#include <absl/strings/str_format.h>
 #include <stdint.h>
 
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
+#include "ProcessService/Process.h"
 #include "ProcessServiceUtils.h"
 
 namespace orbit_process_service_internal {
@@ -46,7 +49,7 @@ ErrorMessageOr<void> ProcessList::Refresh() {
     const std::filesystem::path& path = it->path();
     std::string folder_name = path.filename().string();
 
-    uint32_t pid;
+    uint32_t pid{};
     if (!absl::SimpleAtoi(folder_name, &pid)) continue;
 
     const auto iter = processes_.find(pid);

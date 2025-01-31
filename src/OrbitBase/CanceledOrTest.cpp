@@ -2,18 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <memory>
-#include <variant>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
 
 #include "OrbitBase/CanceledOr.h"
+#include "outcome.hpp"
 
 namespace orbit_base {
 
 TEST(CanceledOr, IsCanceled) {
-  // Default constructed is NOT canceled
-  CanceledOr<int> canceled_or_int;
+  CanceledOr<int> canceled_or_int{0};
   EXPECT_FALSE(IsCanceled(canceled_or_int));
 
   canceled_or_int = Canceled{};
@@ -22,8 +26,7 @@ TEST(CanceledOr, IsCanceled) {
   canceled_or_int = 5;
   EXPECT_FALSE(IsCanceled(canceled_or_int));
 
-  // Default constructed is NOT canceled
-  CanceledOr<void> canceled_or_void;
+  CanceledOr<void> canceled_or_void{outcome::success()};
   EXPECT_FALSE(IsCanceled(canceled_or_void));
 
   canceled_or_void = Canceled{};
@@ -48,6 +51,14 @@ TEST(CanceledOr, GetNotCanceledMoveOnly) {
 
   std::unique_ptr<int> moved_unique_ptr{GetNotCanceled(std::move(canceled_or_unique_ptr))};
   EXPECT_EQ(*moved_unique_ptr, 5);
+}
+
+TEST(Canceled, GetMessage) {
+  // We test whether the return type of `Canceled::message()` can be casted to a `std::string`
+  // (compile time check) and whether it returns some non-empty string (runtime check). There is no
+  // point in checking the actual string, as this would just duplicate the static string and does
+  // not add anything in terms of test coverage.
+  EXPECT_THAT(std::string{Canceled{}.message()}, testing::Not(testing::IsEmpty()));
 }
 
 }  // namespace orbit_base

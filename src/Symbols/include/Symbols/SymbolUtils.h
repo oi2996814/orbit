@@ -5,7 +5,11 @@
 #ifndef SYMBOLS_SYMBOL_UTILS_H_
 #define SYMBOLS_SYMBOL_UTILS_H_
 
+#include <stdint.h>
+
 #include <filesystem>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "GrpcProtos/module.pb.h"
@@ -25,7 +29,7 @@ namespace orbit_symbols {
 // the build id of the file with build_id. Returns void if build ids are the same, ErrorMessage
 // otherwise.
 [[nodiscard]] ErrorMessageOr<void> VerifySymbolFile(const std::filesystem::path& symbol_file_path,
-                                                    const std::string& build_id);
+                                                    std::string_view build_id);
 // Checks if the file at symbol_file_path can be read as symbol file (elf, coff, pdb) and compares
 // the size of the file with expected_file_size. Returns void if the sizes are the same,
 // ErrorMessage otherwise.
@@ -35,7 +39,7 @@ namespace orbit_symbols {
 // build id and size of the file with build_id and expected_file_size, respectively. Returns void if
 // the build ids and the sizes are the same, ErrorMessage otherwise.
 [[nodiscard]] ErrorMessageOr<void> VerifyObjectFile(const std::filesystem::path& object_file_path,
-                                                    const std::string& build_id,
+                                                    std::string_view build_id,
                                                     uint64_t expected_file_size);
 
 }  // namespace orbit_symbols

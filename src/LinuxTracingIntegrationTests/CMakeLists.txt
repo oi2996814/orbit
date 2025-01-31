@@ -15,8 +15,6 @@ target_link_libraries(IntegrationTestPuppetSharedObject PUBLIC
         dl
         OrbitBase)
 
-strip_symbols(IntegrationTestPuppetSharedObject)
-
 
 add_library(IntegrationTestCommons STATIC)
 
@@ -37,13 +35,16 @@ target_link_libraries(IntegrationTestCommons PUBLIC
         ModuleUtils
         ObjectUtils
         OrbitBase
-        OffscreenRenderingVulkanTutorialLib
-        GTest::GTest
+        GTest::gtest
         absl::base
         absl::time
         absl::flat_hash_set
         absl::strings
         absl::synchronization)
+
+if(WITH_VULKAN)
+  target_link_libraries(IntegrationTestCommons PUBLIC OffscreenRenderingVulkanTutorialLib)
+endif()
 
 
 add_executable(LinuxTracingIntegrationTests)
@@ -57,15 +58,13 @@ target_link_libraries(LinuxTracingIntegrationTests PRIVATE
         LinuxTracing
         ObjectUtils
         OrbitBase
-        GTest::GTest
+        GTest::gtest
         GTest::Main
         absl::base
         absl::time
         absl::flat_hash_set
         absl::strings
         absl::synchronization)
-
-strip_symbols(LinuxTracingIntegrationTests)
 
 register_test(LinuxTracingIntegrationTests)
 
@@ -86,14 +85,12 @@ target_link_libraries(OrbitServiceIntegrationTests PRIVATE
         OrbitBase
         OrbitServiceLib
         OrbitVersion
-        GTest::GTest
+        GTest::gtest
         GTest::Main
         absl::base
         absl::time
         absl::flat_hash_set
         absl::strings
         absl::synchronization)
-
-strip_symbols(OrbitServiceIntegrationTests)
 
 register_test(OrbitServiceIntegrationTests)

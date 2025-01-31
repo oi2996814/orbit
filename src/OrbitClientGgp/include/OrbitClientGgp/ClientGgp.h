@@ -7,9 +7,11 @@
 
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <grpcpp/grpcpp.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,6 +21,7 @@
 #include "CaptureClient/CaptureClient.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifierProvider.h"
 #include "ClientData/ModuleManager.h"
 #include "ClientData/ProcessData.h"
 #include "ClientProtos/capture_data.pb.h"
@@ -48,7 +51,8 @@ class ClientGgp {
   ClientGgpOptions options_;
   std::shared_ptr<grpc::Channel> grpc_channel_;
   std::unique_ptr<orbit_client_data::ProcessData> target_process_;
-  orbit_client_data::ModuleManager module_manager_;
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider_;
+  orbit_client_data::ModuleManager module_manager_{&module_identifier_provider_};
   absl::flat_hash_map<uint64_t, orbit_client_data::FunctionInfo> selected_functions_;
   orbit_client_data::ModuleData* main_module_ = nullptr;
   std::unique_ptr<orbit_capture_client::CaptureClient> capture_client_;

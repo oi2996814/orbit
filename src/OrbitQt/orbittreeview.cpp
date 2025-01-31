@@ -2,20 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "orbittreeview.h"
+#include "OrbitQt/orbittreeview.h"
 
-#include <glad/glad.h>
-
-#include <QAbstractItemView>
 #include <QAction>
-#include <QApplication>
 #include <QFont>
 #include <QFontDatabase>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QKeySequence>
-#include <QList>
 #include <QMenu>
 #include <QModelIndexList>
 #include <QMouseEvent>
@@ -27,7 +22,9 @@
 #include <set>
 #include <utility>
 
+#include "ApiInterface/Orbit.h"
 #include "DataViews/DataView.h"
+#include "OrbitBase/Logging.h"
 
 OrbitTreeView::OrbitTreeView(QWidget* parent) : QTreeView(parent) {
   header()->setSortIndicatorShown(true);
@@ -177,9 +174,9 @@ void OrbitTreeView::Refresh(RefreshMode refresh_mode) {
 
 void OrbitTreeView::resizeEvent(QResizeEvent* event) {
   const bool width_resized = event->size().width() != event->oldSize().width();
-  if (width_resized && model_ != nullptr && model_->GetDataView()) {
+  if (width_resized && model_ != nullptr && model_->GetDataView() != nullptr) {
     // Get initial column ratios once.
-    if (column_ratios_.size() == 0) {
+    if (column_ratios_.empty()) {
       for (const auto& column : model_->GetDataView()->GetColumns()) {
         column_ratios_.emplace_back(column.ratio);
       }
@@ -241,7 +238,7 @@ void OrbitTreeView::ShowContextMenu(const QPoint& pos) {
   context_menu.exec(mapToGlobal(pos));
 }
 
-void OrbitTreeView::OnMenuClicked(const std::string& action, int menu_index) {
+void OrbitTreeView::OnMenuClicked(std::string_view action, int menu_index) {
   if (model_ == nullptr) {
     return;
   }
@@ -359,15 +356,26 @@ void OrbitTreeView::OnRefreshButtonClicked() {
   }
 }
 
-void OrbitTreeView::columnResized(int column, int /*oldSize*/, int newSize) {
+void OrbitTreeView::columnResized(int column, int /*oldSize*/, int new_size) {
   // We'd need to run this only when a column is being resized directly, not when the entire table
   // is being resized and in turn triggers column resize events, otherwise the ratios can be set
   // to 0 when shrinking the table width to 0 which we can't recover from. For this reason,
   // maintain_user_column_ratios_ defaults to "false", the code can be enabled once we find the
   // proper event filtering magic that will let us differentiate between direct and indirect column
   // resizing.
-  if (maintain_user_column_ratios_ && column_ratios_.size()) {
+  if (maintain_user_column_ratios_ && (!column_ratios_.empty())) {
     ORBIT_CHECK(column < static_cast<int>(column_ratios_.size()));
-    column_ratios_[column] = static_cast<float>(newSize) / size().width();
+    column_ratios_[column] = static_cast<float>(new_size) / size().width();
   }
+}
+
+int OrbitTreeView::sizeHintForColumn(int column) const {
+  if (model_ == nullptr) {
+    return -1;
+  }
+  orbit_data_views::DataView* data_view = model_->GetDataView();
+  if (data_view == nullptr) {
+    return -1;
+  }
+  return static_cast<int>(data_view->GetColumns().at(column).ratio * static_cast<float>(width()));
 }

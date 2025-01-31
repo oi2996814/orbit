@@ -6,23 +6,33 @@
 
 #include <OrbitBase/Logging.h>
 
-#include <QDebug>
-#include <QFontDatabase>
-#include <QHeaderView>
+#include <QColor>
+#include <QFont>
+#include <QGradientStops>
 #include <QMargins>
 #include <QObject>
 #include <QPainter>
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QRect>
+#include <QRectF>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QSize>
 #include <QString>
-#include <QStringList>
 #include <QTextBlock>
+#include <QTextBlockFormat>
+#include <QTextCharFormat>
 #include <QTextCursor>
+#include <QTextEdit>
+#include <QTextFormat>
+#include <QTextOption>
 #include <QWheelEvent>
+#include <Qt>
+#include <QtGlobal>
+#include <algorithm>
 #include <cmath>
+#include <memory>
 
 #include "SyntaxHighlighter/HighlightingMetadata.h"
 
@@ -36,7 +46,7 @@ static const QColor kTextEditForegroundColor{189, 189, 189};
 static const QColor kTitleBackgroundColor{30, 65, 89};
 static const QColor kHeatmapColor{Qt::red};
 
-static int StringWidthInPixels(const QFontMetrics& font_metrics, QString string) {
+static int StringWidthInPixels(const QFontMetrics& font_metrics, const QString& string) {
   return font_metrics.horizontalAdvance(string);
 }
 
@@ -279,7 +289,7 @@ void Viewer::DrawLineNumbers(QPaintEvent* event) {
 
 // For example, from a value = 0.5, we want to print "50.00 %"
 static QString FractionToPercentageString(int a, int b) {
-  double ratio = (!b ? 0. : static_cast<double>(a) / b);
+  double ratio = (b == 0 ? 0. : static_cast<double>(a) / b);
   double percentage_ratio = std::clamp(ratio * 100., 0., 100.);
   return QString{"%1 %"}.arg(percentage_ratio, 0, 'f', 2);
 }
@@ -494,18 +504,18 @@ void Viewer::HighlightCurrentLine() {
 }
 
 int Viewer::WidthPercentageColumn() const {
-  const QString kWidestPercentage = "100.00 %";
-  return StringWidthInPixels(fontMetrics(), kWidestPercentage);
+  const QString widest_percentage = "100.00 %";
+  return StringWidthInPixels(fontMetrics(), widest_percentage);
 }
 
 int Viewer::WidthSampleCounterColumn() const {
-  const QString kSampleColumnTitle = "Samples";
-  return StringWidthInPixels(fontMetrics(), kSampleColumnTitle);
+  const QString sample_column_title = "Samples";
+  return StringWidthInPixels(fontMetrics(), sample_column_title);
 }
 
 int Viewer::WidthMarginBetweenColumns() const {
-  const QString kTwoSpaces = "  ";
-  return StringWidthInPixels(fontMetrics(), kTwoSpaces);
+  const QString two_spaces = "  ";
+  return StringWidthInPixels(fontMetrics(), two_spaces);
 }
 
 int Viewer::TopWidgetHeight() const { return fontMetrics().height(); }
@@ -521,7 +531,7 @@ LargestOccurringLineNumbers SetAnnotatingContentInDocument(
   // Lets first go through the main content and save line numbers as metadata.
   // If previously extra annotating content had been added, let's remove it now.
   for (auto current_block = document->begin(); current_block != document->end();) {
-    const auto metadata = static_cast<const Metadata*>(current_block.userData());
+    const auto* const metadata = static_cast<const Metadata*>(current_block.userData());
 
     if (metadata == nullptr) {
       auto user_data =
@@ -549,13 +559,13 @@ LargestOccurringLineNumbers SetAnnotatingContentInDocument(
   LargestOccurringLineNumbers largest_occuring_line_numbers{};
   largest_occuring_line_numbers.main_content = document->blockCount();
 
-  auto current_annotating_line = annotating_lines.begin();
+  const auto* current_annotating_line = annotating_lines.begin();
 
   // In a second pass we add the annotating lines
   for (auto current_block = document->begin();
        current_block != document->end() && current_annotating_line != annotating_lines.end();
        current_block = current_block.next()) {
-    const auto metadata = static_cast<const Metadata*>(current_block.userData());
+    const auto* const metadata = static_cast<const Metadata*>(current_block.userData());
     ORBIT_CHECK(metadata != nullptr);
 
     if (metadata->line_number == current_annotating_line->reference_line) {

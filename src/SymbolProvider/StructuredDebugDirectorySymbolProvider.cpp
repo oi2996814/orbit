@@ -6,17 +6,20 @@
 
 #include <absl/strings/str_format.h>
 
+#include <string>
 #include <string_view>
 
 #include "OrbitBase/File.h"
+#include "OrbitBase/NotFoundOr.h"
 #include "OrbitBase/Result.h"
 #include "SymbolProvider/SymbolLoadingOutcome.h"
 
 namespace orbit_symbol_provider {
 
 orbit_base::Future<SymbolLoadingOutcome> StructuredDebugDirectorySymbolProvider::RetrieveSymbols(
-    const ModuleIdentifier& module_id, orbit_base::StopToken /*stop_token*/) const {
-  return {FindSymbolFile(module_id.build_id)};
+    const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id,
+    orbit_base::StopToken /*stop_token*/) {
+  return {FindSymbolFile(module_path_and_build_id.build_id)};
 }
 
 [[nodiscard]] SymbolLoadingOutcome StructuredDebugDirectorySymbolProvider::FindSymbolFile(

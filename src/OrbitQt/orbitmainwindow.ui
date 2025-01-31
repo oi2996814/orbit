@@ -270,13 +270,6 @@ QPushButton:disabled {
             </property>
            </widget>
           </item>
-          <item row="1" column="0">
-           <widget class="OrbitSamplingReport" name="inspectionReport" native="true">
-            <property name="visible">
-              <bool>false</bool>
-            </property>
-           </widget>
-          </item>
          </layout>
         </widget>
         <widget class="QWidget" name="topDownTab">
@@ -345,7 +338,7 @@ QPushButton:disabled {
          </attribute>
          <layout class="QGridLayout" name="gridLayout_4">
           <item row="0" column="0">
-           <widget class="OrbitGLWidget" name="debugOpenGLWidget"/>
+           <widget class="orbit_qt::DebugTabWidget" name="debugTabWidget" native="true"/>
           </item>
          </layout>
         </widget>
@@ -721,38 +714,43 @@ It used to also contain captures and presets, but these were moved to the User D
   <customwidget>
    <class>OrbitDataViewPanel</class>
    <extends>QWidget</extends>
-   <header>orbitdataviewpanel.h</header>
+   <header>OrbitQt/orbitdataviewpanel.h</header>
   </customwidget>
   <customwidget>
    <class>OrbitGLWidget</class>
    <extends>QOpenGLWidget</extends>
-   <header>orbitglwidget.h</header>
+   <header>OrbitQt/orbitglwidget.h</header>
   </customwidget>
   <customwidget>
    <class>OrbitLiveFunctions</class>
    <extends>QWidget</extends>
-   <header>orbitlivefunctions.h</header>
+   <header>OrbitQt/orbitlivefunctions.h</header>
   </customwidget>
   <customwidget>
    <class>OrbitSamplingReport</class>
    <extends>QWidget</extends>
-   <header>orbitsamplingreport.h</header>
+   <header>OrbitQt/orbitsamplingreport.h</header>
   </customwidget>
   <customwidget>
    <class>CallTreeWidget</class>
    <extends>QWidget</extends>
-   <header>CallTreeWidget.h</header>
+   <header>OrbitQt/CallTreeWidget.h</header>
   </customwidget>
   <customwidget>
    <class>orbit_qt::TrackConfigurationWidget</class>
    <extends>QWidget</extends>
-   <header>TrackConfigurationWidget.h</header>
+   <header>OrbitQt/TrackConfigurationWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>orbit_qt::DebugTabWidget</class>
+   <extends>QWidget</extends>
+   <header>OrbitQt/DebugTabWidget.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>
  <resources>
   <include location="../../icons/orbiticons.qrc"/>
-  <include location="../../images/orbitimages.qrc"/>
  </resources>
  <connections/>
  <slots>

@@ -57,7 +57,7 @@ target_link_libraries(UserSpaceInstrumentation PUBLIC
         absl::strings
         absl::synchronization
         absl::time
-        CONAN_PKG::capstone)
+        capstone::capstone)
 
 # This lib is injected into the target process Orbit is profiling. It is providing the functions
 # executed on function entry/exit of an instrumented function.
@@ -86,7 +86,11 @@ target_link_libraries(OrbitUserSpaceInstrumentation PUBLIC
         OrbitBase
         ProducerSideChannel)
 
-strip_symbols(OrbitUserSpaceInstrumentation)
+if (NOT WIN32)
+install(TARGETS OrbitUserSpaceInstrumentation
+        CONFIGURATIONS Release
+        LIBRARY DESTINATION /opt/orbitprofiler)
+endif()
 
 # This test lib is merely used in UserSpaceInstrumentationTests below. The
 # binary libUserSpaceInstrumentationTestLib.so created from this target is used
@@ -130,8 +134,8 @@ target_sources(UserSpaceInstrumentationTests PRIVATE
 target_link_libraries(UserSpaceInstrumentationTests PRIVATE
         TestUtils
         UserSpaceInstrumentation
-        CONAN_PKG::capstone
-        GTest::GTest
+        capstone::capstone
+        GTest::gtest
         GTest::Main)
 
 register_test(UserSpaceInstrumentationTests)

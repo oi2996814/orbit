@@ -2,19 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "MajorPageFaultsTrack.h"
+#include "OrbitGl/MajorPageFaultsTrack.h"
 
 #include <absl/strings/substitute.h>
+
+#include <optional>
+#include <utility>
+
+#include "OrbitBase/Logging.h"
 
 namespace orbit_gl {
 MajorPageFaultsTrack::MajorPageFaultsTrack(Track* parent,
                                            const orbit_gl::TimelineInfoInterface* timeline_info,
                                            orbit_gl::Viewport* viewport, TimeGraphLayout* layout,
-                                           const std::string& cgroup_name,
+                                           std::string cgroup_name,
                                            uint64_t memory_sampling_period_ms,
                                            const orbit_client_data::ModuleManager* module_manager,
                                            const orbit_client_data::CaptureData* capture_data)
-    : BasicPageFaultsTrack(parent, timeline_info, viewport, layout, cgroup_name,
+    : BasicPageFaultsTrack(parent, timeline_info, viewport, layout, std::move(cgroup_name),
                            memory_sampling_period_ms, module_manager, capture_data) {
   index_of_series_to_highlight_ = static_cast<size_t>(SeriesIndex::kProcess);
 }

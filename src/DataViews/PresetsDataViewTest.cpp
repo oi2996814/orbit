@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/strings/str_cat.h>
+#include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -19,22 +23,13 @@
 #include "DataViews/PresetsDataView.h"
 #include "MockAppInterface.h"
 #include "OrbitBase/File.h"
-#include "OrbitBase/ReadFileToString.h"
-#include "OrbitBase/TemporaryFile.h"
+#include "OrbitBase/Future.h"
+#include "OrbitBase/Result.h"
 #include "PresetFile/PresetFile.h"
+#include "TestUtils/TemporaryDirectory.h"
 #include "TestUtils/TestUtils.h"
 
-using orbit_data_views::CheckCopySelectionIsInvoked;
-using orbit_data_views::CheckExportToCsvIsInvoked;
 using orbit_data_views::FlattenContextMenu;
-using orbit_data_views::FlattenContextMenuWithGroupingAndCheckOrder;
-using orbit_data_views::GetActionIndexOnMenu;
-using orbit_data_views::kInvalidActionIndex;
-using orbit_data_views::kMenuActionCopySelection;
-using orbit_data_views::kMenuActionDeletePreset;
-using orbit_data_views::kMenuActionExportToCsv;
-using orbit_data_views::kMenuActionLoadPreset;
-using orbit_data_views::kMenuActionShowInExplorer;
 
 namespace {
 // This is just a helper type to handle colors. Note that Color from `OrbitGl/CoreMath.h` is not
@@ -74,9 +69,9 @@ TEST_F(PresetsDataViewTest, Empty) {
 TEST_F(PresetsDataViewTest, CheckLabelAndColorForLoadStates) {
   // GetPresetLoadState is called once per `GetValue`, `GetToolTip` and `GetDisplayColor` call.
   auto load_state = PresetLoadState::kLoadable;
-  EXPECT_CALL(app_, GetPresetLoadState)
-      .Times(13)
-      .WillRepeatedly(testing::ReturnPointee(&load_state));
+  EXPECT_CALL(app_, GetPresetLoadState).Times(13).WillRepeatedly(testing::Invoke([&load_state]() {
+    return PresetLoadState(load_state);
+  }));
 
   orbit_client_protos::PresetInfo preset_info0{};
   orbit_preset_file::PresetFile preset_file0{std::filesystem::path{}, preset_info0};
@@ -143,7 +138,7 @@ TEST_F(PresetsDataViewTest, PresetNameIsFileName) {
 TEST_F(PresetsDataViewTest, ViewIsUpdatedAfterSetPresets) {
   EXPECT_CALL(app_, GetPresetLoadState)
       .Times(testing::AnyNumber())
-      .WillRepeatedly(testing::Return(PresetLoadState::kLoadable));
+      .WillRepeatedly(testing::Return(PresetLoadState(PresetLoadState::kLoadable)));
 
   orbit_client_protos::PresetInfo preset_info0{};
   const std::filesystem::path preset_filename0{"/path/filename.xyz"};
@@ -171,7 +166,7 @@ TEST_F(PresetsDataViewTest, ViewIsUpdatedAfterSetPresets) {
 TEST_F(PresetsDataViewTest, CheckListingOfModulesPerPreset) {
   EXPECT_CALL(app_, GetPresetLoadState)
       .Times(testing::AnyNumber())
-      .WillRepeatedly(testing::Return(PresetLoadState::kLoadable));
+      .WillRepeatedly(testing::Return(PresetLoadState(PresetLoadState::kLoadable)));
 
   orbit_client_protos::PresetModule module0{};
   module0.mutable_function_names()->Add("main");
@@ -207,14 +202,14 @@ TEST_F(PresetsDataViewTest, CheckPresenceOfContextMenuEntries) {
       .Times(testing::AnyNumber())
       .WillRepeatedly([](const orbit_preset_file::PresetFile& preset) {
         if (preset.file_path().filename().string() == "loadable.preset") {
-          return PresetLoadState::kLoadable;
+          return PresetLoadState(PresetLoadState::kLoadable);
         }
 
         if (preset.file_path().filename().string() == "not_loadable.preset") {
-          return PresetLoadState::kNotLoadable;
+          return PresetLoadState(PresetLoadState::kNotLoadable);
         }
 
-        return PresetLoadState::kPartiallyLoadable;
+        return PresetLoadState(PresetLoadState::kPartiallyLoadable);
       });
 
   const std::filesystem::path preset_filename0{"/path/loadable.preset"};
@@ -258,13 +253,13 @@ TEST_F(PresetsDataViewTest, CheckPresenceOfContextMenuEntries) {
 TEST_F(PresetsDataViewTest, CheckInvokedContextMenuActions) {
   EXPECT_CALL(app_, GetPresetLoadState)
       .Times(testing::AnyNumber())
-      .WillRepeatedly(testing::Return(PresetLoadState::kLoadable));
+      .WillRepeatedly(testing::Return(PresetLoadState(PresetLoadState::kLoadable)));
 
-  auto temporary_preset_file = orbit_base::TemporaryFile::Create();
-  ASSERT_THAT(temporary_preset_file, orbit_test_utils::HasNoError());
-  temporary_preset_file.value().CloseAndRemove();
+  auto temporary_dir = orbit_test_utils::TemporaryDirectory::Create();
+  ASSERT_THAT(temporary_dir, orbit_test_utils::HasNoError());
 
-  const std::filesystem::path preset_filename0 = temporary_preset_file.value().file_path();
+  const std::filesystem::path preset_filename0 =
+      temporary_dir.value().GetDirectoryPath() / "preset0.orbit";
   orbit_preset_file::PresetFile preset_file0{preset_filename0, orbit_client_protos::PresetInfo{}};
   ASSERT_THAT(preset_file0.SaveToFile(), orbit_test_utils::HasNoError());
   auto date_modified = orbit_base::GetFileDateModified(preset_filename0);
@@ -353,7 +348,7 @@ TEST_F(PresetsDataViewTest, CheckInvokedContextMenuActions) {
 TEST_F(PresetsDataViewTest, CheckLoadPresetOnDoubleClick) {
   EXPECT_CALL(app_, GetPresetLoadState)
       .Times(testing::AnyNumber())
-      .WillRepeatedly(testing::Return(PresetLoadState::kLoadable));
+      .WillRepeatedly(testing::Return(PresetLoadState(PresetLoadState::kLoadable)));
 
   const std::filesystem::path preset_filename0{"/path/loadable.preset"};
   orbit_preset_file::PresetFile preset_file0{preset_filename0, orbit_client_protos::PresetInfo{}};
@@ -376,7 +371,7 @@ TEST_F(PresetsDataViewTest, CheckLoadPresetOnDoubleClick) {
 TEST_F(PresetsDataViewTest, CheckSortingByPresetName) {
   EXPECT_CALL(app_, GetPresetLoadState)
       .Times(testing::AnyNumber())
-      .WillRepeatedly(testing::Return(PresetLoadState::kLoadable));
+      .WillRepeatedly(testing::Return(PresetLoadState(PresetLoadState::kLoadable)));
 
   const std::filesystem::path preset_filename0{"/path/a.preset"};
   orbit_preset_file::PresetFile preset_file0{preset_filename0, orbit_client_protos::PresetInfo{}};
@@ -403,7 +398,7 @@ TEST_F(PresetsDataViewTest, CheckSortingByPresetName) {
 TEST_F(PresetsDataViewTest, Filter) {
   EXPECT_CALL(app_, GetPresetLoadState)
       .Times(testing::AnyNumber())
-      .WillRepeatedly(testing::Return(PresetLoadState::kLoadable));
+      .WillRepeatedly(testing::Return(PresetLoadState(PresetLoadState::kLoadable)));
 
   const std::filesystem::path preset_filename0{"/path/a.preset"};
   orbit_preset_file::PresetFile preset_file0{preset_filename0, orbit_client_protos::PresetInfo{}};

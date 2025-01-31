@@ -4,7 +4,7 @@
 
 #include "UprobesUnwindingVisitor.h"
 
-#include <asm/perf_regs.h>
+#include <absl/types/span.h>
 #include <sys/mman.h>
 #include <unwindstack/MapInfo.h>
 #include <unwindstack/Object.h>
@@ -13,20 +13,24 @@
 #include <unwindstack/Unwinder.h>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "GrpcProtos/capture.pb.h"
 #include "GrpcProtos/module.pb.h"
-#include "LeafFunctionCallManager.h"
+#include "LibunwindstackMultipleOfflineAndProcessMemory.h"
 #include "ModuleUtils/ReadLinuxModules.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
 #include "PerfEvent.h"
+#include "unwindstack/Arch.h"
+#include "unwindstack/Maps.h"
+#include "unwindstack/Memory.h"
 
 namespace orbit_linux_tracing {
 
@@ -37,7 +41,7 @@ using orbit_grpc_protos::FunctionCall;
 using orbit_grpc_protos::ThreadStateSliceCallstack;
 
 static bool CallstackIsInUserSpaceInstrumentation(
-    const std::vector<unwindstack::FrameData>& frames,
+    absl::Span<const unwindstack::FrameData> frames,
     const UserSpaceInstrumentationAddresses& user_space_instrumentation_addresses) {
   ORBIT_CHECK(!frames.empty());
 
@@ -305,7 +309,7 @@ void UprobesUnwindingVisitor::Visit(uint64_t event_timestamp,
   thread_state_slice_callstack.set_thread_state_slice_tid(event_data.prev_tid);
   thread_state_slice_callstack.set_timestamp_ns(event_timestamp);
 
-  bool const success = UnwindStack(event_data, thread_state_slice_callstack.mutable_callstack(),
+  const bool success = UnwindStack(event_data, thread_state_slice_callstack.mutable_callstack(),
                                    /*offline_memory_only=*/true);
 
   if (!success) {
@@ -481,7 +485,7 @@ void UprobesUnwindingVisitor::Visit(uint64_t event_timestamp,
   thread_state_slice_callstack.set_thread_state_slice_tid(event_data.prev_tid);
   thread_state_slice_callstack.set_timestamp_ns(event_timestamp);
 
-  bool const success =
+  const bool success =
       VisitCallchainEvent(event_data, thread_state_slice_callstack.mutable_callstack());
 
   if (!success) {
@@ -493,7 +497,7 @@ void UprobesUnwindingVisitor::Visit(uint64_t event_timestamp,
 
 void UprobesUnwindingVisitor::OnUprobes(
     uint64_t timestamp_ns, pid_t tid, uint32_t cpu, uint64_t sp, uint64_t ip,
-    uint64_t return_address, std::optional<perf_event_sample_regs_user_sp_ip_arguments> registers,
+    uint64_t return_address, std::optional<RingBufferSampleRegsUserSpIpArguments> registers,
     uint64_t function_id) {
   ORBIT_CHECK(listener_ != nullptr);
 

@@ -6,6 +6,7 @@
 
 #include <QFlags>
 #include <algorithm>
+#include <functional>
 #include <iterator>
 
 #include "GrpcProtos/process.pb.h"
@@ -70,11 +71,11 @@ QVariant ProcessItemModel::data(const QModelIndex& idx, int role) const {
   if (role == Qt::TextAlignmentRole) {
     switch (static_cast<Column>(idx.column())) {
       case Column::kPid:
-        return QVariant(Qt::AlignVCenter | Qt::AlignRight);
+        return QVariant::fromValue(Qt::AlignVCenter | Qt::AlignRight);
       case Column::kName:
         return {};
       case Column::kCpu:
-        return QVariant(Qt::AlignVCenter | Qt::AlignRight);
+        return QVariant::fromValue(Qt::AlignVCenter | Qt::AlignRight);
       case Column::kEnd:
         ORBIT_UNREACHABLE();
     }
@@ -121,11 +122,11 @@ int ProcessItemModel::rowCount(const QModelIndex& parent) const {
   return processes_.size();
 }
 
-void ProcessItemModel::SetProcesses(std::vector<ProcessInfo> new_processes) {
+void ProcessItemModel::SetProcesses(QVector<ProcessInfo> new_processes) {
   orbit_base::sort(new_processes.begin(), new_processes.end(), &ProcessInfo::pid);
 
-  auto old_iter = processes_.begin();
-  auto new_iter = new_processes.begin();
+  auto* old_iter = processes_.begin();
+  auto* new_iter = new_processes.begin();
 
   while (old_iter != processes_.end() && new_iter != new_processes.end()) {
     const int current_row = static_cast<int>(std::distance(processes_.begin(), old_iter));

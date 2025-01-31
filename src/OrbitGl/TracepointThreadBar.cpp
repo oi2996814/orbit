@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "TracepointThreadBar.h"
+#include "OrbitGl/TracepointThreadBar.h"
 
 #include <GteVector.h>
 #include <absl/strings/str_format.h>
@@ -10,20 +10,22 @@
 #include <memory>
 #include <utility>
 
-#include "App.h"
-#include "CaptureViewElement.h"
+#include "ApiInterface/Orbit.h"
 #include "ClientData/CaptureData.h"
-#include "ClientProtos/capture_data.pb.h"
-#include "CoreMath.h"
-#include "Geometry.h"
-#include "GlCanvas.h"
-#include "GrpcProtos/tracepoint.pb.h"
+#include "ClientData/TracepointEventInfo.h"
+#include "ClientData/TracepointInfo.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadConstants.h"
-#include "PrimitiveAssembler.h"
-#include "ThreadColor.h"
-#include "TimeGraphLayout.h"
-#include "Viewport.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/CaptureViewElement.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/ThreadColor.h"
+#include "OrbitGl/TimeGraphLayout.h"
+#include "OrbitGl/Viewport.h"
 
 namespace orbit_gl {
 
@@ -63,9 +65,9 @@ void TracepointThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assem
   float track_height = layout_->GetEventTrackHeightFromTid(GetThreadId());
   const bool picking = picking_mode != PickingMode::kNone;
 
-  const Color kWhite(255, 255, 255, 255);
-  const Color kWhiteTransparent(255, 255, 255, 190);
-  const Color kGrey(128, 128, 128, 255);
+  const Color white(255, 255, 255, 255);
+  const Color white_transparent(255, 255, 255, 190);
+  const Color grey(128, 128, 128, 255);
 
   ORBIT_CHECK(capture_data_ != nullptr);
 
@@ -77,14 +79,14 @@ void TracepointThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assem
           float radius = track_height / 4;
           const Vec2 pos(timeline_info_->GetWorldFromTick(time), GetPos()[1]);
           if (GetThreadId() == orbit_base::kAllThreadsOfAllProcessesTid) {
-            const Color color = tracepoint.pid() == capture_data_->process_id() ? kGrey : kWhite;
+            const Color color = tracepoint.pid() == capture_data_->process_id() ? grey : white;
             primitive_assembler.AddVerticalLine(pos, -track_height, z, color);
           } else {
-            primitive_assembler.AddVerticalLine(pos, -radius, z, kWhiteTransparent);
+            primitive_assembler.AddVerticalLine(pos, -radius, z, white_transparent);
             primitive_assembler.AddVerticalLine(Vec2(pos[0], pos[1] - track_height), radius, z,
-                                                kWhiteTransparent);
+                                                white_transparent);
             primitive_assembler.AddCircle(Vec2(pos[0], pos[1] - track_height / 2), radius, z,
-                                          kWhiteTransparent);
+                                          white_transparent);
           }
         });
 
@@ -104,14 +106,14 @@ void TracepointThreadBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assem
                 return GetTracepointTooltip(primitive_assembler, id);
               });
           user_data->custom_data_ = &tracepoint;
-          primitive_assembler.AddShadedBox(pos, size, z, kWhite, std::move(user_data));
+          primitive_assembler.AddShadedBox(pos, size, z, white, std::move(user_data));
         });
   }
 }
 
 std::string TracepointThreadBar::GetTracepointTooltip(PrimitiveAssembler& primitive_assembler,
                                                       PickingId id) const {
-  auto* user_data = primitive_assembler.GetUserData(id);
+  const auto* user_data = primitive_assembler.GetUserData(id);
   ORBIT_CHECK(user_data && user_data->custom_data_);
 
   const auto* tracepoint_event_info =
@@ -136,14 +138,13 @@ std::string TracepointThreadBar::GetTracepointTooltip(PrimitiveAssembler& primit
         tracepoint_info->category(), tracepoint_info->name(), tracepoint_event_info->cpu(),
         capture_data_->GetThreadName(tracepoint_event_info->pid()), tracepoint_event_info->pid(),
         capture_data_->GetThreadName(tracepoint_event_info->tid()), tracepoint_event_info->tid());
-  } else {
-    return absl::StrFormat(
-        "<b>%s : %s</b><br/>"
-        "<i>Tracepoint event</i><br/>"
-        "<br/>"
-        "<b>Core:</b> %d<br/>",
-        tracepoint_info->category(), tracepoint_info->name(), tracepoint_event_info->cpu());
   }
+  return absl::StrFormat(
+      "<b>%s : %s</b><br/>"
+      "<i>Tracepoint event</i><br/>"
+      "<br/>"
+      "<b>Core:</b> %d<br/>",
+      tracepoint_info->category(), tracepoint_info->name(), tracepoint_event_info->cpu());
 }
 
 bool TracepointThreadBar::IsEmpty() const {

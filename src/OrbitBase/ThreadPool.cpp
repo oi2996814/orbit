@@ -5,16 +5,22 @@
 #include "OrbitBase/ThreadPool.h"
 
 #include <absl/base/attributes.h>
+#include <absl/base/const_init.h>
+#include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
+#include <absl/meta/type_traits.h>
 #include <absl/synchronization/mutex.h>
 #include <absl/time/time.h>
 
 #include <algorithm>
 #include <list>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "OrbitBase/Executor.h"
 #include "OrbitBase/Logging.h"
 
 namespace orbit_base {
@@ -29,7 +35,7 @@ class ThreadPoolImpl : public ThreadPool {
   explicit ThreadPoolImpl(size_t thread_pool_min_size, size_t thread_pool_max_size,
                           absl::Duration thread_ttl,
                           std::function<void(const std::unique_ptr<Action>&)> run_action);
-  ~ThreadPoolImpl() {
+  ~ThreadPoolImpl() override {
     ShutdownInternal();
     WaitInternal();
   }
@@ -41,6 +47,7 @@ class ThreadPoolImpl : public ThreadPool {
 
  private:
   void ScheduleImpl(std::unique_ptr<Action> action) override;
+  [[nodiscard]] Handle GetExecutorHandle() const override { return executor_handle_.Get(); }
   bool ActionsAvailableOrShutdownInitiated();
   // Blocking call - returns nullptr if the worker thread needs to exit.
   std::unique_ptr<Action> TakeAction();
@@ -62,6 +69,8 @@ class ThreadPoolImpl : public ThreadPool {
   size_t idle_threads_;
   bool shutdown_initiated_;
   std::function<void(const std::unique_ptr<Action>&)> run_action_ = nullptr;
+
+  Executor::ScopedHandle executor_handle_{this};
 };
 
 ThreadPoolImpl::ThreadPoolImpl(size_t thread_pool_min_size, size_t thread_pool_max_size,
@@ -218,7 +227,7 @@ void ThreadPool::InitializeDefaultThreadPool() {
   (void)GetDefaultThreadPool();
 }
 
-void ThreadPool::SetDefaultThreadPool(std::shared_ptr<ThreadPool> thread_pool) {
+void ThreadPool::SetDefaultThreadPool(const std::shared_ptr<ThreadPool>& thread_pool) {
   ORBIT_CHECK(thread_pool != nullptr);
   absl::MutexLock lock(&g_default_thread_pool_mutex);
   ORBIT_CHECK(g_default_thread_pool == nullptr);

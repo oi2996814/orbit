@@ -8,8 +8,9 @@
 #include <QMessageBox>
 #include <QObject>
 #include <memory>
-#include <string>
+#include <string_view>
 
+#include "MizarWidgets/SamplingWithFrameTrackWidget.h"
 #include "ui_MizarMainWindow.h"
 
 namespace orbit_mizar_widgets {
@@ -22,8 +23,9 @@ MizarMainWindow::MizarMainWindow(
   ui_->setupUi(this);
   QObject::connect(ui_->sampling_with_frame_track_widget_,
                    &SamplingWithFrameTrackWidget::ReportError, this,
-                   [this](const std::string& message) {
-                     QMessageBox::critical(this, "Invalid input", QString::fromStdString(message));
+                   [this](std::string_view message) {
+                     QMessageBox::critical(this, "Invalid input",
+                                           QString::fromUtf8(message.data(), message.size()));
                    });
 
   ui_->sampling_with_frame_track_widget_->Init(baseline_and_comparison, baseline_file_name,

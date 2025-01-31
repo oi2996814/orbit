@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "orbiteventiterator.h"
+#include "OrbitQt/orbiteventiterator.h"
+
+#include <absl/strings/str_format.h>
 
 #include <QLabel>
 #include <QPushButton>
 #include <algorithm>
 
-#include "ElidedLabel.h"
-#include "absl/strings/str_format.h"
+#include "OrbitQt/ElidedLabel.h"
 #include "ui_orbiteventiterator.h"
 
 OrbitEventIterator::OrbitEventIterator(QWidget* parent)
@@ -37,8 +38,8 @@ void OrbitEventIterator::on_DeleteButton_clicked() {
   }
 }
 
-void OrbitEventIterator::SetFunctionName(const std::string& function_name) {
-  ui->Label->setTextWithElision(QString::fromStdString(function_name));
+void OrbitEventIterator::SetFunctionName(std::string_view function_name) {
+  ui->Label->setTextWithElision(QString::fromUtf8(function_name.data(), function_name.size()));
 }
 
 void OrbitEventIterator::SetMinMaxTime(uint64_t min_time, uint64_t max_time) {

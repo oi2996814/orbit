@@ -2,15 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "MemoryTracingUtils.h"
+#include "MemoryTracing/MemoryTracingUtils.h"
 
 #include <absl/strings/numbers.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
-#include <stdlib.h>
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "GrpcProtos/Constants.h"
 #include "OrbitBase/Logging.h"
@@ -60,7 +61,7 @@ ErrorMessageOr<void> UpdateSystemMemoryUsageFromMemInfo(std::string_view meminfo
       continue;
     }
 
-    int64_t memory_size_value;
+    int64_t memory_size_value{};
     if (!absl::SimpleAtoi(splits[1], &memory_size_value)) {
       absl::StrAppend(&error_message, "Fail to extract value in line: ", line, "\n");
       continue;
@@ -98,7 +99,7 @@ ErrorMessageOr<void> UpdateSystemMemoryUsageFromVmStat(std::string_view vmstat_c
       continue;
     }
 
-    int64_t value;
+    int64_t value{};
     if (!absl::SimpleAtoi(splits[1], &value)) {
       absl::StrAppend(&error_message, "Fail to extract value in line: ", line, "\n");
       continue;
@@ -119,9 +120,9 @@ ErrorMessageOr<SystemMemoryUsage> GetSystemMemoryUsage() {
   SystemMemoryUsage system_memory_usage = CreateAndInitializeSystemMemoryUsage();
   system_memory_usage.set_timestamp_ns(orbit_base::CaptureTimestampNs());
 
-  const std::string kSystemMemoryUsageFilename = "/proc/meminfo";
+  const std::string system_memory_usage_filename = "/proc/meminfo";
   ErrorMessageOr<std::string> reading_result =
-      orbit_base::ReadFileToString(kSystemMemoryUsageFilename);
+      orbit_base::ReadFileToString(system_memory_usage_filename);
   if (reading_result.has_error()) {
     ORBIT_ERROR("%s", reading_result.error().message());
     return reading_result.error();
@@ -129,19 +130,19 @@ ErrorMessageOr<SystemMemoryUsage> GetSystemMemoryUsage() {
   ErrorMessageOr<void> updating_result =
       UpdateSystemMemoryUsageFromMemInfo(reading_result.value(), &system_memory_usage);
   if (updating_result.has_error()) {
-    ORBIT_ERROR("Updating SystemMemoryUsage from %s: %s", kSystemMemoryUsageFilename,
+    ORBIT_ERROR("Updating SystemMemoryUsage from %s: %s", system_memory_usage_filename,
                 updating_result.error().message());
   }
 
-  const std::string kSystemPageFaultsFilename = "/proc/vmstat";
-  reading_result = orbit_base::ReadFileToString(kSystemPageFaultsFilename);
+  const std::string system_page_faults_filename = "/proc/vmstat";
+  reading_result = orbit_base::ReadFileToString(system_page_faults_filename);
   if (reading_result.has_error()) {
     ORBIT_ERROR("%s", reading_result.error().message());
     return reading_result.error();
   }
   updating_result = UpdateSystemMemoryUsageFromVmStat(reading_result.value(), &system_memory_usage);
   if (updating_result.has_error()) {
-    ORBIT_ERROR("Updating SystemMemoryUsage from %s: %s", kSystemPageFaultsFilename,
+    ORBIT_ERROR("Updating SystemMemoryUsage from %s: %s", system_page_faults_filename,
                 updating_result.error().message());
   }
 
@@ -172,8 +173,8 @@ ErrorMessageOr<void> UpdateProcessMemoryUsageFromProcessStat(
     return ErrorMessage(absl::StrFormat("Wrong format: only %d fields", splits.size()));
   }
 
-  int64_t value;
-  std::string error_message;
+  int64_t value{};
+  std::string error_message{};
   if (absl::SimpleAtoi(splits[9], &value)) {
     process_memory_usage->set_minflt(value);
   } else {
@@ -202,7 +203,7 @@ ErrorMessageOr<int64_t> ExtractRssAnonFromProcessStatus(std::string_view status_
         return ErrorMessage(absl::StrFormat("Wrong format in line: %s\n", line));
       }
 
-      int64_t value;
+      int64_t value{};
       if (!absl::SimpleAtoi(splits[1], &value)) {
         return ErrorMessage(absl::StrFormat("Fail to extract value in line: %s\n", line));
       }
@@ -219,9 +220,9 @@ ErrorMessageOr<ProcessMemoryUsage> GetProcessMemoryUsage(pid_t pid) {
   process_memory_usage.set_pid(pid);
   process_memory_usage.set_timestamp_ns(orbit_base::CaptureTimestampNs());
 
-  const std::string kProcessPageFaultsFilename = absl::StrFormat("/proc/%d/stat", pid);
+  const std::string process_page_faults_filename = absl::StrFormat("/proc/%d/stat", pid);
   ErrorMessageOr<std::string> reading_result =
-      orbit_base::ReadFileToString(kProcessPageFaultsFilename);
+      orbit_base::ReadFileToString(process_page_faults_filename);
   if (reading_result.has_error()) {
     ORBIT_ERROR("%s", reading_result.error().message());
     return reading_result.error();
@@ -229,12 +230,12 @@ ErrorMessageOr<ProcessMemoryUsage> GetProcessMemoryUsage(pid_t pid) {
   ErrorMessageOr<void> updating_result =
       UpdateProcessMemoryUsageFromProcessStat(reading_result.value(), &process_memory_usage);
   if (updating_result.has_error()) {
-    ORBIT_ERROR("Updating ProcessMemoryUsage from %s: %s", kProcessPageFaultsFilename,
+    ORBIT_ERROR("Updating ProcessMemoryUsage from %s: %s", process_page_faults_filename,
                 updating_result.error().message());
   }
 
-  const std::string kProcessMemoryUsageFilename = absl::StrFormat("/proc/%u/status", pid);
-  reading_result = orbit_base::ReadFileToString(kProcessMemoryUsageFilename);
+  const std::string process_memory_usage_filename = absl::StrFormat("/proc/%u/status", pid);
+  reading_result = orbit_base::ReadFileToString(process_memory_usage_filename);
   if (reading_result.has_error()) {
     ORBIT_ERROR("%s", reading_result.error().message());
     return reading_result.error();
@@ -242,7 +243,7 @@ ErrorMessageOr<ProcessMemoryUsage> GetProcessMemoryUsage(pid_t pid) {
   ErrorMessageOr<int64_t> extracting_result =
       ExtractRssAnonFromProcessStatus(reading_result.value());
   if (extracting_result.has_error()) {
-    ORBIT_ERROR("Extracting process RssAnon from %s: %s", kProcessMemoryUsageFilename,
+    ORBIT_ERROR("Extracting process RssAnon from %s: %s", process_memory_usage_filename,
                 extracting_result.error().message());
   } else {
     process_memory_usage.set_rss_anon_kb(extracting_result.value());
@@ -284,14 +285,13 @@ ErrorMessageOr<void> UpdateCGroupMemoryUsageFromMemoryLimitInBytes(
   if (memory_limit_in_bytes_content.empty()) return ErrorMessage("Empty file content.");
 
   // The memory.limit_in_bytes file use "bytes" as the size unit.
-  int64_t memory_limit_in_bytes;
+  int64_t memory_limit_in_bytes{};
   if (absl::SimpleAtoi(memory_limit_in_bytes_content, &memory_limit_in_bytes)) {
     cgroup_memory_usage->set_limit_bytes(memory_limit_in_bytes);
     return outcome::success();
-  } else {
-    return ErrorMessage(
-        absl::StrFormat("Fail to extract limit value from: %s", memory_limit_in_bytes_content));
   }
+  return ErrorMessage(
+      absl::StrFormat("Fail to extract limit value from: %s", memory_limit_in_bytes_content));
 }
 
 ErrorMessageOr<void> UpdateCGroupMemoryUsageFromMemoryStat(std::string_view memory_stat_content,
@@ -310,7 +310,7 @@ ErrorMessageOr<void> UpdateCGroupMemoryUsageFromMemoryStat(std::string_view memo
       continue;
     }
 
-    int64_t value;
+    int64_t value{};
     if (!absl::SimpleAtoi(splits[1], &value)) {
       absl::StrAppend(&error_message, "Fail to extract value in line: ", line, "\n");
       continue;
@@ -344,9 +344,9 @@ ErrorMessageOr<void> UpdateCGroupMemoryUsageFromMemoryStat(std::string_view memo
 ErrorMessageOr<CGroupMemoryUsage> GetCGroupMemoryUsage(pid_t pid) {
   uint64_t current_timestamp_ns = orbit_base::CaptureTimestampNs();
 
-  const std::string kProcessCGroupsFilename = absl::StrFormat("/proc/%d/cgroup", pid);
+  const std::string process_c_groups_filename = absl::StrFormat("/proc/%d/cgroup", pid);
   ErrorMessageOr<std::string> reading_result =
-      orbit_base::ReadFileToString(kProcessCGroupsFilename);
+      orbit_base::ReadFileToString(process_c_groups_filename);
   if (reading_result.has_error()) {
     ORBIT_ERROR("%s", reading_result.error().message());
     return reading_result.error();
@@ -363,9 +363,9 @@ ErrorMessageOr<CGroupMemoryUsage> GetCGroupMemoryUsage(pid_t pid) {
   cgroup_memory_usage.set_cgroup_name(cgroup_name);
   cgroup_memory_usage.set_timestamp_ns(current_timestamp_ns);
 
-  const std::string kCGroupMemoryLimitFilename =
+  const std::string c_group_memory_limit_filename =
       absl::StrFormat("/sys/fs/cgroup/memory/%s/memory.limit_in_bytes", cgroup_name);
-  reading_result = orbit_base::ReadFileToString(kCGroupMemoryLimitFilename);
+  reading_result = orbit_base::ReadFileToString(c_group_memory_limit_filename);
   if (reading_result.has_error()) {
     ORBIT_ERROR("%s", reading_result.error().message());
     return reading_result.error();
@@ -373,13 +373,13 @@ ErrorMessageOr<CGroupMemoryUsage> GetCGroupMemoryUsage(pid_t pid) {
   ErrorMessageOr<void> updating_result =
       UpdateCGroupMemoryUsageFromMemoryLimitInBytes(reading_result.value(), &cgroup_memory_usage);
   if (updating_result.has_error()) {
-    ORBIT_ERROR("Updating CGroupMemoryUsage from %s: %s", kCGroupMemoryLimitFilename,
+    ORBIT_ERROR("Updating CGroupMemoryUsage from %s: %s", c_group_memory_limit_filename,
                 updating_result.error().message());
   }
 
-  const std::string kCGroupMemoryUsageAndPageFaultsFilename =
+  const std::string c_group_memory_usage_and_page_faults_filename =
       absl::StrFormat("/sys/fs/cgroup/memory/%s/memory.stat", cgroup_name);
-  reading_result = orbit_base::ReadFileToString(kCGroupMemoryUsageAndPageFaultsFilename);
+  reading_result = orbit_base::ReadFileToString(c_group_memory_usage_and_page_faults_filename);
   if (reading_result.has_error()) {
     ORBIT_ERROR("%s", reading_result.error().message());
     return reading_result.error();
@@ -387,8 +387,8 @@ ErrorMessageOr<CGroupMemoryUsage> GetCGroupMemoryUsage(pid_t pid) {
   updating_result =
       UpdateCGroupMemoryUsageFromMemoryStat(reading_result.value(), &cgroup_memory_usage);
   if (updating_result.has_error()) {
-    ORBIT_ERROR("Updating CGroupMemoryUsage from %s: %s", kCGroupMemoryUsageAndPageFaultsFilename,
-                updating_result.error().message());
+    ORBIT_ERROR("Updating CGroupMemoryUsage from %s: %s",
+                c_group_memory_usage_and_page_faults_filename, updating_result.error().message());
   }
 
   return cgroup_memory_usage;

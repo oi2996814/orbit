@@ -11,15 +11,6 @@
 
 namespace orbit_client_data {
 
-struct TimerMetadata {
-  bool is_empty;
-  size_t number_of_timers;
-  uint64_t min_time;
-  uint64_t max_time;
-  uint32_t depth;
-  uint32_t process_id;
-};
-
 // Interface to be use by TimerDataProvider to access data from TimerTracks.
 class TimerDataInterface {
  public:
@@ -30,8 +21,11 @@ class TimerDataInterface {
 
   // Timers queries
   [[nodiscard]] virtual std::vector<const TimerChain*> GetChains() const = 0;
+  // Returns all timers contained in [min_tick, max_tick] (always inclusive).
+  // if exclusive=true, excludes timers that start or end outside of the time range.
+  // if exclusive=false, includes all timers that intersect with the time range.
   [[nodiscard]] virtual std::vector<const orbit_client_protos::TimerInfo*> GetTimers(
-      uint64_t min_tick, uint64_t max_tick) const = 0;
+      uint64_t min_tick, uint64_t max_tick, bool exclusive) const = 0;
   // Returns timers in a particular depth avoiding completely overlapped timers that map to the
   // same pixels in the screen. It assures to return at least one timer in each occupied pixel. The
   // overall complexity is faster than GetTimers since it doesn't require going through all timers.

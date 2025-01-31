@@ -6,9 +6,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <initializer_list>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "TestUtils/ContainerHelpers.h"
@@ -27,8 +30,7 @@ TEST(ContainerHelpersTest, MakeMapIsCorrect) {
   {
     auto keys = kKeys;
     auto values = kValues;
-    EXPECT_THAT(MakeMap(std::move(keys), std::move(values)),
-                UnorderedElementsAreArray(kExpectedMap));
+    EXPECT_THAT(MakeMap(keys, values), UnorderedElementsAreArray(kExpectedMap));
   }
 
   {

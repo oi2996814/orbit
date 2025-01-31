@@ -2,11 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/time/time.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+
+#include <algorithm>
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include "OrbitBase/Future.h"
 #include "OrbitBase/ImmediateExecutor.h"
 #include "OrbitBase/Promise.h"
+#include "OrbitBase/Result.h"
+#include "OrbitBase/ThreadPool.h"
 
 namespace orbit_base {
 
@@ -250,5 +259,37 @@ TEST(Future, ThenIfSuccessWithIntAndError) {
   EXPECT_TRUE(called);
   EXPECT_TRUE(chained_future.IsFinished());
   EXPECT_FALSE(chained_future.Get().has_error());
+}
+
+TEST(Future, FutureThenFutureWithError) {
+  constexpr size_t kThreadPoolMinSize = 1;
+  constexpr size_t kThreadPoolMaxSize = 2;
+  constexpr absl::Duration kThreadTtl = absl::Milliseconds(5);
+  static std::shared_ptr<ThreadPool> thread_pool =
+      ThreadPool::Create(kThreadPoolMinSize, kThreadPoolMaxSize, kThreadTtl);
+
+  bool called_b = false;
+  bool called_c = false;
+
+  auto future_a = thread_pool->Schedule([]() -> ErrorMessageOr<int> { return ErrorMessage{}; });
+
+  auto future_b =
+      future_a.ThenIfSuccess(thread_pool.get(), [&called_b](int value) -> ErrorMessageOr<int> {
+        called_b = true;
+        return value;
+      });
+
+  auto future_c = future_b.Then(thread_pool.get(),
+                                [&called_c](ErrorMessageOr<int> result_b) -> ErrorMessageOr<int> {
+                                  called_c = true;
+                                  if (result_b.has_error()) {
+                                    return ErrorMessage{};
+                                  }
+                                  return result_b.value();
+                                });
+
+  EXPECT_TRUE(future_c.Get().has_error());
+  EXPECT_FALSE(called_b);
+  EXPECT_TRUE(called_c);
 }
 }  // namespace orbit_base

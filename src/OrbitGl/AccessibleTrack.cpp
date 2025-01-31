@@ -2,16 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "AccessibleTrack.h"
+#include "OrbitGl/AccessibleTrack.h"
 
 #include <GteVector.h>
 
-#include <algorithm>
+#include <vector>
 
-#include "CoreMath.h"
 #include "OrbitBase/Logging.h"
-#include "Track.h"
-#include "Viewport.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/Track.h"
 
 using orbit_accessibility::AccessibilityState;
 using orbit_accessibility::AccessibleInterface;
@@ -110,21 +109,21 @@ AccessibilityState AccessibleTrack::AccessibleState() const {
 
   using State = AccessibilityState;
 
-  State result = State::Normal | State::Focusable | State::Movable;
+  State result = State::kNormal | State::kFocusable | State::kMovable;
   if (track_->IsTrackSelected()) {
-    result |= State::Focused;
+    result |= State::kFocused;
   }
   if (track_->IsCollapsible()) {
-    result |= State::Expandable;
+    result |= State::kExpandable;
     if (track_->IsCollapsed()) {
-      result |= State::Collapsed;
+      result |= State::kCollapsed;
     } else {
-      result |= State::Expanded;
+      result |= State::kExpanded;
     }
   }
 
   if (AccessibleRect().height == 0) {
-    result |= State::Offscreen;
+    result |= State::kOffscreen;
   }
   return result;
 }

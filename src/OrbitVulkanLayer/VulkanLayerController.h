@@ -563,7 +563,7 @@ class VulkanLayerController {
 
     // This is a general query, so we need to append our extensions to the ones down in the
     // callchain.
-    uint32_t num_other_extensions;
+    uint32_t num_other_extensions{};
     VkResult result = dispatch_table_.EnumerateDeviceExtensionProperties(physical_device)(
         physical_device, nullptr, &num_other_extensions, nullptr);
     if (result != VK_SUCCESS) {
@@ -643,7 +643,7 @@ class VulkanLayerController {
     }
     uint32_t pid = orbit_base::GetCurrentProcessId();
     ORBIT_LOG("Writing PID of %u to \"%s\"", pid, pid_file);
-    ErrorMessageOr<orbit_base::unique_fd> error_or_file = orbit_base::OpenFileForWriting(pid_file);
+    ErrorMessageOr<orbit_base::UniqueFd> error_or_file = orbit_base::OpenFileForWriting(pid_file);
     ORBIT_FAIL_IF(error_or_file.has_error(), "Opening \"%s\": %s", pid_file,
                   error_or_file.error().message());
     ErrorMessageOr<void> result =

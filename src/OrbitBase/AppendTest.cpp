@@ -5,18 +5,28 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include "OrbitBase/Append.h"
 
 namespace orbit_base {
 
-TEST(Append, SourceIsVariable) {
+TEST(Append, SourceIsVectorVariable) {
   std::vector<std::string> dest{"a", "b"};
   std::vector<std::string> source{"c", "d", "e"};
   Append(dest, source);
   EXPECT_THAT(dest, ::testing::ElementsAre("a", "b", "c", "d", "e"));
 }
 
-TEST(Append, SourceIsTemporary) {
+TEST(Append, SourceIsTemporaryVector) {
+  std::vector<std::string> dest{"a", "b"};
+  Append(dest, std::vector<std::string>{"c", "d", "e"});
+  EXPECT_THAT(dest, ::testing::ElementsAre("a", "b", "c", "d", "e"));
+}
+
+TEST(Append, SourceIsInitializerList) {
   std::vector<std::string> dest{"a", "b"};
   Append(dest, {"c", "d", "e"});
   EXPECT_THAT(dest, ::testing::ElementsAre("a", "b", "c", "d", "e"));

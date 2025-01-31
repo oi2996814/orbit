@@ -15,6 +15,8 @@
 #include "ClientData/CaptureDataHolder.h"
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifier.h"
+#include "ClientData/ModulePathAndBuildId.h"
 #include "ClientData/PostProcessedSamplingData.h"
 #include "ClientData/ProcessData.h"
 #include "ClientProtos/capture_data.pb.h"
@@ -25,7 +27,6 @@
 #include "PresetFile/PresetFile.h"
 #include "Statistics/BinomialConfidenceInterval.h"
 #include "Statistics/Histogram.h"
-#include "SymbolProvider/ModuleIdentifier.h"
 
 namespace orbit_data_views {
 
@@ -34,13 +35,13 @@ class AppInterface : public orbit_client_data::CaptureDataHolder {
 
  public:
   AppInterface() = default;
-  virtual ~AppInterface() = default;
+  ~AppInterface() override = default;
 
   // Functions needed by DataView
-  virtual void SetClipboard(const std::string& contents) = 0;
-  [[nodiscard]] virtual std::string GetSaveFile(const std::string& extension) const = 0;
+  virtual void SetClipboard(std::string_view contents) = 0;
+  [[nodiscard]] virtual std::string GetSaveFile(std::string_view extension) const = 0;
 
-  virtual void SendErrorToUi(const std::string& title, const std::string& text) = 0;
+  virtual void SendErrorToUi(std::string title, std::string text) = 0;
 
   // Functions needed by PresetsDataView
   virtual orbit_base::Future<ErrorMessageOr<void>> LoadPreset(
@@ -77,8 +78,6 @@ class AppInterface : public orbit_client_data::CaptureDataHolder {
   [[nodiscard]] virtual orbit_client_data::ModuleManager* GetMutableModuleManager() = 0;
 
   // Functions needed by ModulesDataView
-  virtual void OnValidateFramePointers(
-      std::vector<const orbit_client_data::ModuleData*> modules_to_validate) = 0;
   virtual orbit_base::Future<ErrorMessageOr<void>> UpdateProcessAndModuleList() = 0;
 
   // Functions needed by TracepointsDataView
@@ -94,9 +93,14 @@ class AppInterface : public orbit_client_data::CaptureDataHolder {
   [[nodiscard]] virtual const orbit_client_data::ProcessData* GetTargetProcess() const = 0;
 
   [[nodiscard]] virtual const orbit_client_data::ModuleData* GetModuleByModuleIdentifier(
-      const orbit_symbol_provider::ModuleIdentifier& module_id) const = 0;
+      orbit_client_data::ModuleIdentifier module_id) const = 0;
   [[nodiscard]] virtual orbit_client_data::ModuleData* GetMutableModuleByModuleIdentifier(
-      const orbit_symbol_provider::ModuleIdentifier& module_id) = 0;
+      orbit_client_data::ModuleIdentifier module_id) = 0;
+  [[nodiscard]] virtual const orbit_client_data::ModuleData* GetModuleByModulePathAndBuildId(
+      const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) const = 0;
+  [[nodiscard]] virtual orbit_client_data::ModuleData* GetMutableModuleByModulePathAndBuildId(
+      const orbit_client_data::ModulePathAndBuildId& module_path_and_build_id) = 0;
+
   virtual orbit_base::Future<void> LoadSymbolsManually(
       absl::Span<const orbit_client_data::ModuleData* const> modules) = 0;
 
@@ -112,7 +116,7 @@ class AppInterface : public orbit_client_data::CaptureDataHolder {
   virtual void Disassemble(uint32_t pid, const orbit_client_data::FunctionInfo& function) = 0;
   virtual void ShowSourceCode(const orbit_client_data::FunctionInfo& function) = 0;
 
-  virtual void ShowHistogram(const std::vector<uint64_t>* data, const std::string& scope_name,
+  virtual void ShowHistogram(const std::vector<uint64_t>* data, std::string scope_name,
                              std::optional<ScopeId> scope_id) = 0;
 
   [[nodiscard]] virtual const orbit_statistics::BinomialConfidenceIntervalEstimator&

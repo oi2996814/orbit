@@ -6,21 +6,31 @@
 
 #include <absl/base/casts.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/meta/type_traits.h>
+#include <absl/strings/str_format.h>
+#include <absl/types/span.h>
+#include <capstone/capstone.h>
 #include <dlfcn.h>
-#include <linux/seccomp.h>
+#include <sched.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
-#include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "AccessTraceesMemory.h"
 #include "AllocateInTracee.h"
 #include "ExecuteMachineCode.h"
+#include "GrpcProtos/module.pb.h"
 #include "MachineCode.h"
 #include "ModuleUtils/ReadLinuxModules.h"
 #include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
@@ -80,7 +90,7 @@ bool ProcessWithPidExists(pid_t pid) {
 }
 
 // Returns true if liborbituserspaceinstrumentation.so is present in target process.
-ErrorMessageOr<bool> AlreadyInjected(const std::vector<ModuleInfo>& modules) {
+ErrorMessageOr<bool> AlreadyInjected(absl::Span<const ModuleInfo> modules) {
   for (const ModuleInfo& module : modules) {
     if (module.name() == kLibName) {
       return true;
@@ -129,8 +139,7 @@ bool IsBlocklisted(std::string_view function_name) {
 // Note that calling the result of the clone call a "thread" is a bit of a misnomer: We
 // do not create a new data structure for thread local storage but use the one of the thread we
 // halted.
-ErrorMessageOr<MachineCode> MachineCodeForCloneCall(pid_t pid,
-                                                    const std::vector<ModuleInfo>& modules,
+ErrorMessageOr<MachineCode> MachineCodeForCloneCall(pid_t pid, absl::Span<const ModuleInfo> modules,
                                                     void* library_handle, uint64_t top_of_stack) {
   constexpr uint64_t kCloneFlags =
       CLONE_FILES | CLONE_FS | CLONE_IO | CLONE_SIGHAND | CLONE_SYSVSEM | CLONE_THREAD | CLONE_VM;
@@ -202,7 +211,7 @@ ErrorMessageOr<std::vector<pid_t>> GetNewOrbitThreads(
   // happened in the real target processes.
   // We choose a three second (300 x 10 ms) timeout and query the existing threads every 10 ms.
   constexpr int kNumberOfRetries = 300;
-  std::chrono::milliseconds kWaitingPeriod{10};
+  constexpr std::chrono::milliseconds kWaitingPeriod{10};
   std::vector<pid_t> orbit_threads;
   std::multiset<std::string> orbit_threads_names;
   int count = 0;
@@ -230,7 +239,7 @@ ErrorMessageOr<std::vector<pid_t>> GetNewOrbitThreads(
   return orbit_threads;
 }
 
-ErrorMessageOr<void> SetOrbitThreadsInTarget(pid_t pid, const std::vector<ModuleInfo>& modules,
+ErrorMessageOr<void> SetOrbitThreadsInTarget(pid_t pid, absl::Span<const ModuleInfo> modules,
                                              void* library_handle,
                                              const std::vector<pid_t>& orbit_threads) {
   ORBIT_CHECK(orbit_threads.size() == GetExpectedOrbitThreadNames().size());
@@ -246,7 +255,7 @@ ErrorMessageOr<void> SetOrbitThreadsInTarget(pid_t pid, const std::vector<Module
 // Given the path of a module in the process, get all loaded instances of that module (usually there
 // will only be one, but a module can be loaded more than once).
 ErrorMessageOr<std::vector<ModuleInfo>> ModulesFromModulePath(
-    const std::vector<ModuleInfo>& modules, const std::string& path,
+    absl::Span<const ModuleInfo> modules, std::string_view path,
     absl::flat_hash_map<std::string, std::vector<ModuleInfo>>* cache_of_modules_from_path) {
   ORBIT_CHECK(cache_of_modules_from_path != nullptr);
   auto cached_modules_from_path_it = cache_of_modules_from_path->find(path);
@@ -281,14 +290,14 @@ class InstrumentedProcess {
   ~InstrumentedProcess() = default;
 
   [[nodiscard]] static ErrorMessageOr<std::unique_ptr<InstrumentedProcess>> Create(
-      pid_t pid, const std::vector<ModuleInfo>& modules);
+      pid_t pid, absl::Span<const ModuleInfo> modules);
 
   // Instruments the functions capture_options.instrumented_functions. Returns a set of
   // function_id's of successfully instrumented functions, a map of function_id's to errors for
   // functions that couldn't be instrumented, the address ranges dedicated to trampolines, and the
   // map name of the injected library.
   [[nodiscard]] ErrorMessageOr<InstrumentationManager::InstrumentationResult> InstrumentFunctions(
-      const CaptureOptions& capture_options, const std::vector<ModuleInfo>& modules);
+      const CaptureOptions& capture_options, absl::Span<const ModuleInfo> modules);
 
   // Removes the instrumentation for all functions in capture_options.instrumented_functions that
   // have been instrumented previously.
@@ -331,8 +340,8 @@ class InstrumentedProcess {
 
   // Keep track of all trampolines we created for this process.
   struct TrampolineData {
-    uint64_t trampoline_address;
-    uint64_t address_after_prologue;
+    uint64_t trampoline_address = 0;
+    uint64_t address_after_prologue = 0;
     // The first few bytes of the function. Guaranteed to contain everything that was overwritten.
     std::vector<uint8_t> function_data;
   };
@@ -364,7 +373,7 @@ class InstrumentedProcess {
 };
 
 ErrorMessageOr<std::unique_ptr<InstrumentedProcess>> InstrumentedProcess::Create(
-    pid_t pid, const std::vector<ModuleInfo>& modules) {
+    pid_t pid, absl::Span<const ModuleInfo> modules) {
   std::unique_ptr<InstrumentedProcess> process(new InstrumentedProcess());
   process->pid_ = pid;
   ORBIT_LOG("Starting to instrument process with pid %d", pid);
@@ -400,7 +409,8 @@ ErrorMessageOr<std::unique_ptr<InstrumentedProcess>> InstrumentedProcess::Create
   // in the previous run.
   OUTCOME_TRY(const bool already_injected, AlreadyInjected(modules));
 
-  auto library_handle_or_error = DlopenInTracee(pid, modules, library_path, RTLD_NOW);
+  auto library_handle_or_error =
+      DlmopenInTracee(pid, modules, library_path, RTLD_NOW, LinkerNamespace::kCreateNewNamespace);
   if (library_handle_or_error.has_error()) {
     return ErrorMessage(absl::StrFormat("Unable to open library in tracee: %s",
                                         library_handle_or_error.error().message()));
@@ -483,7 +493,7 @@ ErrorMessageOr<std::unique_ptr<InstrumentedProcess>> InstrumentedProcess::Create
 
 ErrorMessageOr<InstrumentationManager::InstrumentationResult>
 InstrumentedProcess::InstrumentFunctions(const CaptureOptions& capture_options,
-                                         const std::vector<ModuleInfo>& modules) {
+                                         absl::Span<const ModuleInfo> modules) {
   ORBIT_LOG("Instrumenting functions in process %d", pid_);
   OUTCOME_TRY(AttachAndStopProcess(pid_));
   orbit_base::unique_resource detach_on_exit{pid_, [](int32_t pid) {

@@ -7,15 +7,20 @@
 
 #include <absl/base/thread_annotations.h>
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <absl/synchronization/mutex.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "ClientData/FunctionInfo.h"
 #include "ClientData/ScopeId.h"
 #include "ClientData/ScopeInfo.h"
 #include "ClientData/TimerTrackDataIdManager.h"
+#include "ClientProtos/capture_data.pb.h"
 #include "GrpcProtos/capture.pb.h"
 
 namespace orbit_client_data {

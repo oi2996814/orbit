@@ -47,6 +47,32 @@ class MovableType {
 
 };  // namespace
 
+TEST(BlockChain, CreateAndMove) {
+  BlockChain<int, 1024> source_chain;
+  EXPECT_EQ(source_chain.root(), nullptr);
+  source_chain.emplace_back(1);
+  source_chain.emplace_back(2);
+  EXPECT_NE(source_chain.root(), nullptr);
+
+  BlockChain<int, 1024> target_chain(std::move(source_chain));
+  EXPECT_EQ(target_chain.size(), 2);
+  EXPECT_EQ(target_chain.root()->data()[0], 1);
+
+  // Verify the moved-from block chain is still in a valid state, even if it should no longer be
+  // used
+  EXPECT_EQ(source_chain.size(), 0);        // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(source_chain.root(), nullptr);  // NOLINT(bugprone-use-after-move)
+
+  source_chain.emplace_back(3);
+  EXPECT_EQ(source_chain.size(), 1);             // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(source_chain.root()->data()[0], 3);  // NOLINT(bugprone-use-after-move)
+
+  // Verify both block chains are fully decoupled
+  target_chain.emplace_back(10);
+  EXPECT_EQ(source_chain.size(), 1);  // NOLINT(bugprone-use-after-move)
+  EXPECT_EQ(target_chain.size(), 3);
+}
+
 TEST(BlockChain, AddCopyableTypes) {
   CopyableType v1("hello world");
   CopyableType v2("or not");
@@ -93,23 +119,23 @@ TEST(BlockChain, Clear) {
 }
 
 TEST(BlockChain, ElementIteration) {
-  constexpr const int v1 = 5;
-  constexpr const int v2 = 10;
-  constexpr const int v3 = 15;
+  constexpr const int kV1 = 5;
+  constexpr const int kV2 = 10;
+  constexpr const int kV3 = 15;
 
   BlockChain<int, 1024> chain;
 
-  chain.emplace_back(v1);
-  chain.emplace_back(v2);
-  chain.emplace_back(v3);
+  chain.emplace_back(kV1);
+  chain.emplace_back(kV2);
+  chain.emplace_back(kV3);
 
   // Note that only the "++it" operator is supported
   auto it = chain.begin();
-  EXPECT_EQ(*it, v1);
+  EXPECT_EQ(*it, kV1);
   ++it;
-  EXPECT_EQ(*it, v2);
+  EXPECT_EQ(*it, kV2);
   ++it;
-  EXPECT_EQ(*it, v3);
+  EXPECT_EQ(*it, kV3);
   ++it;
   // ... and also only !=, not ==
   EXPECT_FALSE(it != chain.end());
@@ -155,7 +181,7 @@ TEST(BlockChain, AddCopyableTypesN) {
   BlockChain<std::string, 1024> chain;
   chain.push_back_n(v1, 2000);
   EXPECT_EQ(chain.size(), 2000);
-  for (auto& it : chain) {
+  for (const auto& it : chain) {
     EXPECT_EQ(it, v1);
   }
 }
@@ -167,33 +193,33 @@ TEST(BlockChain, Reset) {
   BlockChain<int, 1024> chain;
   chain.push_back_n(5, 1024 * 3);
   EXPECT_GT(chain.size(), 0);
-  const Block<int, 1024>* blockPtr[] = {chain.root(), nullptr, nullptr};
-  blockPtr[1] = blockPtr[0]->next();
-  blockPtr[2] = blockPtr[1]->next();
+  const Block<int, 1024>* block_ptr[] = {chain.root(), nullptr, nullptr};
+  block_ptr[1] = block_ptr[0]->next();
+  block_ptr[2] = block_ptr[1]->next();
 
   // Tests below rely quite a lot on the internals of BlockChain, but this
   // seems the easiest way to actually test re-usage of the block pointers
   chain.Reset();
   EXPECT_EQ(chain.size(), 0);
-  EXPECT_EQ(blockPtr[0]->size(), 0);
-  EXPECT_EQ(blockPtr[1]->size(), 0);
-  EXPECT_EQ(blockPtr[2]->size(), 0);
+  EXPECT_EQ(block_ptr[0]->size(), 0);
+  EXPECT_EQ(block_ptr[1]->size(), 0);
+  EXPECT_EQ(block_ptr[2]->size(), 0);
 
   chain.push_back_n(10, 1024);
   EXPECT_GT(chain.size(), 0);
   EXPECT_EQ(chain.root()->data()[0], 10);
-  EXPECT_EQ(chain.root(), blockPtr[0]);
-  EXPECT_EQ(chain.root()->next(), blockPtr[1]);
-  EXPECT_EQ(blockPtr[1]->size(), 0);
+  EXPECT_EQ(chain.root(), block_ptr[0]);
+  EXPECT_EQ(chain.root()->next(), block_ptr[1]);
+  EXPECT_EQ(block_ptr[1]->size(), 0);
 
   chain.push_back_n(10, 1024);
-  EXPECT_EQ(chain.root()->next(), blockPtr[1]);
-  EXPECT_EQ(blockPtr[1]->size(), 1024);
-  EXPECT_EQ(blockPtr[2]->size(), 0);
+  EXPECT_EQ(chain.root()->next(), block_ptr[1]);
+  EXPECT_EQ(block_ptr[1]->size(), 1024);
+  EXPECT_EQ(block_ptr[2]->size(), 0);
 
   chain.push_back_n(10, 1024);
-  EXPECT_EQ(chain.root()->next()->next(), blockPtr[2]);
-  EXPECT_EQ(blockPtr[2]->size(), 1024);
+  EXPECT_EQ(chain.root()->next()->next(), block_ptr[2]);
+  EXPECT_EQ(block_ptr[2]->size(), 1024);
 }
 
 TEST(BlockChain, MovableType) {

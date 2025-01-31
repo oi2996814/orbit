@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 #include <absl/strings/str_format.h>
+#include <limits.h>
 #include <pthread.h>
-#include <syscall.h>
-#include <time.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <string>

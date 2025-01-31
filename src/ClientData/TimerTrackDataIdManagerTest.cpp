@@ -4,7 +4,12 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <set>
+#include <string>
+
 #include "ClientData/TimerTrackDataIdManager.h"
+#include "ClientProtos/capture_data.pb.h"
 
 namespace orbit_client_data {
 
@@ -34,13 +39,13 @@ TEST(ThreadTrackDataProvider, DifferentTypesDifferentIds) {
   TimerTrackDataIdManager timer_track_data_id_manager;
   constexpr uint64_t kSharedId = 42;
   constexpr uint64_t kAnotherId = 43;
-  const std::string kAsyncTrackName = "Example Name";
+  const std::string async_track_name = "Example Name";
 
   uint32_t scheduler_track_id = timer_track_data_id_manager.GenerateSchedulerTrackId();
   uint32_t thread_track_id = timer_track_data_id_manager.GenerateThreadTrackId(kSharedId);
   uint32_t frame_track_id = timer_track_data_id_manager.GenerateFrameTrackId(kSharedId);
   uint32_t gpu_track_id = timer_track_data_id_manager.GenerateGpuTrackId(kSharedId);
-  uint32_t async_track_id = timer_track_data_id_manager.GenerateAsyncTrackId(kAsyncTrackName);
+  uint32_t async_track_id = timer_track_data_id_manager.GenerateAsyncTrackId(async_track_name);
 
   std::set<uint32_t> used_ids;
   used_ids.insert(scheduler_track_id);

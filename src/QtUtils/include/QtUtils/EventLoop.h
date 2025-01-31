@@ -63,14 +63,15 @@ class EventLoop : public QObject {
     result_ = outcome::success(return_code);
     return loop_.exit(return_code);
   }
-  bool isRunning() const { return loop_.isRunning(); }
+  [[nodiscard]] bool isRunning() const { return loop_.isRunning(); }
   void wakeUp() { return loop_.wakeUp(); }
-  bool event(QEvent* event) { return loop_.event(event); }
 
   bool processEvents(ProcessEventsFlags flags = ProcessEventsFlag::AllEvents) {
     return loop_.processEvents(flags);
   }
-  void processEvents(ProcessEventsFlags flags, int maxTime) { loop_.processEvents(flags, maxTime); }
+  void processEvents(ProcessEventsFlags flags, int max_time) {
+    loop_.processEvents(flags, max_time);
+  }
 
  private:
   std::optional<ErrorMessageOr<int>> result_;

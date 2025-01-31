@@ -9,6 +9,7 @@ add_executable(Orbit)
 target_sources(
     Orbit
     PRIVATE main.cpp
+    ../../icons/orbiticons.qrc
 )
 
 target_link_libraries(Orbit PRIVATE
@@ -20,6 +21,7 @@ target_link_libraries(Orbit PRIVATE
         absl::flags_parse
         absl::flags_usage)
 target_include_directories(Orbit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(Orbit PROPERTIES AUTORCC ON)
 
 if(WIN32)
   set_target_properties(Orbit PROPERTIES WIN32_EXECUTABLE ON)
@@ -37,4 +39,8 @@ if(WIN32)
   add_dependencies(Orbit OrbitQtTests)
 endif()
 
-strip_symbols(Orbit)
+if (NOT WIN32)
+install(TARGETS Orbit
+        CONFIGURATIONS Release
+        RUNTIME DESTINATION /opt/orbitprofiler)
+endif()

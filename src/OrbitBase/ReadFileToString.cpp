@@ -6,10 +6,11 @@
 
 #include <absl/strings/str_format.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/stat.h>
-#include <sys/types.h>
+
+#include <array>
 
 #include "OrbitBase/File.h"
 #include "OrbitBase/SafeStrerror.h"
@@ -28,12 +29,12 @@
 namespace orbit_base {
 
 ErrorMessageOr<std::string> ReadFileToString(const std::filesystem::path& file_name) {
-  ErrorMessageOr<unique_fd> fd_or_error = OpenFileForReading(file_name);
+  ErrorMessageOr<UniqueFd> fd_or_error = OpenFileForReading(file_name);
   if (fd_or_error.has_error()) {
     return fd_or_error.error();
   }
 
-  const unique_fd& fd = fd_or_error.value();
+  const UniqueFd& fd = fd_or_error.value();
 
   std::string result;
 
@@ -44,7 +45,7 @@ ErrorMessageOr<std::string> ReadFileToString(const std::filesystem::path& file_n
   }
 
   std::array<char, BUFSIZ> buf{};
-  int64_t number_of_bytes;
+  int64_t number_of_bytes{};
   while ((number_of_bytes = TEMP_FAILURE_RETRY(read(fd.get(), buf.data(), buf.size()))) > 0) {
     result.append(buf.data(), number_of_bytes);
   }

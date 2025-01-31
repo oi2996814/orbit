@@ -5,6 +5,7 @@
 #ifndef ORBIT_API_UTILS_EVENT_H_
 #define ORBIT_API_UTILS_EVENT_H_
 
+#include <algorithm>
 #include <cstdint>
 #include <variant>
 #include <vector>
@@ -29,7 +30,7 @@ struct ApiEventMetaData {
 };
 
 struct ApiEncodedString {
-  ApiEncodedString(const char* name) { EncodeString(name, this); }
+  explicit ApiEncodedString(const char* name) { EncodeString(name, this); }
   void set_encoded_name_1(uint64_t value) { encoded_name_1 = value; }
   void set_encoded_name_2(uint64_t value) { encoded_name_2 = value; }
   void set_encoded_name_3(uint64_t value) { encoded_name_3 = value; }

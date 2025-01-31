@@ -2,28 +2,44 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <absl/base/thread_annotations.h>
+#include <absl/strings/match.h>
+#include <absl/strings/str_format.h>
 #include <absl/synchronization/mutex.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
-#include <grpcpp/channel.h>
-#include <grpcpp/create_channel.h>
+#include <grpcpp/grpcpp.h>
+#include <grpcpp/security/credentials.h>
 #include <gtest/gtest.h>
+#include <sys/types.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "ApiInterface/Orbit.h"
 #include "ApiUtils/EncodedString.h"
 #include "ApiUtils/GetFunctionTableAddressPrefix.h"
 #include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
 #include "GrpcProtos/services.grpc.pb.h"
+#include "GrpcProtos/services.pb.h"
+#include "GrpcProtos/symbol.pb.h"
 #include "IntegrationTestChildProcess.h"
 #include "IntegrationTestCommons.h"
 #include "IntegrationTestPuppet.h"
 #include "IntegrationTestUtils.h"
 #include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 #include "OrbitBase/ThreadUtils.h"
 #include "OrbitService.h"
 #include "OrbitVersion/OrbitVersion.h"
@@ -158,7 +174,7 @@ class OrbitServiceIntegrationTestFixture {
     ORBIT_LOG("Receiving events");
     while (true) {
       orbit_grpc_protos::CaptureResponse capture_response;
-      bool read_capture_response_result;
+      bool read_capture_response_result{};
       {
         absl::ReaderMutexLock lock{&capture_reader_writer_mutex_};
         read_capture_response_result = capture_reader_writer_->Read(&capture_response);
@@ -233,7 +249,7 @@ static void VerifyCaptureFinishedEvent(const ClientCaptureEvent& event) {
   EXPECT_EQ(capture_finished.error_message(), "");
 }
 
-static void VerifyInitialAndFinalEvents(const std::vector<ClientCaptureEvent>& events,
+static void VerifyInitialAndFinalEvents(absl::Span<const ClientCaptureEvent> events,
                                         const CaptureOptions& original_capture_options) {
   ASSERT_GE(events.size(), 3);
   VerifyCaptureStartedEvent(events.front(), original_capture_options);
@@ -241,7 +257,7 @@ static void VerifyInitialAndFinalEvents(const std::vector<ClientCaptureEvent>& e
   VerifyCaptureFinishedEvent(events.back());
 }
 
-static void VerifyErrorEvents(const std::vector<ClientCaptureEvent>& events) {
+static void VerifyErrorEvents(absl::Span<const ClientCaptureEvent> events) {
   bool errors_with_perf_event_open_event_found = false;
   for (const ClientCaptureEvent& event : events) {
     EXPECT_NE(event.event_case(), ClientCaptureEvent::kErrorEnablingOrbitApiEvent);
@@ -267,9 +283,9 @@ TEST(OrbitServiceIntegrationTest, CaptureSmoke) {
   VerifyErrorEvents(events);
 }
 
-static void VerifyFunctionCallsOfOuterAndInnerFunction(
-    const std::vector<ClientCaptureEvent>& events, uint32_t pid, uint64_t outer_function_id,
-    uint64_t inner_function_id) {
+static void VerifyFunctionCallsOfOuterAndInnerFunction(absl::Span<const ClientCaptureEvent> events,
+                                                       uint32_t pid, uint64_t outer_function_id,
+                                                       uint64_t inner_function_id) {
   std::vector<orbit_grpc_protos::FunctionCall> function_calls;
   for (const ClientCaptureEvent& event : events) {
     if (!event.has_function_call()) {
@@ -387,9 +403,6 @@ TEST(OrbitServiceIntegrationTest, OrbitApi) {
   uint64_t previous_timestamp_ns = 0;
   for (const ClientCaptureEvent& event : events) {
     switch (event.event_case()) {
-      case ClientCaptureEvent::kApiEvent:
-        ORBIT_UNREACHABLE();
-
       case ClientCaptureEvent::kApiScopeStart: {
         const orbit_grpc_protos::ApiScopeStart& api_scope_start = event.api_scope_start();
         EXPECT_EQ(api_scope_start.pid(), fixture.GetPuppetPid());

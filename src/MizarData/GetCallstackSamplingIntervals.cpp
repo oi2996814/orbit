@@ -4,9 +4,12 @@
 
 #include "MizarData/GetCallstackSamplingIntervals.h"
 
+#include <algorithm>
 #include <optional>
 
+#include "ClientData/CallstackEvent.h"
 #include "MizarBase/ThreadId.h"
+#include "OrbitBase/Typedef.h"
 
 namespace orbit_mizar_data {
 

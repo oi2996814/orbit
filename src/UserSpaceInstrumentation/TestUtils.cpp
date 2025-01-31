@@ -5,15 +5,26 @@
 #include "TestUtils.h"
 
 #include <absl/strings/str_cat.h>
+#include <absl/strings/str_format.h>
+#include <absl/types/span.h>
 #include <capstone/capstone.h>
+#include <unistd.h>
 
+#include <algorithm>
+#include <filesystem>
+#include <memory>
 #include <string>
+#include <type_traits>
+#include <vector>
 
+#include "GrpcProtos/module.pb.h"
+#include "GrpcProtos/symbol.pb.h"
 #include "ModuleUtils/ReadLinuxModules.h"
 #include "ModuleUtils/VirtualAndAbsoluteAddresses.h"
 #include "ObjectUtils/ElfFile.h"
 #include "OrbitBase/ExecutablePath.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Result.h"
 #include "OrbitBase/UniqueResource.h"
 
 namespace orbit_user_space_instrumentation {
@@ -100,7 +111,7 @@ FunctionLocation FindFunctionOrDie(std::string_view function_name) {
   ORBIT_FATAL("FindFunctionOrDie hasn't found a function '%s'", function_name);
 }
 
-void DumpDisassembly(const std::vector<uint8_t>& code, uint64_t start_address) {
+void DumpDisassembly(absl::Span<const uint8_t> code, uint64_t start_address) {
   // Init Capstone disassembler.
   csh capstone_handle = 0;
   cs_err error_code = cs_open(CS_ARCH_X86, CS_MODE_64, &capstone_handle);
@@ -113,8 +124,8 @@ void DumpDisassembly(const std::vector<uint8_t>& code, uint64_t start_address) {
   cs_insn* instruction = nullptr;
   const size_t count = cs_disasm(capstone_handle, static_cast<const uint8_t*>(code.data()),
                                  code.size(), start_address, 0, &instruction);
-  size_t i;
-  for (i = 0; i < count; i++) {
+  size_t i = 0;
+  for (; i < count; i++) {
     std::string machine_code;
     for (int j = 0; j < instruction[i].size; j++) {
       machine_code =

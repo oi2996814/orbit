@@ -8,6 +8,7 @@
 #include <absl/types/span.h>
 #include <llvm/Object/Binary.h>
 #include <llvm/Object/ObjectFile.h>
+#include <stdint.h>
 
 #include <filesystem>
 #include <memory>
@@ -29,19 +30,19 @@ class SymbolHelper : public SymbolCacheInterface {
  public:
   explicit SymbolHelper(std::filesystem::path cache_directory);
   explicit SymbolHelper(std::filesystem::path cache_directory,
-                        const std::vector<std::filesystem::path>& structured_debug_directories);
+                        absl::Span<const std::filesystem::path> structured_debug_directories);
 
-  ErrorMessageOr<std::filesystem::path> FindSymbolsFileLocally(
-      const std::filesystem::path& module_path, const std::string& build_id,
+  [[nodiscard]] ErrorMessageOr<std::filesystem::path> FindSymbolsFileLocally(
+      const std::filesystem::path& module_path, std::string_view build_id,
       const orbit_grpc_protos::ModuleInfo::ObjectFileType& object_file_type,
-      absl::Span<const std::filesystem::path> paths) const;
-  ErrorMessageOr<std::filesystem::path> FindSymbolsInCache(const std::filesystem::path& module_path,
-                                                           const std::string& build_id) const;
-  ErrorMessageOr<std::filesystem::path> FindSymbolsInCache(const std::filesystem::path& module_path,
-                                                           uint64_t expected_file_size) const;
-  ErrorMessageOr<std::filesystem::path> FindObjectInCache(const std::filesystem::path& module_path,
-                                                          const std::string& build_id,
-                                                          uint64_t expected_file_size) const;
+      absl::Span<const std::filesystem::path> paths);
+  [[nodiscard]] ErrorMessageOr<std::filesystem::path> FindSymbolsInCache(
+      const std::filesystem::path& module_path, std::string_view build_id) const;
+  [[nodiscard]] ErrorMessageOr<std::filesystem::path> FindSymbolsInCache(
+      const std::filesystem::path& module_path, uint64_t expected_file_size) const;
+  [[nodiscard]] ErrorMessageOr<std::filesystem::path> FindObjectInCache(
+      const std::filesystem::path& module_path, std::string_view build_id,
+      uint64_t expected_file_size) const;
   [[nodiscard]] std::filesystem::path GenerateCachedFilePath(
       const std::filesystem::path& file_path) const override;
 
@@ -53,9 +54,9 @@ class SymbolHelper : public SymbolCacheInterface {
 
   [[nodiscard]] static bool IsMatchingDebugInfoFile(const std::filesystem::path& file_path,
                                                     uint32_t checksum);
-  [[nodiscard]] ErrorMessageOr<std::filesystem::path> FindDebugInfoFileLocally(
+  [[nodiscard]] static ErrorMessageOr<std::filesystem::path> FindDebugInfoFileLocally(
       std::string_view filename, uint32_t checksum,
-      absl::Span<const std::filesystem::path> directories) const;
+      absl::Span<const std::filesystem::path> directories);
 
  private:
   template <typename Verifier>

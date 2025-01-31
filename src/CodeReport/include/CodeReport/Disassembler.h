@@ -6,9 +6,11 @@
 #define CODE_REPORT_DISASSEMBLER_H_
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/hash/hash.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>

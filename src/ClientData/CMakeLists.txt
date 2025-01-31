@@ -20,14 +20,21 @@ target_sources(ClientData PUBLIC
         include/ClientData/CallstackType.h
         include/ClientData/CaptureData.h
         include/ClientData/CaptureDataHolder.h
+        include/ClientData/CgroupAndProcessMemoryInfo.h
         include/ClientData/DataManager.h
         include/ClientData/FastRenderingUtils.h
         include/ClientData/FunctionInfo.h
         include/ClientData/LinuxAddressInfo.h
         include/ClientData/MockScopeIdProvider.h
+        include/ClientData/MockScopeStatsCollection.h
         include/ClientData/ModuleAndFunctionLookup.h
         include/ClientData/ModuleData.h
+        include/ClientData/ModuleIdentifier.h
+        include/ClientData/ModuleIdentifierProvider.h
+        include/ClientData/ModuleInMemory.h
         include/ClientData/ModuleManager.h
+        include/ClientData/ModulePathAndBuildId.h
+        include/ClientData/PageFaultsInfo.h
         include/ClientData/PostProcessedSamplingData.h
         include/ClientData/ProcessData.h
         include/ClientData/ScopeId.h
@@ -36,6 +43,7 @@ target_sources(ClientData PUBLIC
         include/ClientData/ScopeStats.h
         include/ClientData/ScopeStatsCollection.h
         include/ClientData/ScopeTreeTimerData.h
+        include/ClientData/SystemMemoryInfo.h
         include/ClientData/ThreadStateSliceInfo.h
         include/ClientData/ThreadTrackDataManager.h
         include/ClientData/ThreadTrackDataProvider.h
@@ -57,10 +65,10 @@ target_sources(ClientData PRIVATE
         CallstackType.cpp
         CaptureData.cpp
         DataManager.cpp
-        FastRenderingUtils.cpp
         FunctionInfo.cpp
         ModuleAndFunctionLookup.cpp
         ModuleData.cpp
+        ModuleIdentifierProvider.cpp
         ModuleManager.cpp
         PostProcessedSamplingData.cpp
         ProcessData.cpp
@@ -85,7 +93,6 @@ target_link_libraries(ClientData PUBLIC
         # TODO(b/191248550): Remove ObjectUtils once GetAbsoluteAddress is removed
         ObjectUtils
         OrbitBase
-        SymbolProvider
         xxHash::xxHash)
 
 add_executable(ClientDataTests)
@@ -95,9 +102,11 @@ target_sources(ClientDataTests PRIVATE
         DataManagerTest.cpp
         FastRenderingUtilsTest.cpp
         FunctionInfoTest.cpp
-        ModuleAndFunctionLookupTest.cpp
         ModuleDataTest.cpp
+        ModuleIdentifierTest.cpp
+        ModuleIdentifierProviderTest.cpp
         ModuleManagerTest.cpp
+        ModulePathAndBuildIdTest.cpp
         ProcessDataTest.cpp
         ScopeIdProviderTest.cpp
         ScopeInfoTest.cpp

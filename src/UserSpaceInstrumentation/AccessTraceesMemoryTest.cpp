@@ -2,38 +2,40 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <absl/strings/match.h>
 #include <absl/strings/numbers.h>
+#include <absl/strings/str_format.h>
 #include <absl/strings/str_split.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <stdint.h>
 #include <sys/prctl.h>
-#include <sys/ptrace.h>
-#include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <random>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "AccessTraceesMemory.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
+#include "OrbitBase/Result.h"
 #include "TestUtils/TestUtils.h"
+#include "UserSpaceInstrumentation/AddressRange.h"
 #include "UserSpaceInstrumentation/Attach.h"
 
 namespace orbit_user_space_instrumentation {
 
 namespace {
 
-using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 
-AddressRange AddressRangeFromString(const std::string& string_address) {
-  AddressRange result;
+AddressRange AddressRangeFromString(std::string_view string_address) {
+  AddressRange result{};
   const std::vector<std::string> addresses = absl::StrSplit(string_address, '-');
   if (addresses.size() != 2) {
     ORBIT_FATAL("Not an address range: %s", string_address);
@@ -52,7 +54,7 @@ AddressRange AddressRangeFromString(const std::string& string_address) {
   OUTCOME_TRY(auto&& maps, orbit_base::ReadFileToString(absl::StrFormat("/proc/%d/maps", pid)));
   const std::vector<std::string> lines = absl::StrSplit(maps, '\n', absl::SkipEmpty());
   bool is_first = true;
-  AddressRange result;
+  AddressRange result{};
   for (const auto& line : lines) {
     const std::vector<std::string> tokens = absl::StrSplit(line, ' ', absl::SkipEmpty());
     if (tokens.size() < 2 || tokens[1].size() != 4) continue;
@@ -106,18 +108,18 @@ TEST(AccessTraceesMemoryTest, ReadFailures) {
 
   // Process does not exist.
   result = ReadTraceesMemory(-1, address, length);
-  EXPECT_THAT(result, HasError("Unable to open file"));
+  EXPECT_THAT(result, HasErrorWithMessage("Unable to open file"));
 
   // Read 0 bytes.
   EXPECT_DEATH(auto unused_result = ReadTraceesMemory(pid, address, 0), "Check failed");
 
   // Read past the end of the mappings.
   result = ReadTraceesMemory(pid, continuous_range.end - length, length + 1);
-  EXPECT_THAT(result, HasError("Input/output error"));
+  EXPECT_THAT(result, HasErrorWithMessage("Input/output error"));
 
   // Read from bad address.
   result = ReadTraceesMemory(pid, 0, length);
-  EXPECT_THAT(result, HasError("Input/output error"));
+  EXPECT_THAT(result, HasErrorWithMessage("Input/output error"));
 
   // Detach and end child.
   ORBIT_CHECK(!DetachAndContinueProcess(pid).has_error());
@@ -165,7 +167,7 @@ TEST(AccessTraceesMemoryTest, WriteFailures) {
 
   // Process does not exist.
   result = WriteTraceesMemory(-1, address, bytes);
-  EXPECT_THAT(result, HasError("Unable to open file"));
+  EXPECT_THAT(result, HasErrorWithMessage("Unable to open file"));
 
   // Write 0 bytes.
   EXPECT_DEATH(auto unused_result = WriteTraceesMemory(pid, address, std::vector<uint8_t>()),
@@ -174,11 +176,11 @@ TEST(AccessTraceesMemoryTest, WriteFailures) {
   // Write past the end of the mappings.
   bytes.push_back(0);
   result = WriteTraceesMemory(pid, continuous_range.end - length, bytes);
-  EXPECT_THAT(result, HasError("Input/output error"));
+  EXPECT_THAT(result, HasErrorWithMessage("Input/output error"));
 
   // Write to bad address.
   result = WriteTraceesMemory(pid, 0, bytes);
-  EXPECT_THAT(result, HasError("Input/output error"));
+  EXPECT_THAT(result, HasErrorWithMessage("Input/output error"));
 
   // Restore, detach and end child.
   ORBIT_CHECK(!WriteTraceesMemory(pid, address, backup.value()).has_error());
@@ -208,7 +210,7 @@ TEST(AccessTraceesMemoryTest, ReadWriteRestore) {
   ORBIT_CHECK(memory_region_or_error.has_value());
   const uint64_t address = memory_region_or_error.value().start;
 
-  constexpr uint64_t kMemorySize = 4 * 1024;
+  constexpr uint64_t kMemorySize = 4u * 1024u;
   auto backup = ReadTraceesMemory(pid, address, kMemorySize);
   ASSERT_TRUE(backup.has_value());
 

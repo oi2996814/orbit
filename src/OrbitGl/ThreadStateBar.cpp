@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ThreadStateBar.h"
+#include "OrbitGl/ThreadStateBar.h"
 
+#include <GteVector.h>
 #include <absl/strings/str_format.h>
 
 #include <array>
@@ -12,25 +13,27 @@
 #include <string>
 #include <utility>
 
-#include "App.h"
-#include "AsyncTrack.h"
-#include "CaptureViewElement.h"
+#include "ApiInterface/Orbit.h"
+#include "ClientData/CallstackData.h"
 #include "ClientData/CallstackInfo.h"
 #include "ClientData/CallstackType.h"
 #include "ClientData/CaptureData.h"
 #include "ClientData/ThreadStateSliceInfo.h"
-#include "ClientProtos/capture_data.pb.h"
-#include "CoreMath.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "FormatCallstackForTooltip.h"
-#include "Geometry.h"
-#include "GlCanvas.h"
-#include "GlUtils.h"
 #include "GrpcProtos/capture.pb.h"
 #include "OrbitBase/Logging.h"
-#include "PrimitiveAssembler.h"
-#include "ThreadBar.h"
-#include "Viewport.h"
+#include "OrbitGl/AsyncTrack.h"
+#include "OrbitGl/BatcherInterface.h"
+#include "OrbitGl/CaptureViewElement.h"
+#include "OrbitGl/CoreMath.h"
+#include "OrbitGl/FormatCallstackForTooltip.h"
+#include "OrbitGl/Geometry.h"
+#include "OrbitGl/GlCanvas.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/ThreadBar.h"
+#include "OrbitGl/Viewport.h"
 
 using EventResult = AsyncTrack::EventResult;
 using orbit_client_data::ThreadID;
@@ -281,28 +284,16 @@ void ThreadStateBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
   ThreadBar::DoUpdatePrimitives(primitive_assembler, text_renderer, min_tick, max_tick,
                                 picking_mode);
 
-  const auto time_window_ns = static_cast<uint64_t>(1000 * timeline_info_->GetTimeWindowUs());
-  const uint64_t pixel_delta_ns = time_window_ns / viewport_->WorldToScreen(GetSize())[0];
-  const uint64_t min_time_graph_ns = timeline_info_->GetTickFromUs(timeline_info_->GetMinTimeUs());
-  const float pixel_width_in_world_coords = viewport_->ScreenToWorld({1, 0})[0];
-
-  uint64_t ignore_until_ns = 0;
-
+  uint32_t resolution_in_pixels = viewport_->WorldToScreen({GetWidth(), 0})[0];
   ORBIT_CHECK(capture_data_ != nullptr);
-  capture_data_->ForEachThreadStateSliceIntersectingTimeRange(
-      GetThreadId(), min_tick, max_tick, [&](const ThreadStateSliceInfo& slice) {
-        if (slice.end_timestamp_ns() <= ignore_until_ns) {
-          // Reduce overdraw by not drawing slices whose entire width would only draw over a
-          // previous slice. Similar to TimerTrack::UpdatePrimitives.
-          return;
-        }
+  capture_data_->ForEachThreadStateSliceIntersectingTimeRangeDiscretized(
+      GetThreadId(), min_tick, max_tick, resolution_in_pixels,
+      [&](const ThreadStateSliceInfo& slice) {
+        auto [box_start_x, box_width] = timeline_info_->GetBoxPosXAndWidthFromTicks(
+            slice.begin_timestamp_ns(), slice.end_timestamp_ns());
 
-        const float x0 = timeline_info_->GetWorldFromTick(slice.begin_timestamp_ns());
-        const float x1 = timeline_info_->GetWorldFromTick(slice.end_timestamp_ns());
-        const float width = x1 - x0;
-
-        const Vec2 pos{x0, GetPos()[1]};
-        const Vec2 size{width, GetHeight()};
+        const Vec2 pos{box_start_x, GetPos()[1]};
+        const Vec2 size{box_width, GetHeight()};
 
         if (slice == app_->hovered_thread_state_slice() ||
             slice == app_->selected_thread_state_slice()) {
@@ -317,25 +308,8 @@ void ThreadStateBar::DoUpdatePrimitives(PrimitiveAssembler& primitive_assembler,
           return GetThreadStateSliceTooltip(primitive_assembler, id);
         });
         user_data->custom_data_ = &slice;
-
-        if (slice.end_timestamp_ns() - slice.begin_timestamp_ns() > pixel_delta_ns) {
-          Quad box = MakeBox(pos, size);
-          primitive_assembler.AddBox(box, GlCanvas::kZValueEvent, color, std::move(user_data));
-        } else {
-          // Make this slice cover an entire pixel and don't draw subsequent slices that would
-          // coincide with the same pixel.
-          // Use AddBox instead of AddVerticalLine as otherwise the tops of Boxes and lines wouldn't
-          // be properly aligned.
-          Quad box = MakeBox(pos, {pixel_width_in_world_coords, size[1]});
-          primitive_assembler.AddBox(box, GlCanvas::kZValueEvent, color, std::move(user_data));
-
-          if (pixel_delta_ns != 0) {
-            ignore_until_ns =
-                min_time_graph_ns +
-                (slice.begin_timestamp_ns() - min_time_graph_ns) / pixel_delta_ns * pixel_delta_ns +
-                pixel_delta_ns;
-          }
-        }
+        Quad box = MakeBox(pos, size);
+        primitive_assembler.AddBox(box, GlCanvas::kZValueEvent, color, std::move(user_data));
       });
 }
 
@@ -354,18 +328,21 @@ void ThreadStateBar::OnPick(int x, int y) {
   Vec2 world_coords = viewport_->ScreenToWorld(Vec2i(x, y));
   std::optional<ThreadStateSliceInfo> clicked_slice = FindSliceFromWorldCoords(world_coords);
   app_->set_selected_thread_state_slice(clicked_slice);
+  RequestUpdate(RequestUpdateScope::kDrawAndUpdatePrimitives);
 }
 
 EventResult ThreadStateBar::OnMouseMove(const Vec2& mouse_pos) {
   EventResult event_result = CaptureViewElement::OnMouseMove(mouse_pos);
   std::optional<ThreadStateSliceInfo> hovered_slice = FindSliceFromWorldCoords(mouse_pos);
   app_->set_hovered_thread_state_slice(hovered_slice);
+  RequestUpdate(RequestUpdateScope::kDrawAndUpdatePrimitives);
   return event_result;
 }
 
 EventResult ThreadStateBar::OnMouseLeave() {
   EventResult event_result = CaptureViewElement::OnMouseLeave();
   app_->set_hovered_thread_state_slice(std::nullopt);
+  RequestUpdate(RequestUpdateScope::kDrawAndUpdatePrimitives);
   return event_result;
 }
 

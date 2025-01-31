@@ -3,38 +3,52 @@
 // found in the LICENSE file.
 
 #include <absl/strings/str_join.h>
+#include <absl/time/clock.h>
+#include <absl/time/time.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <algorithm>
+#include <array>
+#include <filesystem>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "OrbitBase/File.h"
+#include "OrbitBase/Logging.h"
 #include "OrbitBase/ReadFileToString.h"
 #include "OrbitBase/Result.h"
-#include "OrbitBase/TemporaryFile.h"
 #include "OrbitBase/WriteStringToFile.h"
 #include "Test/Path.h"
+#include "TestUtils/TemporaryFile.h"
 #include "TestUtils/TestUtils.h"
 
 using orbit_test_utils::HasError;
+using orbit_test_utils::HasErrorWithMessage;
 using orbit_test_utils::HasNoError;
 using orbit_test_utils::HasValue;
+using orbit_test_utils::TemporaryFile;
 
 namespace orbit_base {
 
 using ::testing::HasSubstr;
 
 TEST(File, DefaultUniqueFdIsInvalidDescriptor) {
-  unique_fd fd;
+  UniqueFd fd;
   EXPECT_FALSE(fd.valid());
 }
 
 TEST(File, EmptyUnuqueFdCanBeReleased) {
-  unique_fd fd;
+  UniqueFd fd;
   fd.release();
   EXPECT_FALSE(fd.valid());
 }
 
 TEST(File, MoveAssingToExisingUniqueFd) {
-  unique_fd fd;
+  UniqueFd fd;
 
   auto fd_or_error = OpenFileForReading(orbit_test::GetTestdataDir() / "textfile.bin");
 
@@ -51,7 +65,7 @@ TEST(File, MoveAssingToExisingUniqueFd) {
 TEST(File, UniqueFdSelfMove) {
   auto fd_or_error = OpenFileForReading(orbit_test::GetTestdataDir() / "textfile.bin");
   ASSERT_TRUE(fd_or_error.has_value()) << fd_or_error.error().message();
-  unique_fd valid_fd{std::move(fd_or_error.value())};
+  UniqueFd valid_fd{std::move(fd_or_error.value())};
 
   valid_fd = std::move(valid_fd);
 
@@ -62,7 +76,7 @@ TEST(File, UniqueFdSelfMove) {
 #endif  // __GNUC__
 
 TEST(File, AcccessInvalidUniqueFd) {
-  unique_fd fd;
+  UniqueFd fd;
   EXPECT_FALSE(fd.valid());
   EXPECT_DEATH((void)fd.get(), "");
 
@@ -118,7 +132,7 @@ TEST(File, WriteFullySmoke) {
   ASSERT_FALSE(write_result_or_error.has_error()) << write_result_or_error.error().message();
 
   // Read back and compare content.
-  ErrorMessageOr<unique_fd> fd_or_error = OpenFileForReading(temporary_file.file_path().string());
+  ErrorMessageOr<UniqueFd> fd_or_error = OpenFileForReading(temporary_file.file_path().string());
   ASSERT_FALSE(fd_or_error.has_error()) << fd_or_error.error().message();
   std::array<char, 64> read_back = {};
   ErrorMessageOr<size_t> result_or_error =
@@ -141,7 +155,7 @@ TEST(File, WriteFullyAtOffsetSmoke) {
 
   // Read back and compare content.
   std::array<char, 64> read_back = {};
-  ErrorMessageOr<unique_fd> fd_or_error = OpenFileForReading(temporary_file.file_path().string());
+  ErrorMessageOr<UniqueFd> fd_or_error = OpenFileForReading(temporary_file.file_path().string());
   ASSERT_FALSE(fd_or_error.has_error()) << fd_or_error.error().message();
   ErrorMessageOr<size_t> result_or_error = ReadFully(fd_or_error.value(), read_back.data(), 64);
   ASSERT_FALSE(result_or_error.has_error()) << result_or_error.error().message();
@@ -395,7 +409,7 @@ TEST(File, FileSize) {
     ErrorMessageOr<uint64_t> file_size_or_error = FileSize(file_path);
     // On Windows the error message is: "The system cannot find the file specified."
     // On Linux it is: "No such file or directory"
-    EXPECT_THAT(file_size_or_error, HasError("file"));
+    EXPECT_THAT(file_size_or_error, HasErrorWithMessage("file"));
   }
 }
 
@@ -447,10 +461,16 @@ TEST(File, IsDirectory) {
     // On Windows the error message is: " The system cannot find the path specified."
     // On Linux it is: "No such file or directory"
     EXPECT_THAT(IsDirectory(std::filesystem::path{"/tmp/complicated/non/existing/path/to/file"}),
-                HasError(""));
+                HasError());
     EXPECT_THAT(IsDirectory(std::filesystem::path{"/tmp/complicated/non/existing/path/to/folder/"}),
-                HasError(""));
+                HasError());
   }
+}
+
+TEST(File, IsRegularFile) {
+  EXPECT_THAT(IsRegularFile(orbit_test::GetTestdataDir()), false);
+  EXPECT_THAT(IsRegularFile(orbit_test::GetTestdataDir() / "textfile.bin"), true);
+  EXPECT_THAT(IsRegularFile("/does/not/exist"), HasError());
 }
 
 }  // namespace orbit_base

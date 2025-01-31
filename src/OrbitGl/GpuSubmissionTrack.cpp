@@ -2,23 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "GpuSubmissionTrack.h"
+#include "OrbitGl/GpuSubmissionTrack.h"
 
-#include <absl/time/time.h>
+#include <GteVector.h>
+#include <absl/strings/str_format.h>
 
 #include <memory>
+#include <optional>
 
-#include "App.h"
 #include "ClientData/TimerChain.h"
 #include "ClientProtos/capture_data.pb.h"
 #include "DisplayFormats/DisplayFormats.h"
-#include "GlUtils.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/ThreadConstants.h"
-#include "PrimitiveAssembler.h"
-#include "ThreadColor.h"
-#include "TimeGraphLayout.h"
-#include "absl/strings/str_format.h"
+#include "OrbitGl/GlUtils.h"
+#include "OrbitGl/OrbitApp.h"
+#include "OrbitGl/PrimitiveAssembler.h"
+#include "OrbitGl/ThreadColor.h"
+#include "OrbitGl/TimeGraphLayout.h"
 
 using orbit_client_data::TimerChain;
 using orbit_client_protos::TimerInfo;
@@ -76,26 +77,26 @@ bool GpuSubmissionTrack::IsTimerActive(const TimerInfo& timer_info) const {
 Color GpuSubmissionTrack::GetTimerColor(const TimerInfo& timer_info, bool is_selected,
                                         bool is_highlighted,
                                         const internal::DrawData& /*draw_data*/) const {
-  const Color kInactiveColor(100, 100, 100, 255);
-  const Color kSelectionColor(0, 128, 255, 255);
+  const Color inactive_color(100, 100, 100, 255);
+  const Color selection_color(0, 128, 255, 255);
   if (is_highlighted) {
     return TimerTrack::kHighlightColor;
   }
   if (is_selected) {
-    return kSelectionColor;
+    return selection_color;
   }
   if (!IsTimerActive(timer_info)) {
-    return kInactiveColor;
+    return inactive_color;
   }
   if (timer_info.has_color()) {
     ORBIT_CHECK(timer_info.color().red() < 256);
     ORBIT_CHECK(timer_info.color().green() < 256);
     ORBIT_CHECK(timer_info.color().blue() < 256);
     ORBIT_CHECK(timer_info.color().alpha() < 256);
-    return Color(static_cast<uint8_t>(timer_info.color().red()),
-                 static_cast<uint8_t>(timer_info.color().green()),
-                 static_cast<uint8_t>(timer_info.color().blue()),
-                 static_cast<uint8_t>(timer_info.color().alpha()));
+    return {static_cast<uint8_t>(timer_info.color().red()),
+            static_cast<uint8_t>(timer_info.color().green()),
+            static_cast<uint8_t>(timer_info.color().blue()),
+            static_cast<uint8_t>(timer_info.color().alpha())};
   }
 
   // We color code the timeslices for GPU activity using the color
@@ -181,9 +182,8 @@ float GpuSubmissionTrack::GetHeight() const {
   if (has_vulkan_layer_command_buffer_timers_ && !collapsed) {
     depth *= 2;
   }
-  return header_->GetHeight() + layout_->GetTrackContentTopMargin() +
-         layout_->GetTextBoxHeight() * depth + (num_gaps * layout_->GetSpaceBetweenGpuDepths()) +
-         layout_->GetTrackContentBottomMargin();
+  return layout_->GetTrackContentTopMargin() + layout_->GetTextBoxHeight() * depth +
+         (num_gaps * layout_->GetSpaceBetweenGpuDepths()) + layout_->GetTrackContentBottomMargin();
 }
 
 const TimerInfo* GpuSubmissionTrack::GetLeft(const TimerInfo& timer_info) const {

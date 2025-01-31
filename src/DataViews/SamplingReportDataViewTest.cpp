@@ -1,48 +1,61 @@
 // Copyright (c) 2021 The Orbit Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
+#include <absl/hash/hash.h>
 #include <absl/strings/str_format.h>
 #include <absl/strings/str_join.h>
-#include <gmock/gmock-actions.h>
-#include <gmock/gmock-function-mocker.h>
-#include <gmock/gmock-spec-builders.h>
+#include <absl/types/span.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ClientData/CallstackData.h"
 #include "ClientData/CallstackInfo.h"
+#include "ClientData/CallstackType.h"
 #include "ClientData/CaptureData.h"
+#include "ClientData/FunctionInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
 #include "ClientData/ModuleData.h"
+#include "ClientData/ModuleIdentifier.h"
+#include "ClientData/ModuleIdentifierProvider.h"
 #include "ClientData/ModuleManager.h"
 #include "ClientData/PostProcessedSamplingData.h"
 #include "ClientData/ProcessData.h"
-#include "ClientProtos/capture_data.pb.h"
 #include "DataViewTestUtils.h"
-#include "DataViews/AppInterface.h"
 #include "DataViews/CallstackDataView.h"
 #include "DataViews/DataView.h"
 #include "DataViews/SamplingReportDataView.h"
 #include "DataViews/SamplingReportInterface.h"
+#include "GrpcProtos/capture.pb.h"
+#include "GrpcProtos/module.pb.h"
+#include "GrpcProtos/symbol.pb.h"
 #include "MockAppInterface.h"
+#include "OrbitBase/Future.h"
+#include "OrbitBase/Logging.h"
+#include "OrbitBase/ThreadConstants.h"
 #include "Statistics/BinomialConfidenceInterval.h"
 
 using orbit_client_data::CaptureData;
 using orbit_client_data::FunctionInfo;
 using orbit_client_data::ModuleData;
+using orbit_client_data::ModuleIdentifier;
 using orbit_client_data::ModuleManager;
 using orbit_client_data::ProcessData;
 using orbit_client_data::SampledFunction;
-using orbit_symbol_provider::ModuleIdentifier;
 
 using orbit_data_views::CheckCopySelectionIsInvoked;
 using orbit_data_views::CheckExportToCsvIsInvoked;
@@ -134,11 +147,12 @@ const std::vector<orbit_client_data::CallstackInfo> kCallstackInfos = [] {
                             kSampledAbsoluteAddresses[2]},
       std::vector<uint64_t>{kSampledAbsoluteAddresses[2], kSampledAbsoluteAddresses[1]}};
   std::vector<orbit_client_data::CallstackInfo> result;
-  std::transform(std::begin(array_of_vectors_of_frames), std::end(array_of_vectors_of_frames),
-                 std::back_inserter(result),
-                 [](const std::vector<uint64_t>& frames) -> orbit_client_data::CallstackInfo {
-                   return {frames, orbit_client_data::CallstackType::kComplete};
-                 });
+  std::transform(
+      std::begin(array_of_vectors_of_frames), std::end(array_of_vectors_of_frames),
+      std::back_inserter(result),
+      [](absl::Span<uint64_t const> frames) -> orbit_client_data::CallstackInfo {
+        return {{frames.begin(), frames.end()}, orbit_client_data::CallstackType::kComplete};
+      });
   return result;
 }();
 constexpr std::array<uint64_t, kCallstackInfoNum> kTimestamps = {123456, 456789, 789456};
@@ -166,7 +180,7 @@ const std::unique_ptr<const orbit_client_data::CallstackData> kCallstackData = [
              : "???";
 }
 
-[[nodiscard]] std::string BuildExpectedExportEventsToCsvString(std::vector<size_t> indices) {
+[[nodiscard]] std::string BuildExpectedExportEventsToCsvString(const std::vector<size_t>& indices) {
   std::string result =
       "\"Thread\",\"Timestamp (ns)\",\"Names leaf/foo/main\",\"Addresses "
       "leaf_addr/foo_addr/main_addr\"";
@@ -200,7 +214,8 @@ const std::unique_ptr<const orbit_client_data::CallstackData> kCallstackData = [
 }
 
 std::unique_ptr<CaptureData> GenerateTestCaptureData(
-    orbit_client_data::ModuleManager* module_manager) {
+    orbit_client_data::ModuleManager* module_manager,
+    const orbit_client_data::ModuleIdentifierProvider* module_identifier_provider) {
   std::vector<ModuleInfo> modules;
 
   for (size_t i = 0; i < kNumFunctions; i++) {
@@ -225,8 +240,8 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
       orbit_grpc_protos::ModuleSymbols module_symbols;
       module_symbols.mutable_symbol_infos()->Add(std::move(symbol_info));
 
-      ModuleData* module_data = module_manager->GetMutableModuleByModuleIdentifier(
-          ModuleIdentifier{kModulePaths[i], kModuleBuildIds[i]});
+      ModuleData* module_data = module_manager->GetMutableModuleByModulePathAndBuildId(
+          {.module_path = kModulePaths[i], .build_id = kModuleBuildIds[i]});
       switch (kModuleSymbolCompleteness[i]) {
         case ModuleData::SymbolCompleteness::kNoSymbols:
           ORBIT_UNREACHABLE();
@@ -241,14 +256,14 @@ std::unique_ptr<CaptureData> GenerateTestCaptureData(
   }
 
   constexpr int32_t kProcessId = 42;
-  const std::string kExecutablePath = "/path/to/text.exe";
+  const std::string executable_path = "/path/to/text.exe";
   orbit_grpc_protos::CaptureStarted capture_started{};
   capture_started.set_process_id(kProcessId);
-  capture_started.set_executable_path(kExecutablePath);
+  capture_started.set_executable_path(executable_path);
 
-  auto capture_data =
-      std::make_unique<CaptureData>(capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
-                                    CaptureData::DataSource::kLiveCapture);
+  auto capture_data = std::make_unique<CaptureData>(
+      capture_started, std::nullopt, absl::flat_hash_set<uint64_t>{},
+      CaptureData::DataSource::kLiveCapture, module_identifier_provider);
   ProcessData* process = capture_data.get()->mutable_process();
   process->UpdateModuleInfos(modules);
 
@@ -364,7 +379,8 @@ class MockSamplingReportInterface : public orbit_data_views::SamplingReportInter
 class SamplingReportDataViewTest : public testing::Test {
  public:
   explicit SamplingReportDataViewTest()
-      : view_{&app_}, capture_data_(GenerateTestCaptureData(&module_manager_)) {
+      : view_{&app_},
+        capture_data_(GenerateTestCaptureData(&module_manager_, &module_identifier_provider_)) {
     EXPECT_CALL(app_, GetModuleManager()).WillRepeatedly(Return(&module_manager_));
     EXPECT_CALL(app_, GetMutableModuleManager()).WillRepeatedly(Return(&module_manager_));
     EXPECT_CALL(app_, GetConfidenceIntervalEstimator())
@@ -399,7 +415,7 @@ class SamplingReportDataViewTest : public testing::Test {
     view_.SetSamplingReport(&sampling_report_);
   }
 
-  void AddFunctionsByIndices(const std::vector<size_t>& indices) {
+  void AddFunctionsByIndices(absl::Span<const size_t> indices) {
     std::vector<SampledFunction> functions_to_add;
     for (size_t index : indices) {
       ORBIT_CHECK(index < kNumFunctions);
@@ -415,7 +431,8 @@ class SamplingReportDataViewTest : public testing::Test {
   orbit_data_views::MockAppInterface app_;
   orbit_data_views::SamplingReportDataView view_;
 
-  orbit_client_data::ModuleManager module_manager_;
+  orbit_client_data::ModuleIdentifierProvider module_identifier_provider_;
+  orbit_client_data::ModuleManager module_manager_{&module_identifier_provider_};
   std::unique_ptr<CaptureData> capture_data_;
   std::vector<SampledFunction> sampled_functions_;
 };
@@ -476,7 +493,7 @@ TEST_F(SamplingReportDataViewTest, ContextMenuEntriesArePresentCorrectly) {
         return module_manager_.GetMutableModuleByModuleIdentifier(module_id);
       });
 
-  bool capture_connected;
+  bool capture_connected{};
   EXPECT_CALL(app_, IsCaptureConnected).WillRepeatedly(testing::ReturnPointee(&capture_connected));
 
   std::array<bool, kNumFunctions> functions_selected{true, false, false, true};
@@ -494,7 +511,7 @@ TEST_F(SamplingReportDataViewTest, ContextMenuEntriesArePresentCorrectly) {
       });
 
   auto get_context_menu_from_selected_indices =
-      [&](const std::vector<int>& selected_indices) -> FlattenContextMenu {
+      [&](absl::Span<const int> selected_indices) -> FlattenContextMenu {
     std::vector<int> selected_rows;
     for (int index : selected_indices) {
       for (int row = 0, row_counts = view_.GetNumElements(); row < row_counts; row++) {
@@ -508,7 +525,7 @@ TEST_F(SamplingReportDataViewTest, ContextMenuEntriesArePresentCorrectly) {
         view_.GetContextMenuWithGrouping(0, selected_rows));
   };
 
-  auto verify_context_menu_action_availability = [&](const std::vector<int>& selected_indices) {
+  auto verify_context_menu_action_availability = [&](absl::Span<const int> selected_indices) {
     FlattenContextMenu context_menu = get_context_menu_from_selected_indices(selected_indices);
 
     // Common actions should always be available.
@@ -730,7 +747,9 @@ TEST_F(SamplingReportDataViewTest, ContextMenuActionsAreInvoked) {
     EXPECT_CALL(app_, GetMutableModuleByModuleIdentifier)
         .Times(1)
         .WillOnce([&](const ModuleIdentifier& module_id) -> ModuleData* {
-          EXPECT_EQ(module_id.build_id, kModuleBuildIds[2]);
+          EXPECT_EQ(std::make_optional<ModuleIdentifier>(module_id),
+                    module_identifier_provider_.GetModuleIdentifier(
+                        {.module_path = kModulePaths[2], .build_id = kModuleBuildIds[2]}));
           return module_manager_.GetMutableModuleByModuleIdentifier(module_id);
         });
     EXPECT_CALL(app_, LoadSymbolsManually)

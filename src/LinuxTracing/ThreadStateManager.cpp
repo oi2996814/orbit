@@ -8,7 +8,7 @@
 #include <absl/meta/type_traits.h>
 #include <sys/types.h>
 
-#include <type_traits>
+#include <algorithm>
 #include <utility>
 
 #include "GrpcProtos/capture.pb.h"

@@ -5,11 +5,12 @@
 #include "ClientData/ScopeIdProvider.h"
 
 #include <absl/container/flat_hash_map.h>
-#include <absl/flags/flag.h>
+#include <absl/meta/type_traits.h>
 #include <absl/synchronization/mutex.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@
 #include "ClientData/ScopeInfo.h"
 #include "GrpcProtos/Constants.h"
 #include "OrbitBase/Logging.h"
+#include "OrbitBase/Typedef.h"
 
 namespace orbit_client_data {
 
@@ -50,7 +52,8 @@ std::unique_ptr<NameEqualityScopeIdProvider> NameEqualityScopeIdProvider::Create
     scope_id_to_function_info.try_emplace(
         scope_id, /* in-place FunctionInfo construction */ instrumented_function.file_path(),
         instrumented_function.file_build_id(), instrumented_function.function_virtual_address(),
-        instrumented_function.function_size(), instrumented_function.function_name());
+        instrumented_function.function_size(), instrumented_function.function_name(),
+        instrumented_function.is_hotpatchable());
   }
 
   return std::unique_ptr<NameEqualityScopeIdProvider>(new NameEqualityScopeIdProvider(

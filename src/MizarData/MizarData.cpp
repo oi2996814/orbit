@@ -5,26 +5,31 @@
 #include "MizarData/MizarData.h"
 
 #include <absl/container/flat_hash_set.h>
+#include <absl/types/span.h>
 
+#include <QString>
 #include <QStringLiteral>
 #include <filesystem>
-#include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "ClientData/CallstackData.h"
+#include "ClientData/CallstackInfo.h"
 #include "ClientData/ModuleAndFunctionLookup.h"
 #include "ClientData/ModuleData.h"
 #include "ClientData/ModuleManager.h"
 #include "ClientData/ProcessData.h"
-#include "ClientData/ScopeId.h"
 #include "ClientData/ScopeInfo.h"
 #include "ClientData/ThreadTrackDataProvider.h"
 #include "ClientSymbols/QSettingsBasedStorageManager.h"
 #include "GrpcProtos/symbol.pb.h"
 #include "MizarBase/AbsoluteAddress.h"
+#include "ObjectUtils/SymbolsFile.h"
 #include "OrbitBase/Logging.h"
 #include "OrbitBase/Result.h"
+#include "OrbitBase/Typedef.h"
 
 using ::orbit_mizar_base::AbsoluteAddress;
 using ::orbit_mizar_base::ForEachFrame;
@@ -51,7 +56,7 @@ absl::flat_hash_map<AbsoluteAddress, FunctionSymbol> MizarData::AllAddressToFunc
   return result;
 }
 
-[[nodiscard]] static std::string GetFilenameWithoutExtension(const std::string& path) {
+[[nodiscard]] static std::string GetFilenameWithoutExtension(std::string_view path) {
   return std::filesystem::path(path)
       .filename()
       .replace_extension()  // remove extension, so `app.exe` on Windows would match `app` on
@@ -71,9 +76,12 @@ std::string MizarData::GetModuleFilenameWithoutExtension(AbsoluteAddress address
 void MizarData::OnCaptureStarted(const orbit_grpc_protos::CaptureStarted& capture_started,
                                  std::optional<std::filesystem::path> file_path,
                                  absl::flat_hash_set<uint64_t> frame_track_function_ids) {
+  module_identifier_provider_ = std::make_unique<orbit_client_data::ModuleIdentifierProvider>();
   ConstructCaptureData(capture_started, std::move(file_path), std::move(frame_track_function_ids),
-                       orbit_client_data::CaptureData::DataSource::kLoadedCapture);
-  module_manager_ = std::make_unique<orbit_client_data::ModuleManager>();
+                       orbit_client_data::CaptureData::DataSource::kLoadedCapture,
+                       module_identifier_provider_.get());
+  module_manager_ =
+      std::make_unique<orbit_client_data::ModuleManager>(module_identifier_provider_.get());
 }
 
 void MizarData::OnTimer(const orbit_client_protos::TimerInfo& timer_info) {
@@ -96,7 +104,7 @@ std::optional<std::string> MizarData::GetFunctionNameFromAddress(AbsoluteAddress
   return name;
 }
 
-void MizarData::UpdateModules(const std::vector<orbit_grpc_protos::ModuleInfo>& module_infos) {
+void MizarData::UpdateModules(absl::Span<const orbit_grpc_protos::ModuleInfo> module_infos) {
   for (const auto* not_updated_module :
        module_manager_->AddOrUpdateNotLoadedModules(module_infos)) {
     ORBIT_LOG("Module %s is not updated", not_updated_module->file_path());
@@ -107,19 +115,19 @@ void MizarData::UpdateModules(const std::vector<orbit_grpc_protos::ModuleInfo>& 
 void MizarData::LoadSymbolsForAllModules() {
   for (const orbit_client_data::ModuleData* module_data : module_manager_->GetAllModuleData()) {
     orbit_client_data::ModuleData* mutable_module_data =
-        module_manager_->GetMutableModuleByModuleIdentifier(module_data->module_id());
+        module_manager_->GetMutableModuleByModulePathAndBuildId(
+            {.module_path = module_data->file_path(), .build_id = module_data->build_id()});
     LoadSymbols(*mutable_module_data);
   }
 }
 
 static ErrorMessageOr<std::filesystem::path> SearchSymbolsPathInOrbitSearchPaths(
-    const orbit_symbols::SymbolHelper& symbol_helper,
-    const orbit_client_data::ModuleData& module_data) {
+    orbit_symbols::SymbolHelper& symbol_helper, const orbit_client_data::ModuleData& module_data) {
   // These are the constants used by Orbit Client. This way we read its configs.
-  static const QString orbit_organization = QStringLiteral("The Orbit Authors");
-  static const QString orbit_app_name = QStringLiteral("orbitprofiler");
-  orbit_client_symbols::QSettingsBasedStorageManager storage_manager(orbit_organization,
-                                                                     orbit_app_name);
+  static const QString kOrbitOrganization = QStringLiteral("The Orbit Authors");
+  static const QString kOrbitAppName = QStringLiteral("orbitprofiler");
+  orbit_client_symbols::QSettingsBasedStorageManager storage_manager(kOrbitOrganization,
+                                                                     kOrbitAppName);
   return symbol_helper.FindSymbolsFileLocally(module_data.file_path(), module_data.build_id(),
                                               module_data.object_file_type(),
                                               storage_manager.LoadPaths());
@@ -131,8 +139,7 @@ static void LogSymbolsFound(std::string_view module_path, std::string_view symbo
 }
 
 static ErrorMessageOr<std::filesystem::path> FindSymbolsPath(
-    const orbit_symbols::SymbolHelper& symbol_helper,
-    const orbit_client_data::ModuleData& module_data) {
+    orbit_symbols::SymbolHelper& symbol_helper, const orbit_client_data::ModuleData& module_data) {
   if (auto symbols_paths_or_error = SearchSymbolsPathInOrbitSearchPaths(symbol_helper, module_data);
       symbols_paths_or_error.has_value()) {
     LogSymbolsFound(module_data.file_path(), symbols_paths_or_error.value().string());
